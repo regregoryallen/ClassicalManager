@@ -10,13 +10,58 @@ Treeview note: customtkinter has no native tree widget.  Uses styled
 ttk.Treeview themed to approximate the customtkinter palette.
 """
 
+import json
+import io
 import logging
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
+from music_manager.interfaces import filedialog
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_PREFS_PATH = Path(__file__).resolve().parent.parent.parent / "gui_prefs.json"
+
+
+def _load_prefs() -> dict:
+    """Load GUI preferences from disk."""
+    try:
+        return json.loads(_PREFS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_prefs(prefs: dict) -> None:
+    """Persist GUI preferences to disk."""
+    try:
+        _PREFS_PATH.write_text(json.dumps(prefs, indent=2))
+    except Exception:
+        logger.debug("Could not save GUI prefs", exc_info=True)
+
+
+class _ScanCancelled(Exception):
+    """Raised inside the scan progress callback to abort a running scan."""
+
+
+class _GUILogHandler(logging.Handler):
+    """Logging handler that writes to a StringIO buffer for GUI display."""
+
+    def __init__(self):
+        super().__init__()
+        self.buffer = io.StringIO()
+
+    def emit(self, record):
+        try:
+            self.buffer.write(self.format(record) + "\n")
+        except Exception:
+            self.handleError(record)
+
+    def get_text(self):
+        return self.buffer.getvalue()
+
+    def clear(self):
+        self.buffer = io.StringIO()
 
 
 def launch_gui():
@@ -29,9 +74,21 @@ def launch_gui():
         return
 
     from music_manager.core.database import initialize_database
-    initialize_database()
+    prefs = _load_prefs()
+    db_path = prefs.get("db_path")
+    initialize_database(Path(db_path) if db_path else None)
 
-    app = App(ctk)
+    # Set up logging to capture output for the GUI log viewer
+    log_handler = _GUILogHandler()
+    log_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S"))
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    log_handler.setLevel(logging.DEBUG)
+    root_logger.addHandler(log_handler)
+
+    app = App(ctk, log_handler=log_handler)
     app.mainloop()
 
 
@@ -42,22 +99,45 @@ def launch_gui():
 class App:
     """Main application window."""
 
-    def __init__(self, ctk):
+    def __init__(self, ctk, log_handler=None):
         self.ctk = ctk
+        self._log_handler = log_handler
         self.root = ctk.CTk()
         self.root.title("Classical Music Playlist Manager")
-        self.root.geometry("1280x800")
+
+        self._prefs = _load_prefs()
+        self.root.geometry(self._prefs.get("window_geometry", "1280x800"))
 
         self.active_library = None
         self._current_profile_rules = []  # in-memory include/exclude rules
+        self._profile_picker_open = False
+        self._lib_tree_snapshot = []  # snapshot for filter/detach
+        self._pl_tree_snapshot = []
 
         self._setup_theme()
         self._build_layout()
         self._refresh_library_list()
 
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        """Save window state and exit."""
+        self._prefs["window_geometry"] = self.root.geometry()
+        _save_prefs(self._prefs)
+        self.root.destroy()
+
     def mainloop(self):
         """Start the Tk event loop."""
         self.root.mainloop()
+
+    def _center_on_main(self, window, width=400, height=300):
+        """Position a toplevel window centered on the main window."""
+        self.root.update_idletasks()
+        mx = self.root.winfo_x() + self.root.winfo_width() // 2
+        my = self.root.winfo_y() + self.root.winfo_height() // 2
+        x = mx - width // 2
+        y = my - height // 2
+        window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _setup_theme(self):
         """Configure ttk.Treeview style to blend with customtkinter."""
@@ -92,12 +172,12 @@ class App:
         self.tabview = ctk.CTkTabview(self.root)
         self.tabview.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
-        self.tab_explorer = self.tabview.add("Explorer & Rules")
         self.tab_builder = self.tabview.add("Playlist Builder")
+        self.tab_explorer = self.tabview.add("Explorer & Rules")
         self.tab_cleanup = self.tabview.add("Cleanup / Overlay")
 
-        self._build_explorer_tab()
         self._build_builder_tab()
+        self._build_explorer_tab()
         self._build_cleanup_tab()
 
     # ------------------------------------------------------------------
@@ -117,18 +197,29 @@ class App:
                                          width=230)
         self.lib_combo.pack(padx=15, pady=5)
 
-        # Library management buttons
-        btn_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        btn_frame.pack(padx=15, pady=5, fill="x")
-        ctk.CTkButton(btn_frame, text="New Library", width=110,
-                      command=self._new_library).pack(side="left", padx=(0, 5))
-        ctk.CTkButton(btn_frame, text="Add Folder", width=110,
-                      command=self._add_source_folder).pack(side="left")
+        # Library management buttons — row 1
+        btn_frame1 = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        btn_frame1.pack(padx=15, pady=(5, 2), fill="x")
+        ctk.CTkButton(btn_frame1, text="New", width=72,
+                      command=self._new_library).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(btn_frame1, text="Rename", width=72,
+                      command=self._rename_library).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(btn_frame1, text="Delete", width=72,
+                      fg_color="#7d2d2d",
+                      command=self._delete_library).pack(side="left")
+
+        # Library management buttons — row 2
+        btn_frame2 = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        btn_frame2.pack(padx=15, pady=2, fill="x")
+        ctk.CTkButton(btn_frame2, text="Export Lib", width=110,
+                      command=self._export_library).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(btn_frame2, text="Import Lib", width=110,
+                      command=self._import_library).pack(side="left")
 
         # Metrics
         ctk.CTkLabel(self.sidebar, text="Metrics",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(
-            padx=15, pady=(20, 5), anchor="w")
+            padx=15, pady=(12, 3), anchor="w")
 
         self.lbl_albums = ctk.CTkLabel(self.sidebar, text="Albums: -")
         self.lbl_albums.pack(padx=20, anchor="w")
@@ -142,26 +233,74 @@ class App:
         # Scan button + progress
         self.scan_btn = ctk.CTkButton(self.sidebar, text="Rescan Library",
                                       command=self._start_scan)
-        self.scan_btn.pack(padx=15, pady=(20, 5), fill="x")
+        self.scan_btn.pack(padx=15, pady=(12, 3), fill="x")
 
         self.scan_progress = ctk.CTkProgressBar(self.sidebar, width=230)
-        self.scan_progress.pack(padx=15, pady=5)
+        self.scan_progress.pack(padx=15, pady=3)
         self.scan_progress.set(0)
 
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
 
-        # Source folders list
-        ctk.CTkLabel(self.sidebar, text="Source Folders",
+        # Source folders
+        folder_hdr = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        folder_hdr.pack(padx=15, pady=(12, 3), fill="x")
+        ctk.CTkLabel(folder_hdr, text="Source Folders",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(
-            padx=15, pady=(20, 5), anchor="w")
-        self.folders_text = ctk.CTkTextbox(self.sidebar, height=120, width=230,
-                                           state="disabled")
-        self.folders_text.pack(padx=15, pady=5)
+            side="left")
+
+        folder_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        folder_btns.pack(padx=15, pady=2, fill="x")
+        ctk.CTkButton(folder_btns, text="Add Folder", width=110,
+                      command=self._add_source_folder).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(folder_btns, text="Remove Folder", width=110,
+                      command=self._remove_source_folder).pack(side="left")
+
+        self.folders_listbox = tk.Listbox(self.sidebar, height=5,
+                                          bg="#2b2b2b", fg="white",
+                                          selectbackground="#1f6aa5",
+                                          font=("Segoe UI", 9))
+        self.folders_listbox.pack(padx=15, pady=3, fill="x")
+
+        # Plex section mapping
+        plex_hdr = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        plex_hdr.pack(padx=15, pady=(12, 2), fill="x")
+        ctk.CTkLabel(plex_hdr, text="Plex Section",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(
+            side="left")
+        self.plex_section_entry = ctk.CTkEntry(
+            self.sidebar, width=230,
+            placeholder_text="e.g. MainMusic")
+        self.plex_section_entry.pack(padx=15, pady=2)
+        self.plex_section_entry.bind("<FocusOut>", self._save_plex_section)
+        self.plex_section_entry.bind("<Return>", self._save_plex_section)
+
+        # Import old playlists
+        ctk.CTkButton(self.sidebar, text="Import Old Playlists...",
+                      width=230, command=self._import_old_playlists).pack(
+            padx=15, pady=(12, 5))
+
+        # Spacer to push bottom buttons down
+        ctk.CTkLabel(self.sidebar, text="").pack(expand=True)
+
+        # Bottom buttons
+        bottom_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        bottom_btns.pack(fill="x", padx=15, pady=(5, 15))
+        ctk.CTkButton(bottom_btns, text="Settings", width=110,
+                      fg_color="gray30", hover_color="gray40",
+                      command=self._show_settings).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(bottom_btns, text="View Logs", width=110,
+                      fg_color="gray30", hover_color="gray40",
+                      command=self._show_log_viewer).pack(side="left")
 
     def _refresh_library_list(self):
         """Reload the library dropdown from the database."""
-        from music_manager.core.database import Library
+        from music_manager.core.database import Library, PlaylistProfile, ProfileRule
+        # Clean up any leftover temp profiles
+        for temp in PlaylistProfile.select().where(
+                PlaylistProfile.name.startswith("__temp_")):
+            ProfileRule.delete().where(ProfileRule.profile == temp).execute()
+            temp.delete_instance()
         libs = list(Library.select())
         names = [lib.name for lib in libs]
         self.lib_combo.configure(values=names if names else ["(none)"])
@@ -177,15 +316,22 @@ class App:
         from music_manager.core.database import Library
         if name == "(none)":
             self.active_library = None
+            self.plex_section_entry.delete(0, "end")
             return
         try:
             self.active_library = Library.get(Library.name == name)
         except Library.DoesNotExist:
             self.active_library = None
+            self.plex_section_entry.delete(0, "end")
             return
+        # Populate plex section from library
+        self.plex_section_entry.delete(0, "end")
+        if self.active_library.plex_section:
+            self.plex_section_entry.insert(0, self.active_library.plex_section)
         self._refresh_metrics()
         self._refresh_source_folders()
         self._refresh_explorer()
+        self._refresh_builder_tree()
         self._refresh_cleanup()
 
     def _refresh_metrics(self):
@@ -210,25 +356,344 @@ class App:
 
     def _refresh_source_folders(self):
         """Update the source folders display."""
-        self.folders_text.configure(state="normal")
-        self.folders_text.delete("1.0", "end")
+        self.folders_listbox.delete(0, "end")
+        self._folder_ids = []
         if self.active_library:
             from music_manager.core.database import SourceFolder
             for sf in SourceFolder.select().where(
                 SourceFolder.library == self.active_library
             ):
-                self.folders_text.insert("end", sf.root_path + "\n")
-        self.folders_text.configure(state="disabled")
+                self.folders_listbox.insert("end", sf.root_path)
+                self._folder_ids.append(sf.id)
+
+    def _save_plex_section(self, event=None):
+        """Persist the Plex section name to the active library."""
+        if not self.active_library:
+            return
+        value = self.plex_section_entry.get().strip()
+        self.active_library.plex_section = value or ""
+        self.active_library.save()
+
+    def _show_log_viewer(self):
+        """Open a window displaying captured log output."""
+        if not self._log_handler:
+            messagebox.showinfo("Logs", "No log handler configured.")
+            return
+
+        viewer = tk.Toplevel(self.root)
+        viewer.title("Application Logs")
+        viewer.transient(self.root)
+        self._center_on_main(viewer, 800, 500)
+        viewer.wait_visibility()
+        viewer.grab_set()
+
+        text = tk.Text(viewer, bg="#1e1e1e", fg="#cccccc",
+                       font=("Consolas", 10), wrap="word",
+                       state="normal")
+        text.pack(fill="both", expand=True, padx=5, pady=5)
+
+        scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+
+        text.insert("1.0", self._log_handler.get_text())
+        text.configure(state="disabled")
+        text.see("end")
+
+        ctk = self.ctk
+        btn_frame = ctk.CTkFrame(viewer, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=5, pady=5)
+
+        def refresh():
+            text.configure(state="normal")
+            text.delete("1.0", "end")
+            text.insert("1.0", self._log_handler.get_text())
+            text.configure(state="disabled")
+            text.see("end")
+
+        def clear():
+            self._log_handler.clear()
+            refresh()
+
+        ctk.CTkButton(btn_frame, text="Refresh", width=80,
+                      command=refresh).pack(side="left", padx=3)
+        ctk.CTkButton(btn_frame, text="Clear", width=80,
+                      command=clear).pack(side="left", padx=3)
+        ctk.CTkButton(btn_frame, text="Close", width=80,
+                      command=viewer.destroy).pack(side="right", padx=3)
+
+    def _show_settings(self):
+        """Open the settings dialog for app-wide configuration."""
+        ctk = self.ctk
+
+        from music_manager.core.config import load_config, DEFAULT_CONFIG_PATH, ConfigError
+
+        # Load current config (or start with defaults)
+        try:
+            config = load_config()
+        except ConfigError:
+            config = {"active_library": 1, "targets": {}}
+
+        plex = config.get("targets", {}).get("plex", {})
+        m3u = config.get("targets", {}).get("m3u", {})
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Settings")
+        dlg.transient(self.root)
+        self._center_on_main(dlg, 700, 700)
+        dlg.wait_visibility()
+        dlg.grab_set()
+
+        frame = ctk.CTkScrollableFrame(dlg)
+        frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        row = 0
+
+        def add_section(label):
+            nonlocal row
+            ctk.CTkLabel(frame, text=label,
+                         font=ctk.CTkFont(size=14, weight="bold")).grid(
+                row=row, column=0, columnspan=3, sticky="w",
+                padx=10, pady=(12, 4))
+            row += 1
+
+        def add_field(label, value="", width=400):
+            nonlocal row
+            ctk.CTkLabel(frame, text=label).grid(
+                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+            entry = ctk.CTkEntry(frame, width=width)
+            entry.grid(row=row, column=1, columnspan=2, sticky="w",
+                       padx=5, pady=3)
+            if value:
+                entry.insert(0, str(value))
+            row += 1
+            return entry
+
+        def add_browse_field(label, value="", width=350):
+            nonlocal row
+            ctk.CTkLabel(frame, text=label).grid(
+                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+            entry = ctk.CTkEntry(frame, width=width)
+            entry.grid(row=row, column=1, sticky="w", padx=5, pady=3)
+            if value:
+                entry.insert(0, str(value))
+
+            def browse():
+                path = filedialog.askdirectory(
+                    title=f"Select {label}", parent=dlg)
+                if path:
+                    entry.delete(0, "end")
+                    entry.insert(0, path)
+
+            ctk.CTkButton(frame, text="...", width=30,
+                          command=browse).grid(
+                row=row, column=2, padx=5, pady=3)
+            row += 1
+            return entry
+
+        # -- Database --
+        add_section("Database")
+        from music_manager.core.database import DATABASE_PATH
+        db_entry = add_browse_field("Database File",
+                                    self._prefs.get("db_path",
+                                                    str(DATABASE_PATH)))
+
+        # -- Plex --
+        add_section("Plex")
+        plex_url = add_field("Server URL", plex.get("base_url", ""))
+        plex_token = add_field("Token", plex.get("token", ""))
+        plex_token_env = add_field("Token Env Var",
+                                   plex.get("token_env", ""))
+        plex_section_default = add_field("Default Section",
+                                         plex.get("music_section", ""))
+        ctk.CTkLabel(frame, text="(Per-library section in sidebar overrides this)",
+                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=30, pady=0)
+        row += 1
+
+        # Plex path rules
+        add_section("Plex Path Rules")
+        ctk.CTkLabel(frame, text="One per line:  find → replace",
+                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
+        row += 1
+        plex_rules_text = tk.Text(frame, height=4, width=60,
+                                  bg="#343638", fg="#dce4ee",
+                                  insertbackground="#dce4ee",
+                                  font=("Consolas", 10),
+                                  relief="flat")
+        plex_rules_text.grid(row=row, column=0, columnspan=3,
+                             padx=20, pady=3, sticky="ew")
+        for pr in plex.get("path_rules", []):
+            plex_rules_text.insert("end",
+                                   f"{pr['find']} → {pr['replace']}\n")
+        row += 1
+
+        # -- M3U --
+        add_section("M3U Export")
+        m3u_style = ctk.CTkComboBox(
+            frame, values=["absolute", "relative_to_playlist"], width=200)
+        ctk.CTkLabel(frame, text="Path Style").grid(
+            row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+        m3u_style.grid(row=row, column=1, columnspan=2, sticky="w",
+                       padx=5, pady=3)
+        m3u_style.set(m3u.get("path_style", "absolute"))
+        row += 1
+        m3u_base = add_field("Base Path", m3u.get("base_path", ""))
+
+        # M3U path rules
+        add_section("M3U Path Rules")
+        ctk.CTkLabel(frame, text="One per line:  find → replace",
+                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
+        row += 1
+        m3u_rules_text = tk.Text(frame, height=4, width=60,
+                                 bg="#343638", fg="#dce4ee",
+                                 insertbackground="#dce4ee",
+                                 font=("Consolas", 10),
+                                 relief="flat")
+        m3u_rules_text.grid(row=row, column=0, columnspan=3,
+                            padx=20, pady=3, sticky="ew")
+        for mr in m3u.get("path_rules", []):
+            m3u_rules_text.insert("end",
+                                  f"{mr['find']} → {mr['replace']}\n")
+        row += 1
+
+        # -- Buttons --
+        def parse_rules(text_widget):
+            rules = []
+            for line in text_widget.get("1.0", "end").strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if " → " in line:
+                    parts = line.split(" → ", 1)
+                elif " -> " in line:
+                    parts = line.split(" -> ", 1)
+                else:
+                    continue
+                rules.append({"find": parts[0].strip(),
+                              "replace": parts[1].strip()})
+            return rules
+
+        def save():
+            # Build config
+            new_config = {"active_library": config.get("active_library", 1),
+                          "targets": {}}
+
+            # Plex
+            url = plex_url.get().strip()
+            tok = plex_token.get().strip()
+            tok_env = plex_token_env.get().strip()
+            section = plex_section_default.get().strip()
+            if url and (tok or tok_env):
+                plex_cfg = {"base_url": url}
+                if tok:
+                    plex_cfg["token"] = tok
+                if tok_env:
+                    plex_cfg["token_env"] = tok_env
+                if section:
+                    plex_cfg["music_section"] = section
+                plex_cfg["path_rules"] = parse_rules(plex_rules_text)
+                new_config["targets"]["plex"] = plex_cfg
+
+            # M3U
+            new_config["targets"]["m3u"] = {
+                "path_style": m3u_style.get(),
+                "base_path": m3u_base.get().strip(),
+                "path_rules": parse_rules(m3u_rules_text),
+            }
+
+            # Write config.json
+            DEFAULT_CONFIG_PATH.write_text(
+                json.dumps(new_config, indent=2, ensure_ascii=False) + "\n")
+
+            # Save DB path preference (requires restart to take effect)
+            new_db = db_entry.get().strip()
+            if new_db != str(DATABASE_PATH):
+                self._prefs["db_path"] = new_db
+                _save_prefs(self._prefs)
+                messagebox.showinfo(
+                    "Restart Required",
+                    "Database path changed. Restart the app for it to take effect.",
+                    parent=dlg)
+
+            dlg.destroy()
+            messagebox.showinfo("Settings", "Settings saved.")
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=8)
+        ctk.CTkButton(btn_row, text="Save", width=80,
+                      command=save).pack(side="left", padx=5)
+        ctk.CTkButton(btn_row, text="Cancel", width=80,
+                      command=dlg.destroy).pack(side="right", padx=5)
 
     def _new_library(self):
         """Create a new library via dialog."""
         ctk = self.ctk
         dialog = ctk.CTkInputDialog(text="Library name:", title="New Library")
+        # Center the dialog on the main window
+        dialog.after(10, lambda: self._center_on_main(dialog, 300, 200))
         name = dialog.get_input()
         if not name or not name.strip():
             return
         from music_manager.core.database import Library
-        Library.create(name=name.strip())
+        lib = Library.create(name=name.strip())
+        self._refresh_library_list()
+        # Auto-select the newly created library
+        self.lib_combo.set(lib.name)
+        self._on_library_changed(lib.name)
+
+    def _rename_library(self):
+        """Rename the active library."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+        ctk = self.ctk
+        dialog = ctk.CTkInputDialog(
+            text=f"Rename '{self.active_library.name}' to:",
+            title="Rename Library")
+        dialog.after(10, lambda: self._center_on_main(dialog, 300, 200))
+        name = dialog.get_input()
+        if not name or not name.strip():
+            return
+        self.active_library.name = name.strip()
+        self.active_library.save()
+        self._refresh_library_list()
+        self.lib_combo.set(name.strip())
+        self._on_library_changed(name.strip())
+
+    def _delete_library(self):
+        """Delete the active library after confirmation."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+        ok = messagebox.askyesno(
+            "Delete Library",
+            f"Delete library '{self.active_library.name}' and all its data?\n"
+            f"This cannot be undone.",
+            parent=self.root)
+        if not ok:
+            return
+        from music_manager.core.database import (
+            SourceFolder, Album, Work, Track, Composer, Override,
+            PlaylistProfile, ProfileRule,
+        )
+        lib = self.active_library
+        # Delete child records
+        for p in PlaylistProfile.select().where(PlaylistProfile.library == lib):
+            ProfileRule.delete().where(ProfileRule.profile == p).execute()
+        PlaylistProfile.delete().where(PlaylistProfile.library == lib).execute()
+        Override.delete().where(Override.library == lib).execute()
+        Track.delete().where(Track.library == lib).execute()
+        Work.select().join(Album).where(Album.library == lib)
+        for album in Album.select().where(Album.library == lib):
+            Work.delete().where(Work.album == album).execute()
+        Album.delete().where(Album.library == lib).execute()
+        Composer.delete().where(Composer.library == lib).execute()
+        SourceFolder.delete().where(SourceFolder.library == lib).execute()
+        lib.delete_instance()
+        self.active_library = None
         self._refresh_library_list()
 
     def _add_source_folder(self):
@@ -236,13 +701,35 @@ class App:
         if not self.active_library:
             messagebox.showwarning("No Library", "Select or create a library first.")
             return
-        folder = filedialog.askdirectory(title="Select Source Folder")
+        folder = filedialog.askdirectory(title="Select Source Folder",
+                                         parent=self.root)
         if not folder:
             return
         from music_manager.core.database import SourceFolder
-        # Store as POSIX path
         posix = folder.replace("\\", "/")
         SourceFolder.create(library=self.active_library, root_path=posix)
+        self._refresh_source_folders()
+
+    def _remove_source_folder(self):
+        """Remove the selected source folder."""
+        sel = self.folders_listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Select", "Select a folder to remove.")
+            return
+        idx = sel[0]
+        if idx >= len(self._folder_ids):
+            return
+        folder_id = self._folder_ids[idx]
+        folder_path = self.folders_listbox.get(idx)
+        ok = messagebox.askyesno(
+            "Remove Folder",
+            f"Remove '{folder_path}' from the library?\n"
+            f"Tracks from this folder will be removed on next rescan.",
+            parent=self.root)
+        if not ok:
+            return
+        from music_manager.core.database import SourceFolder
+        SourceFolder.delete_by_id(folder_id)
         self._refresh_source_folders()
 
     def _start_scan(self):
@@ -251,7 +738,9 @@ class App:
             messagebox.showwarning("No Library", "Select or create a library first.")
             return
 
-        self.scan_btn.configure(state="disabled", text="Scanning...")
+        self._scan_cancel = threading.Event()
+        self.scan_btn.configure(state="normal", text="Cancel Scan",
+                                command=self._cancel_scan)
         self.scan_progress.set(0)
         self.scan_status.configure(text="Starting scan...")
 
@@ -259,12 +748,19 @@ class App:
         thread = threading.Thread(target=self._run_scan, args=(lib,), daemon=True)
         thread.start()
 
+    def _cancel_scan(self):
+        """Signal the running scan to stop."""
+        self._scan_cancel.set()
+        self.scan_btn.configure(state="disabled", text="Cancelling...")
+
     def _run_scan(self, library):
         """Run the scan in a background thread."""
         from music_manager.core.scanner import scan_library
         from music_manager.core.overrides import apply_overrides
 
         def progress(current, total, message):
+            if self._scan_cancel.is_set():
+                raise _ScanCancelled()
             frac = current / total if total else 0
             self.root.after(0, lambda: self.scan_progress.set(frac))
             self.root.after(0, lambda: self.scan_status.configure(
@@ -278,19 +774,345 @@ class App:
                    f"{stats.works_created} works")
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
+        except _ScanCancelled:
+            msg = "Scan cancelled"
+            logger.info("Scan cancelled by user")
         except Exception as exc:
             msg = f"Scan error: {exc}"
             logger.exception("Scan failed")
 
         def finish():
             self.scan_status.configure(text=msg)
-            self.scan_progress.set(1)
-            self.scan_btn.configure(state="normal", text="Rescan Library")
+            self.scan_progress.set(1 if not self._scan_cancel.is_set() else 0)
+            self.scan_btn.configure(state="normal", text="Rescan Library",
+                                    command=self._start_scan)
             self._refresh_metrics()
             self._refresh_explorer()
+            self._refresh_builder_tree()
             self._refresh_cleanup()
 
         self.root.after(0, finish)
+
+    # ------------------------------------------------------------------
+    # Library Import / Export
+    # ------------------------------------------------------------------
+
+    def _export_library(self):
+        """Export the active library to a JSON file."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        initial_dir = self._prefs.get("last_export_dir", "")
+        default_name = self.active_library.name.replace(" ", "_")
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile=f"{default_name}_library.json",
+            initialdir=initial_dir or None,
+            filetypes=[("JSON", "*.json")],
+            title="Export Library",
+            parent=self.root,
+        )
+        if not path:
+            return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
+
+        from music_manager.core.database import (
+            SourceFolder, Album, Work, Track, Composer, Override,
+            PlaylistProfile, ProfileRule,
+        )
+        lib = self.active_library
+        data = {
+            "library_name": lib.name,
+            "plex_section": lib.plex_section or "",
+            "source_folders": [sf.root_path for sf in
+                               SourceFolder.select().where(SourceFolder.library == lib)],
+            "composers": [],
+            "albums": [],
+            "profiles": [],
+            "overrides": [],
+        }
+
+        # Composers
+        composer_id_map = {}
+        for c in Composer.select().where(Composer.library == lib):
+            composer_id_map[c.id] = len(data["composers"])
+            data["composers"].append({
+                "name": c.name, "sort_name": c.sort_name, "norm_key": c.norm_key,
+            })
+
+        # Albums → Works → Tracks
+        for album in Album.select().where(Album.library == lib).order_by(Album.title):
+            album_data = {
+                "album_key": album.album_key, "title": album.title,
+                "album_artist": album.album_artist, "year": album.year,
+                "mb_album_id": album.musicbrainz_album_id,
+                "works": [],
+            }
+            for work in Work.select().where(Work.album == album).order_by(Work.work_sequence):
+                work_data = {
+                    "work_name": work.work_name, "work_sequence": work.work_sequence,
+                    "work_source": work.work_source, "mb_work_id": work.musicbrainz_work_id,
+                    "composer_idx": composer_id_map.get(work.composer_id),
+                    "tracks": [],
+                }
+                for t in Track.select().where(Track.work == work).order_by(
+                        Track.disc_number, Track.track_number):
+                    work_data["tracks"].append({
+                        "title": t.title, "relative_path": t.relative_path,
+                        "disc_number": t.disc_number, "track_number": t.track_number,
+                        "movement_number": t.movement_number,
+                        "duration_ms": t.duration_ms,
+                        "mb_recording_id": t.musicbrainz_recording_id,
+                        "composer_idx": composer_id_map.get(t.composer_id),
+                    })
+                album_data["works"].append(work_data)
+            data["albums"].append(album_data)
+
+        # Profiles
+        for prof in PlaylistProfile.select().where(
+                (PlaylistProfile.library == lib) &
+                (~PlaylistProfile.name.startswith("__temp_"))):
+            rules = []
+            for r in ProfileRule.select().where(ProfileRule.profile == prof):
+                rules.append({
+                    "rule_type": r.rule_type, "target_level": r.target_level,
+                    "target_id": r.target_id,
+                })
+            data["profiles"].append({
+                "name": prof.name,
+                "shuffle_mode": prof.shuffle_mode,
+                "work_integrity": prof.work_integrity,
+                "length_mode": prof.length_mode,
+                "length_value": prof.length_value,
+                "seed": prof.seed,
+                "no_repeat_tracks": prof.no_repeat_tracks,
+                "rules": rules,
+            })
+
+        # Overrides
+        for ov in Override.select().where(Override.library == lib):
+            data["overrides"].append({
+                "scope": ov.scope, "field": ov.field, "value": ov.value,
+                "match_mb_id": ov.match_mb_id,
+                "match_relative_path": ov.match_relative_path,
+            })
+
+        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        messagebox.showinfo("Export",
+                           f"Exported library '{lib.name}' to:\n{path}")
+
+    def _import_library(self):
+        """Import a library from a JSON file."""
+        initial_dir = self._prefs.get("last_export_dir", "")
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON", "*.json")],
+            initialdir=initial_dir or None,
+            title="Import Library",
+            parent=self.root,
+        )
+        if not path:
+            return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
+
+        try:
+            data = json.loads(Path(path).read_text())
+        except Exception as exc:
+            messagebox.showerror("Import Error", f"Cannot read file: {exc}")
+            return
+
+        from music_manager.core.database import (
+            Library, SourceFolder, Album, Work, Track, Composer,
+            Override, PlaylistProfile, ProfileRule,
+        )
+        import datetime
+
+        lib_name = data.get("library_name", "Imported")
+        # Avoid name collision
+        existing = [l.name for l in Library.select()]
+        final_name = lib_name
+        n = 2
+        while final_name in existing:
+            final_name = f"{lib_name} ({n})"
+            n += 1
+
+        lib = Library.create(name=final_name,
+                             plex_section=data.get("plex_section", ""))
+
+        # Source folders
+        folder_map = {}
+        for root_path in data.get("source_folders", []):
+            sf = SourceFolder.create(library=lib, root_path=root_path)
+            folder_map[root_path] = sf
+
+        # Composers
+        composer_list = []
+        for cd in data.get("composers", []):
+            c = Composer.create(library=lib, name=cd["name"],
+                                sort_name=cd.get("sort_name"),
+                                norm_key=cd["norm_key"])
+            composer_list.append(c)
+
+        # Albums → Works → Tracks
+        first_folder = list(folder_map.values())[0] if folder_map else None
+        for ad in data.get("albums", []):
+            album = Album.create(
+                library=lib,
+                folder=first_folder,
+                album_key=ad["album_key"], title=ad["title"],
+                album_artist=ad.get("album_artist"),
+                year=ad.get("year"),
+                musicbrainz_album_id=ad.get("mb_album_id"),
+            )
+            for wd in ad.get("works", []):
+                comp_idx = wd.get("composer_idx")
+                work = Work.create(
+                    album=album,
+                    composer=composer_list[comp_idx] if comp_idx is not None else None,
+                    work_name=wd["work_name"],
+                    work_sequence=wd.get("work_sequence"),
+                    work_source=wd.get("work_source", "import"),
+                    musicbrainz_work_id=wd.get("mb_work_id"),
+                )
+                for td in wd.get("tracks", []):
+                    t_comp_idx = td.get("composer_idx")
+                    Track.create(
+                        library=lib,
+                        folder=first_folder,
+                        album=album,
+                        work=work,
+                        composer=composer_list[t_comp_idx] if t_comp_idx is not None else None,
+                        title=td["title"],
+                        relative_path=td["relative_path"],
+                        disc_number=td.get("disc_number", 1),
+                        track_number=td.get("track_number", 0),
+                        movement_number=td.get("movement_number"),
+                        duration_ms=td.get("duration_ms", 0),
+                        musicbrainz_recording_id=td.get("mb_recording_id"),
+                    )
+
+        # Profiles (rules reference old IDs — import rules by target_level only)
+        for pd in data.get("profiles", []):
+            prof = PlaylistProfile.create(
+                library=lib, name=pd["name"],
+                shuffle_mode=pd.get("shuffle_mode", "work"),
+                work_integrity=pd.get("work_integrity", "enforce"),
+                length_mode=pd.get("length_mode", "all"),
+                length_value=pd.get("length_value"),
+                seed=pd.get("seed"),
+                no_repeat_tracks=pd.get("no_repeat_tracks", True),
+            )
+            for rd in pd.get("rules", []):
+                ProfileRule.create(
+                    profile=prof, rule_type=rd["rule_type"],
+                    target_level=rd["target_level"],
+                    target_id=rd["target_id"],
+                )
+
+        # Overrides
+        for od in data.get("overrides", []):
+            Override.create(
+                library=lib, scope=od["scope"], field=od["field"],
+                value=od["value"],
+                match_mb_id=od.get("match_mb_id"),
+                match_relative_path=od.get("match_relative_path"),
+                updated_at=datetime.datetime.now(),
+            )
+
+        self._refresh_library_list()
+        self.lib_combo.set(final_name)
+        self._on_library_changed(final_name)
+        messagebox.showinfo("Import",
+                           f"Imported library '{final_name}' from:\n{path}")
+
+    def _import_old_playlists(self):
+        """Import old-style playlists (text files with one album directory per line).
+
+        Each file becomes a profile with include rules for matching albums.
+        """
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        paths = filedialog.askopenfilenames(
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Select Old Playlist Files",
+            parent=self.root,
+        )
+        if not paths:
+            return
+
+        from music_manager.core.database import (
+            Album, PlaylistProfile, ProfileRule,
+        )
+
+        albums = list(Album.select().where(Album.library == self.active_library))
+
+        results = []
+        for filepath in paths:
+            try:
+                lines = Path(filepath).read_text().strip().splitlines()
+            except Exception as exc:
+                results.append(f"Error reading {filepath}: {exc}")
+                continue
+
+            # Profile name from filename without extension
+            profile_name = Path(filepath).stem
+
+            # Delete existing profile with same name
+            for existing in PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library) &
+                (PlaylistProfile.name == profile_name)
+            ):
+                ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+                existing.delete_instance()
+
+            profile = PlaylistProfile.create(
+                library=self.active_library,
+                name=profile_name,
+                shuffle_mode="album",
+                work_integrity="enforce",
+                length_mode="all",
+                length_value=None,
+                seed=None,
+                no_repeat_tracks=True,
+            )
+
+            matched = 0
+            unmatched = []
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Match by album directory name (last path component)
+                dir_name = Path(line).name if "/" in line or "\\" in line else line
+                found = False
+                for album in albums:
+                    # album_key is the folder name relative to source root
+                    album_dir = Path(album.album_key).name
+                    if album_dir == dir_name or album.title == dir_name:
+                        ProfileRule.create(
+                            profile=profile, rule_type="include",
+                            target_level="album", target_id=album.id,
+                        )
+                        matched += 1
+                        found = True
+                        break
+                if not found:
+                    unmatched.append(dir_name)
+
+            status = f"'{profile_name}': {matched} matched"
+            if unmatched:
+                status += f", {len(unmatched)} unmatched"
+            results.append(status)
+
+        summary = "\n".join(results)
+        if any("unmatched" in r for r in results):
+            summary += "\n\nUnmatched albums won't appear in the playlist. " \
+                       "Check album names match your library."
+        messagebox.showinfo("Import Results", summary)
 
     # ------------------------------------------------------------------
     # Tab 1: Explorer & Rules (§10)
@@ -473,7 +1295,7 @@ class App:
 
         menu.post(event.x_root, event.y_root)
 
-    def _add_rule(self, rule_type, target_level, target_id):
+    def _add_rule(self, rule_type, target_level, target_id, refresh=True):
         """Add an include/exclude rule to the in-memory list."""
         # Get a display label
         from music_manager.core.database import Album, Work, Track
@@ -496,7 +1318,8 @@ class App:
             "display": f"{rule_type.upper()}: {target_level} — {name}",
         }
         self._current_profile_rules.append(rule)
-        self._refresh_rules_display()
+        if refresh:
+            self._refresh_rules_display()
 
     def _remove_rule(self):
         """Remove selected rule from the in-memory list."""
@@ -509,100 +1332,603 @@ class App:
             self._refresh_rules_display()
 
     def _refresh_rules_display(self):
-        """Update the rules listbox."""
+        """Update the rules listbox on the Explorer tab and builder trees."""
         self.rules_listbox.delete(0, "end")
         for rule in self._current_profile_rules:
             self.rules_listbox.insert("end", rule["display"])
+        # Refresh builder panes if they exist
+        if hasattr(self, "builder_lib_tree"):
+            self._rebuild_library_tree()
+            self._rebuild_playlist_tree()
 
     # ------------------------------------------------------------------
     # Tab 2: Playlist Builder (§10)
     # ------------------------------------------------------------------
 
     def _build_builder_tab(self):
-        """Build the Playlist Builder tab."""
+        """Build the Playlist Builder tab.
+
+        Layout: top (profile + compact settings) | middle (library | buttons | playlist) | bottom (actions).
+        """
         ctk = self.ctk
         tab = self.tab_builder
 
-        # Profile name
+        # -- Row 0: Profile name + load/save --
         row0 = ctk.CTkFrame(tab, fg_color="transparent")
-        row0.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(row0, text="Profile Name:").pack(side="left", padx=5)
-        self.profile_name_entry = ctk.CTkEntry(row0, width=250,
+        row0.pack(fill="x", padx=10, pady=(5, 2))
+        ctk.CTkLabel(row0, text="Profile:").pack(side="left", padx=(0, 3))
+        self.profile_name_entry = ctk.CTkEntry(row0, width=200,
                                                placeholder_text="e.g. Sunday Classical")
-        self.profile_name_entry.pack(side="left", padx=5)
-        ctk.CTkButton(row0, text="Load Profile", width=110,
-                      command=self._load_profile).pack(side="left", padx=5)
-        ctk.CTkButton(row0, text="Save Profile", width=110,
-                      command=self._save_profile).pack(side="left", padx=5)
+        self.profile_name_entry.pack(side="left", padx=3)
+        ctk.CTkButton(row0, text="Load", width=70,
+                      command=self._load_profile).pack(side="left", padx=3)
+        ctk.CTkButton(row0, text="Save", width=70,
+                      command=self._save_profile).pack(side="left", padx=3)
+        ctk.CTkButton(row0, text="Delete", width=70,
+                      command=self._delete_profile).pack(side="left", padx=3)
 
-        # Settings row
+        # -- Row 1: Compact settings (all in one line) --
         row1 = ctk.CTkFrame(tab, fg_color="transparent")
-        row1.pack(fill="x", padx=10, pady=5)
+        row1.pack(fill="x", padx=10, pady=2)
 
-        ctk.CTkLabel(row1, text="Shuffle Mode:").pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="Shuffle:").pack(side="left", padx=(0, 2))
         self.shuffle_mode = ctk.CTkComboBox(row1, values=["track", "work", "album"],
-                                            width=120)
-        self.shuffle_mode.pack(side="left", padx=5)
+                                            width=90)
+        self.shuffle_mode.pack(side="left", padx=(0, 8))
         self.shuffle_mode.set("work")
 
-        ctk.CTkLabel(row1, text="Work Integrity:").pack(side="left", padx=15)
+        ctk.CTkLabel(row1, text="Integrity:").pack(side="left", padx=(0, 2))
         self.work_integrity = ctk.CTkComboBox(
-            row1, values=["enforce", "respect_selection"], width=160)
-        self.work_integrity.pack(side="left", padx=5)
+            row1, values=["enforce", "respect_selection"], width=140)
+        self.work_integrity.pack(side="left", padx=(0, 8))
         self.work_integrity.set("enforce")
 
-        row2 = ctk.CTkFrame(tab, fg_color="transparent")
-        row2.pack(fill="x", padx=10, pady=5)
-
-        ctk.CTkLabel(row2, text="Length Mode:").pack(side="left", padx=5)
-        self.length_mode = ctk.CTkComboBox(row2, values=["all", "count", "duration"],
-                                           width=120)
-        self.length_mode.pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="Length:").pack(side="left", padx=(0, 2))
+        self.length_mode = ctk.CTkComboBox(row1, values=["all", "count", "duration"],
+                                           width=90)
+        self.length_mode.pack(side="left", padx=(0, 2))
         self.length_mode.set("all")
+        self.length_value = ctk.CTkEntry(row1, width=55, placeholder_text="val")
+        self.length_value.pack(side="left", padx=(0, 8))
 
-        ctk.CTkLabel(row2, text="Value:").pack(side="left", padx=15)
-        self.length_value = ctk.CTkEntry(row2, width=80, placeholder_text="e.g. 50")
-        self.length_value.pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="Seed:").pack(side="left", padx=(0, 2))
+        self.seed_entry = ctk.CTkEntry(row1, width=55, placeholder_text="rnd")
+        self.seed_entry.pack(side="left", padx=(0, 8))
 
-        ctk.CTkLabel(row2, text="Seed:").pack(side="left", padx=15)
-        self.seed_entry = ctk.CTkEntry(row2, width=80, placeholder_text="(random)")
-        self.seed_entry.pack(side="left", padx=5)
-
-        self.no_repeat_var = ctk.CTkCheckBox(row2, text="No repeat tracks")
-        self.no_repeat_var.pack(side="left", padx=15)
+        self.no_repeat_var = ctk.CTkCheckBox(row1, text="No repeats", width=30)
+        self.no_repeat_var.pack(side="left", padx=(0, 4))
         self.no_repeat_var.select()
 
-        # Action buttons
-        row3 = ctk.CTkFrame(tab, fg_color="transparent")
-        row3.pack(fill="x", padx=10, pady=10)
+        # -- Main area: library pane | buttons | playlist pane --
+        main_pane = ctk.CTkFrame(tab, fg_color="transparent")
+        main_pane.pack(fill="both", expand=True, padx=5, pady=5)
+        main_pane.columnconfigure(0, weight=1)
+        main_pane.columnconfigure(1, weight=0)
+        main_pane.columnconfigure(2, weight=1)
+        main_pane.rowconfigure(0, weight=1)
 
-        ctk.CTkButton(row3, text="Preview (Dry Run)", width=160,
-                      command=self._preview_playlist).pack(side="left", padx=5)
-        ctk.CTkButton(row3, text="Export to M3U", width=140,
-                      command=self._export_m3u).pack(side="left", padx=5)
-        ctk.CTkButton(row3, text="Export to JSON", width=140,
-                      command=self._export_json).pack(side="left", padx=5)
-        ctk.CTkButton(row3, text="Push to Plex", width=140,
-                      command=self._push_plex).pack(side="left", padx=5)
+        # ---- Left: Library pane ----
+        left_frame = ctk.CTkFrame(main_pane)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
 
-        # Preview results
-        self.preview_tree = ttk.Treeview(tab,
-                                         columns=("order", "composer", "work", "title", "dur"),
-                                         show="headings", selectmode="browse")
-        self.preview_tree.heading("order", text="#")
-        self.preview_tree.heading("composer", text="Composer")
-        self.preview_tree.heading("work", text="Work")
-        self.preview_tree.heading("title", text="Title")
-        self.preview_tree.heading("dur", text="Duration")
-        self.preview_tree.column("order", width=40, anchor="center")
-        self.preview_tree.column("composer", width=180)
-        self.preview_tree.column("work", width=250)
-        self.preview_tree.column("title", width=250)
-        self.preview_tree.column("dur", width=70, anchor="center")
-        self.preview_tree.pack(fill="both", expand=True, padx=10, pady=5)
+        lib_header = ctk.CTkFrame(left_frame, fg_color="transparent")
+        lib_header.pack(fill="x", padx=5, pady=(5, 2))
+        ctk.CTkLabel(lib_header, text="Library",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            side="left")
+        self._lib_filter_var = tk.StringVar()
+        self._lib_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("lib"))
+        lib_filter = ctk.CTkEntry(lib_header, width=150,
+                                  placeholder_text="Filter...",
+                                  textvariable=self._lib_filter_var)
+        lib_filter.pack(side="right")
 
-        self.preview_status = ctk.CTkLabel(tab, text="")
-        self.preview_status.pack(padx=10, pady=5, anchor="w")
+        self.builder_lib_tree = ttk.Treeview(
+            left_frame, columns=("info",),
+            show="tree headings", selectmode="extended")
+        self.builder_lib_tree.heading("#0", text="Name")
+        self.builder_lib_tree.heading("info", text="Info")
+        self.builder_lib_tree.column("#0", width=300)
+        self.builder_lib_tree.column("info", width=70, anchor="e")
+        self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
+
+        lib_scroll = ttk.Scrollbar(left_frame, orient="vertical",
+                                   command=self.builder_lib_tree.yview)
+        self.builder_lib_tree.configure(yscrollcommand=lib_scroll.set)
+        # Place scrollbar on top of tree's right edge
+        lib_scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
+                         in_=self.builder_lib_tree)
+
+        self.builder_lib_tree.bind("<Double-1>", self._builder_include_selected)
+        self._builder_lib_iid_map = {}  # iid → (level, entity_id)
+
+        # Tag styles for visual state (colorblind-friendly)
+        self.builder_lib_tree.tag_configure("included", foreground="#4da6ff")   # blue
+        self.builder_lib_tree.tag_configure("excluded", foreground="#666666")   # gray
+        self.builder_lib_tree.tag_configure("partial", foreground="#e6a332")    # amber
+
+        # ---- Center: action buttons ----
+        center_frame = ctk.CTkFrame(main_pane, fg_color="transparent", width=90)
+        center_frame.grid(row=0, column=1, sticky="ns", padx=4)
+
+        # Spacer to vertically center buttons
+        ctk.CTkLabel(center_frame, text="").pack(expand=True)
+        ctk.CTkButton(center_frame, text="Add >>", width=80,
+                      fg_color="#2d7d46",
+                      command=self._builder_include_selected).pack(pady=3)
+        ctk.CTkButton(center_frame, text="<< Remove", width=80,
+                      fg_color="#7d2d2d",
+                      command=self._builder_exclude_selected).pack(pady=3)
+        ctk.CTkLabel(center_frame, text="Double-click\nor multi-select\n+ buttons",
+                     text_color="gray", font=ctk.CTkFont(size=10),
+                     justify="center").pack(pady=6)
+        ctk.CTkLabel(center_frame, text="").pack(expand=True)
+
+        # ---- Right: Playlist pane ----
+        right_frame = ctk.CTkFrame(main_pane)
+        right_frame.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+
+        pl_header = ctk.CTkFrame(right_frame, fg_color="transparent")
+        pl_header.pack(fill="x", padx=5, pady=(5, 2))
+        ctk.CTkLabel(pl_header, text="Playlist",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            side="left")
+        self._pl_filter_var = tk.StringVar()
+        self._pl_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("pl"))
+        pl_filter = ctk.CTkEntry(pl_header, width=150,
+                                 placeholder_text="Filter...",
+                                 textvariable=self._pl_filter_var)
+        pl_filter.pack(side="right")
+
+        self.builder_pl_tree = ttk.Treeview(
+            right_frame, columns=("info",),
+            show="tree headings", selectmode="extended")
+        self.builder_pl_tree.heading("#0", text="Name")
+        self.builder_pl_tree.heading("info", text="Info")
+        self.builder_pl_tree.column("#0", width=300)
+        self.builder_pl_tree.column("info", width=70, anchor="e")
+        self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
+
+        pl_scroll = ttk.Scrollbar(right_frame, orient="vertical",
+                                  command=self.builder_pl_tree.yview)
+        self.builder_pl_tree.configure(yscrollcommand=pl_scroll.set)
+        pl_scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
+                        in_=self.builder_pl_tree)
+
+        self.builder_pl_tree.bind("<Double-1>", self._builder_exclude_selected)
+        self._builder_pl_iid_map = {}  # iid → (level, entity_id)
+
+        # -- Bottom: action buttons --
+        bot = ctk.CTkFrame(tab, fg_color="transparent")
+        bot.pack(fill="x", padx=10, pady=(2, 5))
+
+        ctk.CTkButton(bot, text="Preview", width=110,
+                      command=self._preview_playlist).pack(side="left", padx=4)
+        ctk.CTkButton(bot, text="Export M3U", width=110,
+                      command=self._export_m3u).pack(side="left", padx=4)
+        ctk.CTkButton(bot, text="Export JSON", width=110,
+                      command=self._export_json).pack(side="left", padx=4)
+        ctk.CTkButton(bot, text="Push to Plex", width=110,
+                      command=self._push_plex).pack(side="left", padx=4)
+
+        info = ctk.CTkLabel(bot, text="(empty = all tracks)",
+                            text_color="gray")
+        info.pack(side="right", padx=10)
+
+    # ------------------------------------------------------------------
+    # Builder: data & interaction
+    # ------------------------------------------------------------------
+
+    def _snapshot_tree(self, tree):
+        """Capture tree structure as list of (iid, parent, index, text, open)."""
+        snapshot = []
+        def walk(parent=""):
+            for i, iid in enumerate(tree.get_children(parent)):
+                snapshot.append((iid, parent, i,
+                                 tree.item(iid, "text"),
+                                 tree.item(iid, "open")))
+                walk(iid)
+        walk()
+        return snapshot
+
+    def _apply_tree_filter(self, which):
+        """Filter library or playlist tree by search text, using detach/reattach."""
+        if which == "lib":
+            tree = self.builder_lib_tree
+            snapshot = self._lib_tree_snapshot
+            query = self._lib_filter_var.get().strip().lower()
+        else:
+            tree = self.builder_pl_tree
+            snapshot = self._pl_tree_snapshot
+            query = self._pl_filter_var.get().strip().lower()
+
+        if not snapshot:
+            return
+
+        # Reattach everything first
+        for iid, parent, index, text, was_open in snapshot:
+            try:
+                tree.reattach(iid, parent, index)
+                tree.item(iid, open=was_open)
+            except tk.TclError:
+                pass
+
+        if not query:
+            return
+
+        # Build a set of iids whose text matches (case-insensitive)
+        matching = set()
+        for iid, parent, index, text, was_open in snapshot:
+            if query in text.lower():
+                matching.add(iid)
+
+        # Also keep all ancestors of matching items visible
+        visible = set(matching)
+        parent_map = {iid: parent for iid, parent, index, text, was_open in snapshot}
+        for iid in matching:
+            p = parent_map.get(iid, "")
+            while p:
+                visible.add(p)
+                p = parent_map.get(p, "")
+
+        # Also keep all descendants of matching items visible
+        children_map = {}
+        for iid, parent, index, text, was_open in snapshot:
+            children_map.setdefault(parent, []).append(iid)
+
+        def add_descendants(iid):
+            for child in children_map.get(iid, []):
+                visible.add(child)
+                add_descendants(child)
+
+        for iid in matching:
+            add_descendants(iid)
+
+        # Detach non-visible items (children before parents)
+        for iid, parent, index, text, was_open in reversed(snapshot):
+            if iid not in visible:
+                tree.detach(iid)
+
+        # Auto-expand ancestors of matches so results are visible
+        for iid in matching:
+            p = parent_map.get(iid, "")
+            while p:
+                try:
+                    tree.item(p, open=True)
+                except tk.TclError:
+                    pass
+                p = parent_map.get(p, "")
+
+    def _refresh_builder_tree(self):
+        """Populate the library tree and refresh the playlist tree."""
+        self._builder_lib_data = {}   # entity_id → {level, album_id, work_id, ...}
+        self._rebuild_library_tree()
+        self._rebuild_playlist_tree()
+
+    def _rebuild_library_tree(self):
+        """Rebuild the left (library) tree with visual clues for included/excluded."""
+        self._lib_tree_snapshot = []
+        self.builder_lib_tree.delete(*self.builder_lib_tree.get_children())
+        self._builder_lib_iid_map.clear()
+
+        if not self.active_library:
+            return
+
+        from music_manager.core.database import Album, Work, Track
+
+        # Build sets of included/excluded entity keys for quick lookup
+        included = set()  # ("album", id), ("work", id), ("track", id)
+        excluded = set()
+        for rule in self._current_profile_rules:
+            key = (rule["target_level"], rule["target_id"])
+            if rule["rule_type"] == "include":
+                included.add(key)
+            else:
+                excluded.add(key)
+
+        albums = (Album.select()
+                  .where(Album.library == self.active_library)
+                  .order_by(Album.title))
+
+        for album in albums:
+            album_key = ("album", album.id)
+            album_included = album_key in included
+
+            works = list(Work.select()
+                         .where(Work.album == album)
+                         .order_by(Work.work_sequence))
+
+            # Pre-scan children to detect partial state
+            album_has_excluded_child = False
+            album_has_included_child = False
+
+            for work in works:
+                work_key = ("work", work.id)
+                if work_key in included:
+                    album_has_included_child = True
+                if work_key in excluded:
+                    album_has_excluded_child = True
+                tracks_for_work = list(Track.select(Track.id).where(Track.work == work))
+                for t in tracks_for_work:
+                    if ("track", t.id) in included:
+                        album_has_included_child = True
+                    if ("track", t.id) in excluded:
+                        album_has_excluded_child = True
+
+            # Determine album tag
+            if album_key in excluded:
+                album_tag = "excluded"
+            elif album_included and album_has_excluded_child:
+                album_tag = "partial"
+            elif album_included:
+                album_tag = "included"
+            elif album_has_included_child:
+                album_tag = "partial"
+            else:
+                album_tag = ""
+
+            track_count = Track.select().where(Track.album == album).count()
+            album_iid = self.builder_lib_tree.insert(
+                "", "end", text=album.title,
+                values=(f"{track_count} trk",),
+                tags=(album_tag,) if album_tag else ())
+            self._builder_lib_iid_map[album_iid] = ("album", album.id)
+
+            for work in works:
+                work_key = ("work", work.id)
+                tracks = list(Track.select().where(Track.work == work)
+                              .order_by(Track.disc_number, Track.track_number))
+
+                work_effectively_included = (
+                    work_key in included or album_included
+                ) and work_key not in excluded
+
+                # Check if any child track is excluded under this work
+                work_has_excluded_track = any(
+                    ("track", t.id) in excluded for t in tracks
+                )
+                work_has_included_track = any(
+                    ("track", t.id) in included for t in tracks
+                )
+
+                if work_key in excluded:
+                    work_tag = "excluded"
+                elif work_effectively_included and work_has_excluded_track:
+                    work_tag = "partial"
+                elif work_effectively_included:
+                    work_tag = "included"
+                elif work_key in included:
+                    work_tag = "included"
+                elif work_has_included_track:
+                    work_tag = "partial"
+                else:
+                    work_tag = ""
+
+                work_iid = self.builder_lib_tree.insert(
+                    album_iid, "end", text=work.work_name,
+                    values=(f"{len(tracks)} trk",),
+                    tags=(work_tag,) if work_tag else ())
+                self._builder_lib_iid_map[work_iid] = ("work", work.id)
+
+                for t in tracks:
+                    track_key = ("track", t.id)
+                    dur_s = (t.duration_ms or 0) // 1000
+                    dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+
+                    if track_key in excluded:
+                        t_tag = "excluded"
+                    elif track_key in included or work_effectively_included:
+                        t_tag = "included"
+                    else:
+                        t_tag = ""
+
+                    t_iid = self.builder_lib_tree.insert(
+                        work_iid, "end",
+                        text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
+                        values=(dur_str,),
+                        tags=(t_tag,) if t_tag else ())
+                    self._builder_lib_iid_map[t_iid] = ("track", t.id)
+
+        self._lib_tree_snapshot = self._snapshot_tree(self.builder_lib_tree)
+        # Re-apply active filter if any
+        if self._lib_filter_var.get().strip():
+            self._apply_tree_filter("lib")
+
+    def _rebuild_playlist_tree(self):
+        """Rebuild the right (playlist) tree showing effectively-included items."""
+        self._pl_tree_snapshot = []
+        self.builder_pl_tree.delete(*self.builder_pl_tree.get_children())
+        self._builder_pl_iid_map.clear()
+
+        if not self.active_library:
+            return
+        if not self._current_profile_rules:
+            return  # empty rules = all tracks (shown via label)
+
+        from music_manager.core.database import Album, Work, Track
+
+        # Build include/exclude sets
+        included = set()
+        excluded = set()
+        for rule in self._current_profile_rules:
+            key = (rule["target_level"], rule["target_id"])
+            if rule["rule_type"] == "include":
+                included.add(key)
+            else:
+                excluded.add(key)
+
+        albums = (Album.select()
+                  .where(Album.library == self.active_library)
+                  .order_by(Album.title))
+
+        for album in albums:
+            album_key = ("album", album.id)
+            album_included = album_key in included and album_key not in excluded
+            if album_key in excluded:
+                continue
+
+            works = list(Work.select()
+                         .where(Work.album == album)
+                         .order_by(Work.work_sequence))
+
+            # Collect works that should appear
+            album_has_content = False
+            work_entries = []
+            for work in works:
+                work_key = ("work", work.id)
+                if work_key in excluded:
+                    continue
+                work_included = (work_key in included or album_included)
+
+                tracks = list(Track.select().where(Track.work == work)
+                              .order_by(Track.disc_number, Track.track_number))
+
+                visible_tracks = []
+                for t in tracks:
+                    track_key = ("track", t.id)
+                    if track_key in excluded:
+                        continue
+                    if track_key in included or work_included:
+                        visible_tracks.append(t)
+
+                if visible_tracks:
+                    work_entries.append((work, visible_tracks))
+                    album_has_content = True
+
+            if not album_has_content:
+                continue
+
+            total_tracks = sum(len(ts) for _, ts in work_entries)
+            album_iid = self.builder_pl_tree.insert(
+                "", "end", text=album.title,
+                values=(f"{total_tracks} trk",))
+            self._builder_pl_iid_map[album_iid] = ("album", album.id)
+
+            for work, vis_tracks in work_entries:
+                work_iid = self.builder_pl_tree.insert(
+                    album_iid, "end", text=work.work_name,
+                    values=(f"{len(vis_tracks)} trk",))
+                self._builder_pl_iid_map[work_iid] = ("work", work.id)
+
+                for t in vis_tracks:
+                    dur_s = (t.duration_ms or 0) // 1000
+                    dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                    t_iid = self.builder_pl_tree.insert(
+                        work_iid, "end",
+                        text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
+                        values=(dur_str,))
+                    self._builder_pl_iid_map[t_iid] = ("track", t.id)
+
+            # Auto-expand albums in playlist view
+            self.builder_pl_tree.item(album_iid, open=True)
+
+        self._pl_tree_snapshot = self._snapshot_tree(self.builder_pl_tree)
+        # Re-apply active filter if any
+        if self._pl_filter_var.get().strip():
+            self._apply_tree_filter("pl")
+
+    def _builder_include_selected(self, event=None):
+        """Add selected library items as include rules."""
+        sel = self.builder_lib_tree.selection()
+        if not sel:
+            if event is None:
+                messagebox.showinfo("Select", "Select items in the Library pane first.")
+            return "break"
+
+        # Snapshot all entries before any tree rebuild
+        entries = []
+        for iid in sel:
+            entry = self._builder_lib_iid_map.get(iid)
+            if entry:
+                entries.append(entry)
+
+        for level, entity_id in entries:
+            # Don't duplicate an existing include rule
+            if any(r["rule_type"] == "include" and r["target_level"] == level
+                   and r["target_id"] == entity_id
+                   for r in self._current_profile_rules):
+                continue
+            # If there's an exclude rule for this, remove it instead of adding include
+            removed = False
+            for i, r in enumerate(self._current_profile_rules):
+                if (r["rule_type"] == "exclude" and r["target_level"] == level
+                        and r["target_id"] == entity_id):
+                    self._current_profile_rules.pop(i)
+                    removed = True
+                    break
+            if not removed:
+                self._add_rule("include", level, entity_id, refresh=False)
+
+        self._refresh_rules_display()
+        self._rebuild_library_tree()
+        self._rebuild_playlist_tree()
+        return "break"
+
+    def _builder_exclude_selected(self, event=None):
+        """Remove selected playlist items (add exclude rules or remove include rules)."""
+        # Try playlist tree first, then library tree
+        sel = self.builder_pl_tree.selection()
+        iid_map = self._builder_pl_iid_map
+        if not sel:
+            sel = self.builder_lib_tree.selection()
+            iid_map = self._builder_lib_iid_map
+        if not sel:
+            if event is None:
+                messagebox.showinfo("Select", "Select items to remove.")
+            return "break"
+
+        # Snapshot all entries before any tree rebuild
+        entries = []
+        for iid in sel:
+            entry = iid_map.get(iid)
+            if entry:
+                entries.append(entry)
+
+        for level, entity_id in entries:
+            # Check if there's a direct include rule for this item
+            old_len = len(self._current_profile_rules)
+            self._current_profile_rules = [
+                r for r in self._current_profile_rules
+                if not (r["rule_type"] == "include" and r["target_level"] == level
+                        and r["target_id"] == entity_id)
+            ]
+            had_direct_include = len(self._current_profile_rules) < old_len
+
+            if had_direct_include:
+                # Cascade: remove all child rules that only existed under this parent
+                self._cascade_remove_children(level, entity_id)
+            else:
+                # Item is included via parent — add an explicit exclude
+                if not any(r["rule_type"] == "exclude" and r["target_level"] == level
+                           and r["target_id"] == entity_id
+                           for r in self._current_profile_rules):
+                    self._add_rule("exclude", level, entity_id, refresh=False)
+
+        self._refresh_rules_display()
+        self._rebuild_library_tree()
+        self._rebuild_playlist_tree()
+        return "break"
+
+    def _cascade_remove_children(self, level, entity_id):
+        """Remove all child include/exclude rules when a parent is removed."""
+        from music_manager.core.database import Work, Track
+
+        child_keys = set()
+        if level == "album":
+            works = Work.select().where(Work.album == entity_id)
+            for w in works:
+                child_keys.add(("work", w.id))
+                for t in Track.select(Track.id).where(Track.work == w):
+                    child_keys.add(("track", t.id))
+        elif level == "work":
+            for t in Track.select(Track.id).where(Track.work == entity_id):
+                child_keys.add(("track", t.id))
+
+        if child_keys:
+            self._current_profile_rules = [
+                r for r in self._current_profile_rules
+                if (r["target_level"], r["target_id"]) not in child_keys
+            ]
 
     def _build_temp_profile(self):
         """Build a temporary PlaylistProfile from current UI settings."""
@@ -612,7 +1938,13 @@ class App:
 
         from music_manager.core.database import PlaylistProfile, ProfileRule
 
-        name = self.profile_name_entry.get().strip() or "Untitled"
+        # Use a temp name that won't collide with user-saved profiles
+        name = "__temp_preview__"
+        # Clean up any leftover temp profiles
+        for old in PlaylistProfile.select().where(PlaylistProfile.name == name):
+            ProfileRule.delete().where(ProfileRule.profile == old).execute()
+            old.delete_instance()
+
         length_val = self.length_value.get().strip()
         seed_val = self.seed_entry.get().strip()
 
@@ -645,7 +1977,8 @@ class App:
             profile.delete_instance()
 
     def _preview_playlist(self):
-        """Preview the playlist (dry-run)."""
+        """Preview the playlist in a popup window (dry-run)."""
+        display_name = self.profile_name_entry.get().strip() or "Untitled"
         profile = self._build_temp_profile()
         if not profile:
             return
@@ -653,12 +1986,65 @@ class App:
         try:
             from music_manager.core.engine import generate_playlist
             result = generate_playlist(profile)
+        except Exception as exc:
+            self._delete_temp_profile(profile)
+            messagebox.showerror("Preview Error", str(exc))
+            return
 
-            self.preview_tree.delete(*self.preview_tree.get_children())
+        self._delete_temp_profile(profile)
+
+        # Build popup
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Preview — {display_name}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 900, 550)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        # Bottom bar (pack first so tree gets remaining space)
+        total_s = result.total_duration_ms // 1000
+        status_text = (f"{result.track_count} tracks, "
+                       f"{total_s // 3600}h {(total_s % 3600) // 60}m "
+                       f"{total_s % 60}s total")
+
+        bot = tk.Frame(popup, bg="#2b2b2b")
+        bot.pack(side="bottom", fill="x", padx=10, pady=5)
+        tk.Label(bot, text=status_text, bg="#2b2b2b", fg="white",
+                 font=("Segoe UI", 11)).pack(side="left", padx=5)
+        tk.Button(bot, text="Close", command=popup.destroy,
+                  bg="#3b3b3b", fg="white").pack(side="right", padx=5)
+
+        # Tree + scrollbar in a frame
+        tree_frame = tk.Frame(popup)
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+        tree = ttk.Treeview(tree_frame,
+                            columns=("order", "composer", "work", "title", "dur"),
+                            show="headings", selectmode="browse")
+        tree.heading("order", text="#")
+        tree.heading("composer", text="Composer")
+        tree.heading("work", text="Work")
+        tree.heading("title", text="Title")
+        tree.heading("dur", text="Duration")
+        tree.column("order", width=40, anchor="center")
+        tree.column("composer", width=150)
+        tree.column("work", width=220)
+        tree.column("title", width=280)
+        tree.column("dur", width=70, anchor="center")
+
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+
+        if not result.playlist:
+            tree.insert("", "end", values=(
+                "", "", "", "(no tracks matched current rules)", ""))
+        else:
             for rt in result.playlist:
                 dur_s = rt.duration_ms // 1000
                 dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-                self.preview_tree.insert("", "end", values=(
+                tree.insert("", "end", values=(
                     rt.order_key,
                     rt.composer_name or "",
                     rt.work_name or "",
@@ -666,23 +2052,22 @@ class App:
                     dur_str,
                 ))
 
-            total_s = result.total_duration_ms // 1000
-            self.preview_status.configure(
-                text=f"{result.track_count} tracks, "
-                     f"{total_s // 3600}h {(total_s % 3600) // 60}m {total_s % 60}s total"
-            )
-        finally:
-            self._delete_temp_profile(profile)
-
     def _export_m3u(self):
         """Export the playlist to an M3U file."""
+        default_name = self.profile_name_entry.get().strip() or "playlist"
+        initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.asksaveasfilename(
             defaultextension=".m3u",
+            initialfile=f"{default_name}.m3u",
+            initialdir=initial_dir or None,
             filetypes=[("M3U Playlist", "*.m3u"), ("All files", "*.*")],
             title="Export M3U",
+            parent=self.root,
         )
         if not path:
             return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
 
         profile = self._build_temp_profile()
         if not profile:
@@ -708,13 +2093,20 @@ class App:
 
     def _export_json(self):
         """Export the playlist to a JSON file."""
+        default_name = self.profile_name_entry.get().strip() or "playlist"
+        initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
+            initialfile=f"{default_name}.json",
+            initialdir=initial_dir or None,
             filetypes=[("JSON", "*.json"), ("All files", "*.*")],
             title="Export JSON",
+            parent=self.root,
         )
         if not path:
             return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
 
         profile = self._build_temp_profile()
         if not profile:
@@ -746,11 +2138,19 @@ class App:
             result = generate_playlist(profile)
             config = load_config()
             plex_config = config.get("targets", {}).get("plex", {})
-            plex_config["playlist_name"] = profile.name
+            plex_config["playlist_name"] = self.profile_name_entry.get().strip() or "Untitled"
+
+            # Use per-library Plex section if set, otherwise fall back to config
+            lib_section = (self.active_library.plex_section
+                           if self.active_library and self.active_library.plex_section
+                           else None)
+            if lib_section:
+                plex_config["music_section"] = lib_section
 
             serializer = PlexSerializer()
             serializer.serialize(result.playlist, plex_config)
-            messagebox.showinfo("Plex", f"Pushed '{profile.name}' to Plex "
+            display_name = plex_config["playlist_name"]
+            messagebox.showinfo("Plex", f"Pushed '{display_name}' to Plex "
                                f"({result.track_count} tracks)")
         except (PlexConnectionError, PlexPushError) as exc:
             messagebox.showerror("Plex Error", str(exc))
@@ -804,44 +2204,145 @@ class App:
 
         messagebox.showinfo("Saved", f"Profile '{name}' saved.")
 
-    def _load_profile(self):
-        """Load a profile by name from the DB."""
+    def _delete_profile(self):
+        """Show a profile picker, then delete the selected profile after confirmation."""
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
             return
+        if self._profile_picker_open:
+            return
+        self._profile_picker_open = True
 
-        name = self.profile_name_entry.get().strip()
-        if not name:
-            # Show picker
-            from music_manager.core.database import PlaylistProfile
-            profiles = list(PlaylistProfile.select().where(
-                PlaylistProfile.library == self.active_library))
-            if not profiles:
-                messagebox.showinfo("No Profiles", "No saved profiles found.")
-                return
-            # Simple selection dialog
-            names = [p.name for p in profiles]
-            picker = tk.Toplevel(self.root)
-            picker.title("Select Profile")
-            picker.geometry("300x300")
-            lb = tk.Listbox(picker, bg="#2b2b2b", fg="white",
-                           selectbackground="#1f6aa5", font=("Segoe UI", 11))
-            for n in names:
-                lb.insert("end", n)
-            lb.pack(fill="both", expand=True, padx=10, pady=10)
+        from music_manager.core.database import PlaylistProfile, ProfileRule
 
-            def on_select():
-                sel = lb.curselection()
-                if sel:
-                    self.profile_name_entry.delete(0, "end")
-                    self.profile_name_entry.insert(0, names[sel[0]])
-                    picker.destroy()
-                    self._load_profile()
-
-            ctk = self.ctk
-            ctk.CTkButton(picker, text="Load", command=on_select).pack(pady=5)
+        profiles = list(PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (~PlaylistProfile.name.startswith("__temp_"))))
+        if not profiles:
+            self._profile_picker_open = False
+            messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
 
+        # Deduplicate names (keep latest)
+        seen = set()
+        names = []
+        for p in reversed(profiles):
+            if p.name not in seen:
+                seen.add(p.name)
+                names.append(p.name)
+        names.reverse()
+
+        picker = tk.Toplevel(self.root)
+        picker.title("Delete Profile")
+        picker.transient(self.root)
+        self._center_on_main(picker, 300, 300)
+        picker.wait_visibility()
+        picker.grab_set()
+
+        lb = tk.Listbox(picker, bg="#2b2b2b", fg="white",
+                        selectbackground="#1f6aa5", font=("Segoe UI", 11),
+                        selectmode="extended")
+        for n in names:
+            lb.insert("end", n)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def on_delete():
+            sel = lb.curselection()
+            if not sel:
+                return
+            selected_names = [names[i] for i in sel]
+            count = len(selected_names)
+            label = selected_names[0] if count == 1 else f"{count} profiles"
+            if not messagebox.askyesno("Confirm Delete",
+                                       f"Delete {label}?", parent=picker):
+                return
+            for sname in selected_names:
+                for existing in PlaylistProfile.select().where(
+                    (PlaylistProfile.library == self.active_library) &
+                    (PlaylistProfile.name == sname)
+                ):
+                    ProfileRule.delete().where(
+                        ProfileRule.profile == existing).execute()
+                    existing.delete_instance()
+            picker.destroy()
+            self._profile_picker_open = False
+            # Clear the profile name if it was one of the deleted profiles
+            current_name = self.profile_name_entry.get().strip()
+            if current_name in selected_names:
+                self.profile_name_entry.delete(0, "end")
+                self._current_profile_rules.clear()
+                self._refresh_rules_display()
+            messagebox.showinfo("Deleted", f"Deleted {label}.")
+
+        def on_close():
+            picker.destroy()
+            self._profile_picker_open = False
+
+        picker.protocol("WM_DELETE_WINDOW", on_close)
+        ctk = self.ctk
+        ctk.CTkButton(picker, text="Delete", command=on_delete,
+                      fg_color="#c0392b", hover_color="#e74c3c").pack(pady=5)
+
+    def _load_profile(self):
+        """Always show a profile picker dialog, then load the selected profile."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+        if self._profile_picker_open:
+            return
+        self._profile_picker_open = True
+
+        from music_manager.core.database import PlaylistProfile
+        profiles = list(PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (~PlaylistProfile.name.startswith("__temp_"))))
+        if not profiles:
+            self._profile_picker_open = False
+            messagebox.showinfo("No Profiles", "No saved profiles found.")
+            return
+
+        # Deduplicate names (keep latest)
+        seen = set()
+        names = []
+        for p in reversed(profiles):
+            if p.name not in seen:
+                seen.add(p.name)
+                names.append(p.name)
+        names.reverse()
+
+        picker = tk.Toplevel(self.root)
+        picker.title("Select Profile")
+        picker.transient(self.root)
+        self._center_on_main(picker, 300, 300)
+        picker.wait_visibility()
+        picker.grab_set()
+
+        lb = tk.Listbox(picker, bg="#2b2b2b", fg="white",
+                       selectbackground="#1f6aa5", font=("Segoe UI", 11))
+        for n in names:
+            lb.insert("end", n)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def on_select():
+            sel = lb.curselection()
+            if not sel:
+                return
+            chosen = names[sel[0]]
+            picker.destroy()
+            self._profile_picker_open = False
+            self._apply_profile(chosen)
+
+        def on_close():
+            picker.destroy()
+            self._profile_picker_open = False
+
+        picker.protocol("WM_DELETE_WINDOW", on_close)
+        ctk = self.ctk
+        ctk.CTkButton(picker, text="Load", command=on_select).pack(pady=5)
+        lb.bind("<Double-1>", lambda e: on_select())
+
+    def _apply_profile(self, name):
+        """Load a named profile's settings and rules into the UI."""
         from music_manager.core.database import PlaylistProfile, ProfileRule
 
         try:
@@ -854,6 +2355,8 @@ class App:
             return
 
         # Populate UI
+        self.profile_name_entry.delete(0, "end")
+        self.profile_name_entry.insert(0, name)
         self.shuffle_mode.set(profile.shuffle_mode)
         self.work_integrity.set(profile.work_integrity)
         self.length_mode.set(profile.length_mode)
@@ -893,7 +2396,6 @@ class App:
                 "display": f"{rule.rule_type.upper()}: {rule.target_level} — {display_name}",
             })
         self._refresh_rules_display()
-        messagebox.showinfo("Loaded", f"Profile '{name}' loaded.")
 
     # ------------------------------------------------------------------
     # Tab 3: Cleanup / Overlay (§10)
@@ -1148,13 +2650,18 @@ class App:
             messagebox.showwarning("No Library", "Select a library first.")
             return
 
+        initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON", "*.json")],
+            initialdir=initial_dir or None,
             title="Export Overrides",
+            parent=self.root,
         )
         if not path:
             return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
 
         from music_manager.core.overrides import export_overrides
         count = export_overrides(self.active_library, Path(path))
@@ -1166,12 +2673,17 @@ class App:
             messagebox.showwarning("No Library", "Select a library first.")
             return
 
+        initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.askopenfilename(
             filetypes=[("JSON", "*.json")],
+            initialdir=initial_dir or None,
             title="Import Overrides",
+            parent=self.root,
         )
         if not path:
             return
+        self._prefs["last_export_dir"] = str(Path(path).parent)
+        _save_prefs(self._prefs)
 
         from music_manager.core.overrides import import_overrides, apply_overrides
         counts = import_overrides(self.active_library, Path(path))

@@ -55,6 +55,16 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         ProfileRule,
         Override,
     ])
+
+    # Migrations: add columns that may not exist in older databases
+    from playhouse.migrate import SqliteMigrator, migrate as run_migrate
+    migrator = SqliteMigrator(database)
+    columns = {col.name for col in database.get_columns("libraries")}
+    if "plex_section" not in columns:
+        run_migrate(migrator.add_column("libraries", "plex_section",
+                                        pw.TextField(default="")))
+        logger.info("Migrated: added plex_section to libraries")
+
     logger.info("Database tables created/verified")
     return database
 
@@ -78,6 +88,7 @@ class Library(BaseModel):
     """A named music library (e.g. 'Main Collection', 'Christmas Music')."""
 
     name = pw.TextField()
+    plex_section = pw.TextField(default="")  # Plex library section name
 
     class Meta:
         table_name = "libraries"

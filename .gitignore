@@ -12,3 +12,8 @@ build/
 .idea/
 .vscode/
 TestData/
+gui_prefs.json
+config.json
+*.m3u
+*.db-shm
+*.db-wal

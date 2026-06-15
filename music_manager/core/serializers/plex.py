@@ -55,7 +55,7 @@ class PlexSerializer(Serializer):
         server = _connect(target_config)
         section = _get_music_section(server, target_config)
         playlist_name = target_config["playlist_name"]
-        strategy = target_config.get("strategy", "m3u")
+        strategy = target_config.get("strategy", "item_match")
 
         # Delete existing playlist with the same name
         _delete_existing_playlist(server, playlist_name)
@@ -144,14 +144,17 @@ def _connect(target_config: dict[str, Any]):
         )
 
     base_url = target_config.get("base_url", "")
-    token_env = target_config.get("token_env", "PLEX_TOKEN")
 
-    token = os.environ.get(token_env)
+    # Accept a direct token, or look it up from an environment variable
+    token = target_config.get("token")
     if not token:
-        raise PlexConnectionError(
-            f"Plex token not found in environment variable '{token_env}'. "
-            f"Set it with: export {token_env}=<your-token>"
-        )
+        token_env = target_config.get("token_env", "PLEX_TOKEN")
+        token = os.environ.get(token_env)
+        if not token:
+            raise PlexConnectionError(
+                f"Plex token not found. Set 'token' in config, or "
+                f"set environment variable '{token_env}'."
+            )
 
     try:
         server = PlexServer(base_url, token)
@@ -295,7 +298,9 @@ def _build_plex_path_index(section) -> dict[str, int]:
     logger.info("Building Plex path index (this may take a moment)...")
 
     try:
-        for track in section.all():
+        # section.searchTracks() returns Track objects directly,
+        # whereas section.all() returns Artists for music libraries.
+        for track in section.searchTracks():
             for media in track.media:
                 for part in media.parts:
                     if part.file:

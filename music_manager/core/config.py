@@ -97,7 +97,8 @@ def _validate_plex(plex: dict, path: Path) -> None:
     if not isinstance(plex, dict):
         raise ConfigError(f"{path}: 'targets.plex' must be a JSON object")
 
-    required = {"base_url": str, "token_env": str, "music_section": str}
+    # music_section is optional in config — can be set per-library in the GUI
+    required = {"base_url": str}
     for key, expected_type in required.items():
         if key not in plex:
             raise ConfigError(f"{path}: 'targets.plex' missing required key '{key}'")
@@ -106,6 +107,12 @@ def _validate_plex(plex: dict, path: Path) -> None:
                 f"{path}: 'targets.plex.{key}' must be a {expected_type.__name__}, "
                 f"got {type(plex[key]).__name__}"
             )
+
+    # Require at least one of 'token' or 'token_env'
+    if "token" not in plex and "token_env" not in plex:
+        raise ConfigError(
+            f"{path}: 'targets.plex' requires either 'token' or 'token_env'"
+        )
 
     _validate_path_rules(plex.get("path_rules", []), "targets.plex.path_rules", path)
 

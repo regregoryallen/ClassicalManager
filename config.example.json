@@ -2,8 +2,8 @@
   "active_library": 1,
   "targets": {
     "plex": {
-      "base_url": "http://plex-host:32400",
-      "token_env": "PLEX_TOKEN",
+      "base_url": "http://your-plex-server:32400",
+      "token": "your-plex-token",
       "music_section": "Music",
       "path_rules": []
     },

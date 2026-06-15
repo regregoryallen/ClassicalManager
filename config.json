@@ -1,0 +1,16 @@
+{
+  "active_library": 1,
+  "targets": {
+    "plex": {
+      "base_url": "http://plex-host:32400",
+      "token_env": "PLEX_TOKEN",
+      "music_section": "Music",
+      "path_rules": []
+    },
+    "m3u": {
+      "path_style": "absolute",
+      "base_path": "",
+      "path_rules": []
+    }
+  }
+}

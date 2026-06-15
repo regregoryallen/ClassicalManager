@@ -602,6 +602,12 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
                 common = _common_prefix(prefix, title_j)
                 # Require a meaningful prefix (at least 5 chars, not just "The" etc.)
                 if len(common.strip()) >= 5:
+                    # Reject if adding this track would shrink the prefix
+                    # drastically — indicates a different work that happens to
+                    # share a generic start (e.g. "String Quartet in F..." vs
+                    # "String Quartet in G...").
+                    if len(group) > 1 and len(common) < len(prefix) * 0.6:
+                        continue
                     # Check that the remainder starts with a movement marker
                     remainder_i = title_i[len(common):]
                     remainder_j = title_j[len(common):]

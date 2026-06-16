@@ -85,20 +85,52 @@ def scan(
             typer.echo(f"  ... and {len(stats.files_failed) - 20} more")
 
 
+@app.command()
+def redetect(
+    library: str = typer.Option(..., help="Library name"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Re-run heuristic work detection without rescanning files."""
+    _setup_logging(verbose)
+
+    from music_manager.core.scanner import redetect_heuristic_works
+    lib = _get_library(library)
+
+    def progress(current, total, message):
+        typer.echo(f"\r[{current}/{total}] {message}", nl=False)
+
+    typer.echo(f"Re-detecting works for: {lib.name}")
+    result = redetect_heuristic_works(lib, progress_callback=progress)
+    typer.echo("")  # newline after progress
+
+    typer.echo(f"\n--- Redetect Report ---")
+    typer.echo(f"Albums processed:    {result['albums_processed']}")
+    typer.echo(f"Heuristic works:     {result['heuristic_works']}")
+    typer.echo(f"Standalone works:    {result['standalone_works']}")
+
+
 def _get_profile(name: str):
-    """Look up a playlist profile by name, or exit with an error."""
+    """Look up a playlist profile by name (must be unique across libraries)."""
     from music_manager.core.database import PlaylistProfile, initialize_database
     initialize_database()
-    try:
-        return PlaylistProfile.get(PlaylistProfile.name == name)
-    except PlaylistProfile.DoesNotExist:
-        profiles = [p.name for p in PlaylistProfile.select()]
-        typer.echo(f"Error: profile '{name}' not found.", err=True)
-        if profiles:
-            typer.echo(f"Available profiles: {', '.join(profiles)}", err=True)
-        else:
-            typer.echo("No profiles exist yet. Create one first.", err=True)
+    matches = list(PlaylistProfile.select().where(
+        (PlaylistProfile.name == name) &
+        (~PlaylistProfile.name.startswith("__temp_"))))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        libs = [m.library.name for m in matches]
+        typer.echo(f"Error: profile '{name}' exists in multiple libraries: "
+                   f"{', '.join(libs)}. Profile names must be unique.", err=True)
         raise typer.Exit(1)
+    profiles = [p.name for p in PlaylistProfile.select().where(
+        ~PlaylistProfile.name.startswith("__temp_"))]
+    typer.echo(f"Error: profile '{name}' not found.", err=True)
+    if profiles:
+        typer.echo(f"Available profiles: {', '.join(profiles)}", err=True)
+    else:
+        typer.echo("No profiles exist yet. Create one first.", err=True)
+    raise typer.Exit(1)
 
 
 @app.command()
@@ -135,7 +167,31 @@ def generate(
     prof = _get_profile(profile)
     result = generate_playlist(prof)
 
-    if format == "json":
+    _output_result(prof, result, format=format, output=output, target=target)
+
+
+def _output_result(prof, result, *, format="m3u", output=None, target=None):
+    """Output a generated playlist to the specified format/target."""
+    if target == "plex":
+        from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
+        from music_manager.core.config import load_config
+        config = load_config()
+        plex_config = config.get("targets", {}).get("plex", {})
+        plex_config["playlist_name"] = prof.name
+        # Use per-library plex section if set
+        if prof.library.plex_section:
+            plex_config["music_section"] = prof.library.plex_section
+        serializer = PlexSerializer()
+        try:
+            serializer.serialize(result.playlist, plex_config)
+            typer.echo(f"Pushed playlist '{prof.name}' to Plex")
+        except PlexConnectionError as exc:
+            typer.echo(f"Plex connection error: {exc}", err=True)
+            raise typer.Exit(1)
+        except PlexPushError as exc:
+            typer.echo(f"Plex push error: {exc}", err=True)
+            raise typer.Exit(1)
+    elif format == "json":
         from music_manager.core.serializers.json_dump import serialize_engine_result
         json_out = serialize_engine_result(
             result, output_path=Path(output) if output else None
@@ -156,28 +212,52 @@ def generate(
         serializer = M3USerializer()
         serializer.serialize(result.playlist, m3u_config)
         typer.echo(f"Wrote M3U to {output}")
-    elif target == "plex":
-        from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
-        from music_manager.core.config import load_config
-        config = load_config()
-        plex_config = config.get("targets", {}).get("plex", {})
-        plex_config["playlist_name"] = prof.name
-        serializer = PlexSerializer()
-        try:
-            serializer.serialize(result.playlist, plex_config)
-            typer.echo(f"Pushed playlist '{prof.name}' to Plex")
-        except PlexConnectionError as exc:
-            typer.echo(f"Plex connection error: {exc}", err=True)
-            raise typer.Exit(1)
-        except PlexPushError as exc:
-            typer.echo(f"Plex push error: {exc}", err=True)
-            raise typer.Exit(1)
     else:
         typer.echo(f"Error: unknown format '{format}'", err=True)
         raise typer.Exit(1)
 
     typer.echo(f"Generated: {result.track_count} tracks, "
                f"{result.total_duration_ms // 1000}s total", err=True)
+
+
+@app.command("generate-all")
+def generate_all(
+    library: str = typer.Option(..., help="Library name"),
+    format: str = typer.Option("m3u", help="Output format: m3u, json"),
+    output_dir: str = typer.Option(".", help="Output directory for files"),
+    target: str = typer.Option(None, help="Target: plex"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Generate all profiles for a library."""
+    _setup_logging(verbose)
+
+    from music_manager.core.database import PlaylistProfile
+    from music_manager.core.engine import generate_playlist
+
+    lib = _get_library(library)
+    profiles = list(PlaylistProfile.select().where(
+        (PlaylistProfile.library == lib) &
+        (~PlaylistProfile.name.startswith("__temp_"))))
+
+    if not profiles:
+        typer.echo("No profiles found for this library.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
+    out_path = Path(output_dir)
+
+    for prof in profiles:
+        typer.echo(f"\n--- {prof.name} ---")
+        result = generate_playlist(prof)
+        if target:
+            _output_result(prof, result, target=target)
+        else:
+            ext = ".json" if format == "json" else ".m3u"
+            safe_name = prof.name.replace(" ", "_").replace("/", "_")
+            output = str(out_path / f"{safe_name}{ext}")
+            _output_result(prof, result, format=format, output=output)
+
+    typer.echo(f"\nDone: {len(profiles)} profiles generated.")
 
 
 @app.command()

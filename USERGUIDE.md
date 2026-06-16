@@ -208,6 +208,15 @@ Rescans all source folders, rebuilding albums, works, and tracks from file metad
 Overrides are preserved across rescans. During scanning, the button changes to
 **Cancel Scan**.
 
+### Re-detect Works
+
+Re-runs the title-prefix heuristic work detection using data already in the database,
+without rescanning files from disk. This is much faster than a full rescan and is
+useful when tuning detection parameters or after correcting overrides.
+
+Only heuristic and standalone works are cleared and rebuilt. Works detected via
+MusicBrainz IDs, WORK tags, or manual overrides are preserved.
+
 ### Source Folders
 
 Lists the root directories for the active library.
@@ -447,6 +456,24 @@ python main.py --cli generate --profile "Sunday Classical" --format json --outpu
 python main.py --cli generate --profile "Sunday Classical" --target plex
 ```
 
+#### redetect
+Re-run heuristic work detection without rescanning files from disk.
+```bash
+python main.py --cli redetect --library "My Collection" [-v]
+```
+Much faster than a full rescan. Only rebuilds heuristic and standalone works;
+preserves works from overrides, MusicBrainz IDs, and WORK tags.
+
+#### generate-all
+Generate playlists for all profiles in a library.
+```bash
+# Export all as M3U files to a directory
+python main.py --cli generate-all --library "My Collection" --output-dir ./playlists
+
+# Push all to Plex
+python main.py --cli generate-all --library "My Collection" --target plex
+```
+
 #### integrity
 Run integrity checks on a library.
 ```bash
@@ -586,6 +613,10 @@ Settings.
 Go to the **Cleanup / Overlay** tab to review heuristic works. Use **Set Group Key**
 to manually control grouping. Works detected via MusicBrainz IDs or WORK tags are
 generally reliable; heuristic groupings are the most likely to need correction.
+
+After making corrections, click **Re-detect Works** in the sidebar to rebuild
+heuristic groupings without a full rescan. This is much faster and preserves
+override, MusicBrainz, and WORK tag groupings.
 
 ### Scan takes too long
 Large collections (thousands of albums) may take several minutes. You can cancel

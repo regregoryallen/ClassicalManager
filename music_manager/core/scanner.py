@@ -429,7 +429,7 @@ class PendingTrack:
     """A track awaiting work assignment during the detection phase."""
 
     db_track: Track
-    tags: RawTags
+    tags: RawTags | None = None
     override_work_key: str = ""
 
 
@@ -561,6 +561,9 @@ def _assign_by_work_tag(album: Album, pending: list[PendingTrack],
         assigned.update(pt.db_track.id for pt in tracks)
 
 
+_MIN_PREFIX_WORDS = 3  # Minimum word count for heuristic prefix matching
+
+
 def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
                           assigned: set[int]) -> None:
     """Step 3: Title-prefix heuristic — group by common title prefix.
@@ -600,41 +603,71 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
                     continue
 
                 common = _common_prefix(prefix, title_j)
-                # Require a meaningful prefix (at least 5 chars, not just "The" etc.)
-                if len(common.strip()) >= 5:
+                # Back up to the last word boundary so we don't split
+                # through roman numerals (e.g. "I" in "II.") or other tokens
+                trimmed = common
+                if trimmed and trimmed[-1].isalnum():
+                    trimmed = re.sub(r"\s+\S*$", "", trimmed)
+                # Require a meaningful prefix: at least 5 chars AND
+                # at least _MIN_PREFIX_WORDS words (avoids false matches
+                # on short common starts like "The", "Every", etc.)
+                if (len(trimmed.strip()) >= 5 and
+                        len(trimmed.strip().split()) >= _MIN_PREFIX_WORDS):
                     # Reject if adding this track would shrink the prefix
                     # drastically — indicates a different work that happens to
                     # share a generic start (e.g. "String Quartet in F..." vs
                     # "String Quartet in G...").
-                    if len(group) > 1 and len(common) < len(prefix) * 0.6:
+                    if len(group) > 1 and len(trimmed) < len(prefix) * 0.6:
                         continue
                     # Check that the remainder starts with a movement marker
-                    remainder_i = title_i[len(common):]
-                    remainder_j = title_j[len(common):]
+                    remainder_i = title_i[len(trimmed):]
+                    remainder_j = title_j[len(trimmed):]
                     if (_has_movement_marker(remainder_i) and
                             _has_movement_marker(remainder_j)):
                         group.append(pt_j)
-                        prefix = common
+                        prefix = trimmed
 
             if len(group) >= 2:
                 # Clean up the prefix for use as work name.
-                # The common prefix may end mid-word (e.g. "Symphony No. 5 - I"
-                # from "I. Allegro" / "II. Andante" / "III. Scherzo").
-                # Back up to last word boundary, then strip trailing delimiters.
+                # Prefix is already trimmed to a word boundary during matching;
+                # just strip trailing delimiters.
                 work_name = prefix
-                # If prefix doesn't end at a word boundary, truncate to last space/delimiter
                 if work_name and work_name[-1].isalnum():
                     work_name = re.sub(r"\s+\S*$", "", work_name)
-                # Strip trailing delimiters
                 work_name = re.sub(r"[\s\-:.,]+$", "", work_name)
                 if not work_name:
                     work_name = prefix.strip()
                 if work_name:
                     group.sort(key=lambda pt: (pt.db_track.disc_number,
                                                 pt.db_track.track_number))
-                    _create_work(album, work_name, "heuristic", tracks=group)
-                    assigned.update(pt.db_track.id for pt in group)
-                    used.update(id(pt) for pt in group)
+                    # Split into contiguous runs — tracks in a work must
+                    # be adjacent by track number (no gaps).
+                    for run in _contiguous_runs(group):
+                        if len(run) >= 2:
+                            _create_work(album, work_name, "heuristic",
+                                         tracks=run)
+                            assigned.update(pt.db_track.id for pt in run)
+                            used.update(id(pt) for pt in run)
+
+
+def _contiguous_runs(group: list[PendingTrack]) -> list[list[PendingTrack]]:
+    """Split a sorted group into runs of contiguous track numbers.
+
+    Tracks must already be sorted by (disc_number, track_number).
+    A gap in track_number (within the same disc) starts a new run.
+    """
+    if not group:
+        return []
+    runs: list[list[PendingTrack]] = [[group[0]]]
+    for pt in group[1:]:
+        prev = runs[-1][-1].db_track
+        curr = pt.db_track
+        if (curr.disc_number == prev.disc_number and
+                curr.track_number == prev.track_number + 1):
+            runs[-1].append(pt)
+        else:
+            runs.append([pt])
+    return runs
 
 
 def _common_prefix(a: str, b: str) -> str:
@@ -679,6 +712,68 @@ class ScanStats:
     tracks_no_composer: int = 0
     tracks_no_duration: int = 0
     heuristic_works: int = 0
+
+
+def redetect_heuristic_works(library: Library,
+                             progress_callback=None) -> dict:
+    """Re-run heuristic and standalone work detection without rescanning files.
+
+    Preserves works from overrides, MusicBrainz IDs, and WORK tags.
+    Only clears and rebuilds heuristic/standalone works using data
+    already in the database.
+
+    Returns dict with keys: albums_processed, heuristic_works, standalone_works.
+    """
+    albums = list(Album.select().where(Album.library == library))
+    result = {"albums_processed": 0, "heuristic_works": 0, "standalone_works": 0}
+
+    with database.atomic():
+        for idx, album in enumerate(albums):
+            if progress_callback:
+                progress_callback(idx + 1, len(albums), album.title)
+
+            # Find tracks assigned to heuristic/standalone works
+            old_works = list(Work.select().where(
+                (Work.album == album) &
+                (Work.work_source.in_(["heuristic", "standalone"]))
+            ))
+            if not old_works:
+                # All works are from overrides/MB/WORK tags — skip
+                result["albums_processed"] += 1
+                continue
+
+            # Null out work references for tracks in those works
+            old_work_ids = [w.id for w in old_works]
+            Track.update(work=None).where(
+                Track.work_id.in_(old_work_ids)
+            ).execute()
+            # Delete the old works
+            Work.delete().where(Work.id.in_(old_work_ids)).execute()
+
+            # Build PendingTrack list from existing DB tracks
+            all_tracks = list(Track.select().where(Track.album == album))
+            assigned: set[int] = set()
+            pending: list[PendingTrack] = []
+            for t in all_tracks:
+                pt = PendingTrack(db_track=t)
+                pending.append(pt)
+                # Mark tracks still assigned to non-heuristic works
+                if t.work_id is not None:
+                    assigned.add(t.id)
+
+            _assign_by_heuristic(album, pending, assigned)
+            _assign_standalone(album, pending, assigned)
+            result["albums_processed"] += 1
+
+    # Count results
+    result["heuristic_works"] = Work.select().join(Album).where(
+        (Album.library == library) & (Work.work_source == "heuristic")
+    ).count()
+    result["standalone_works"] = Work.select().join(Album).where(
+        (Album.library == library) & (Work.work_source == "standalone")
+    ).count()
+
+    return result
 
 
 def scan_library(library: Library, progress_callback=None) -> ScanStats:

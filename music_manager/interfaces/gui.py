@@ -242,6 +242,14 @@ class App:
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
 
+        ctk.CTkButton(self.sidebar, text="Re-detect Works",
+                      command=self._redetect_works).pack(
+            padx=15, pady=(3, 0), fill="x")
+
+        ctk.CTkButton(self.sidebar, text="Integrity Check",
+                      command=self._run_integrity_check).pack(
+            padx=15, pady=(3, 0), fill="x")
+
         # Source folders
         folder_hdr = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         folder_hdr.pack(padx=15, pady=(12, 3), fill="x")
@@ -305,8 +313,10 @@ class App:
         names = [lib.name for lib in libs]
         self.lib_combo.configure(values=names if names else ["(none)"])
         if libs:
-            self.lib_combo.set(libs[0].name)
-            self._on_library_changed(libs[0].name)
+            last = self._prefs.get("last_library")
+            default = last if last in names else libs[0].name
+            self.lib_combo.set(default)
+            self._on_library_changed(default)
         else:
             self.lib_combo.set("(none)")
             self.active_library = None
@@ -324,6 +334,9 @@ class App:
             self.active_library = None
             self.plex_section_entry.delete(0, "end")
             return
+        # Remember last-used library
+        self._prefs["last_library"] = name
+        _save_prefs(self._prefs)
         # Populate plex section from library
         self.plex_section_entry.delete(0, "end")
         if self.active_library.plex_section:
@@ -792,6 +805,77 @@ class App:
             self._refresh_cleanup()
 
         self.root.after(0, finish)
+
+    def _redetect_works(self):
+        """Re-run heuristic work detection without rescanning files."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        from music_manager.core.scanner import redetect_heuristic_works
+        result = redetect_heuristic_works(self.active_library)
+        self._refresh_metrics()
+        self._refresh_cleanup()
+        messagebox.showinfo(
+            "Re-detect Complete",
+            f"Albums processed: {result['albums_processed']}\n"
+            f"Heuristic works: {result['heuristic_works']}\n"
+            f"Standalone works: {result['standalone_works']}")
+
+    def _run_integrity_check(self):
+        """Run integrity checks and show results in a popup."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        from music_manager.core.integrity import run_integrity_checks
+        report = run_integrity_checks(self.active_library)
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Integrity Report — {self.active_library.name}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 800, 500)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        ctk = self.ctk
+
+        # Summary bar
+        summary = ctk.CTkFrame(popup, fg_color="transparent")
+        summary.pack(fill="x", padx=10, pady=(10, 5))
+        categories = [
+            ("Orphaned Tracks", report.orphans),
+            ("Unscanned Files", report.unscanned),
+            ("Duplicates", report.duplicates),
+            ("Cross-Folder Works", report.cross_folder_works),
+        ]
+        for label, items in categories:
+            color = "#4da6ff" if not items else "#e74c3c"
+            ctk.CTkLabel(summary, text=f"{label}: {len(items)}",
+                         text_color=color,
+                         font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
+
+        # Detail tabs
+        notebook = ctk.CTkTabview(popup)
+        notebook.pack(fill="both", expand=True, padx=10, pady=5)
+
+        for label, items in categories:
+            tab = notebook.add(label)
+            text = tk.Text(tab, bg="#1e1e1e", fg="#cccccc",
+                           font=("Consolas", 10), wrap="word",
+                           state="normal")
+            text.pack(fill="both", expand=True, padx=5, pady=5)
+            scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
+            text.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            if items:
+                text.insert("1.0", "\n".join(items))
+            else:
+                text.insert("1.0", "No issues found.")
+            text.configure(state="disabled")
+
+        ctk.CTkButton(popup, text="Close", width=80,
+                      command=popup.destroy).pack(pady=(0, 10))
 
     # ------------------------------------------------------------------
     # Library Import / Export
@@ -1267,7 +1351,7 @@ class App:
                          command=lambda: self._add_rule("include", "album", album_id))
         menu.add_command(label="Exclude Album",
                          command=lambda: self._add_rule("exclude", "album", album_id))
-        menu.post(event.x_root, event.y_root)
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _work_context_menu(self, event):
         """Right-click context menu on works/tracks."""
@@ -1293,7 +1377,7 @@ class App:
             menu.add_command(label="Exclude Track",
                              command=lambda: self._add_rule("exclude", "track", entity_id))
 
-        menu.post(event.x_root, event.y_root)
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _add_rule(self, rule_type, target_level, target_id, refresh=True):
         """Add an include/exclude rule to the in-memory list."""
@@ -1416,12 +1500,24 @@ class App:
         ctk.CTkLabel(lib_header, text="Library",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(
             side="left")
+        ctk.CTkButton(lib_header, text="+", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.builder_lib_tree, True)
+                      ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(lib_header, text="\u2013", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.builder_lib_tree, False)
+                      ).pack(side="left")
         self._lib_filter_var = tk.StringVar()
         self._lib_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("lib"))
         lib_filter = ctk.CTkEntry(lib_header, width=150,
                                   placeholder_text="Filter...",
                                   textvariable=self._lib_filter_var)
         lib_filter.pack(side="right")
+        ctk.CTkLabel(lib_header, text="Filter:",
+                     text_color="gray70").pack(side="right", padx=(0, 3))
 
         self.builder_lib_tree = ttk.Treeview(
             left_frame, columns=("info",),
@@ -1473,12 +1569,24 @@ class App:
         ctk.CTkLabel(pl_header, text="Playlist",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(
             side="left")
+        ctk.CTkButton(pl_header, text="+", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.builder_pl_tree, True)
+                      ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(pl_header, text="\u2013", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.builder_pl_tree, False)
+                      ).pack(side="left")
         self._pl_filter_var = tk.StringVar()
         self._pl_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("pl"))
         pl_filter = ctk.CTkEntry(pl_header, width=150,
                                  placeholder_text="Filter...",
                                  textvariable=self._pl_filter_var)
         pl_filter.pack(side="right")
+        ctk.CTkLabel(pl_header, text="Filter:",
+                     text_color="gray70").pack(side="right", padx=(0, 3))
 
         self.builder_pl_tree = ttk.Treeview(
             right_frame, columns=("info",),
@@ -1518,6 +1626,13 @@ class App:
     # ------------------------------------------------------------------
     # Builder: data & interaction
     # ------------------------------------------------------------------
+
+    def _toggle_tree(self, tree, expand):
+        """Expand or collapse all nodes in a treeview."""
+        for iid in tree.get_children():
+            tree.item(iid, open=expand)
+            for child in tree.get_children(iid):
+                tree.item(child, open=expand)
 
     def _snapshot_tree(self, tree):
         """Capture tree structure as list of (iid, parent, index, text, open)."""
@@ -2172,7 +2287,21 @@ class App:
 
         from music_manager.core.database import PlaylistProfile, ProfileRule
 
-        # Delete existing profile with same name
+        # Enforce unique profile names across all libraries
+        conflict = PlaylistProfile.select().where(
+            (PlaylistProfile.name == name) &
+            (PlaylistProfile.library != self.active_library) &
+            (~PlaylistProfile.name.startswith("__temp_"))
+        ).first()
+        if conflict:
+            messagebox.showwarning(
+                "Name Conflict",
+                f"A profile named '{name}' already exists in library "
+                f"'{conflict.library.name}'. Profile names must be unique "
+                f"across all libraries.")
+            return
+
+        # Delete existing profile with same name in this library
         for existing in PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
             (PlaylistProfile.name == name)
@@ -2423,15 +2552,23 @@ class App:
 
         self.heuristic_tree = ttk.Treeview(
             tab, columns=("album", "tracks", "composer"),
-            show="headings", selectmode="browse", height=8)
-        self.heuristic_tree.heading("album", text="Work Name")
+            show="tree headings", selectmode="browse", height=10)
+        self.heuristic_tree.heading("#0", text="Name")
+        self.heuristic_tree.heading("album", text="Album")
         self.heuristic_tree.heading("tracks", text="Tracks")
         self.heuristic_tree.heading("composer", text="Composer")
-        self.heuristic_tree.column("album", width=400)
+        self.heuristic_tree.column("#0", width=350)
+        self.heuristic_tree.column("album", width=200)
         self.heuristic_tree.column("tracks", width=60, anchor="center")
-        self.heuristic_tree.column("composer", width=200)
-        self.heuristic_tree.pack(fill="x", padx=10, pady=5)
-        self._heuristic_work_map = {}
+        self.heuristic_tree.column("composer", width=150)
+        self.heuristic_tree.pack(fill="both", expand=True, padx=10, pady=5)
+
+        h_scroll = ttk.Scrollbar(self.heuristic_tree, orient="vertical",
+                                 command=self.heuristic_tree.yview)
+        self.heuristic_tree.configure(yscrollcommand=h_scroll.set)
+        h_scroll.pack(side="right", fill="y")
+
+        self._heuristic_work_map = {}  # iid → work.id (work-level items only)
 
         # Edit section
         edit_frame = ctk.CTkFrame(tab)
@@ -2495,7 +2632,7 @@ class App:
         self._refresh_overrides_list()
 
     def _refresh_heuristic_works(self):
-        """Reload the heuristic works treeview."""
+        """Reload the heuristic works treeview with track children."""
         self.heuristic_tree.delete(*self.heuristic_tree.get_children())
         self._heuristic_work_map.clear()
 
@@ -2508,17 +2645,24 @@ class App:
                  .join(Album)
                  .where((Album.library == self.active_library) &
                         (Work.work_source == "heuristic"))
-                 .order_by(Work.work_name))
+                 .order_by(Album.title, Work.work_name))
 
         for work in works:
-            tracks = list(Track.select().where(Track.work == work))
+            tracks = list(Track.select().where(Track.work == work)
+                          .order_by(Track.disc_number, Track.track_number))
             composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
-            iid = self.heuristic_tree.insert("", "end", values=(
-                work.work_name,
-                len(tracks),
-                composer,
-            ))
-            self._heuristic_work_map[iid] = work.id
+            work_iid = self.heuristic_tree.insert(
+                "", "end", text=work.work_name,
+                values=(work.album.title, len(tracks), composer))
+            self._heuristic_work_map[work_iid] = work.id
+
+            for t in tracks:
+                dur_s = (t.duration_ms or 0) // 1000
+                dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                self.heuristic_tree.insert(
+                    work_iid, "end",
+                    text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
+                    values=("", dur_str, ""))
 
     def _refresh_overrides_list(self):
         """Reload the overrides treeview."""
@@ -2538,12 +2682,18 @@ class App:
             self._override_id_map[iid] = ov.id
 
     def _get_selected_heuristic_work(self):
-        """Get the work ID of the selected heuristic work."""
+        """Get the work ID of the selected heuristic work (or its parent if a track is selected)."""
         sel = self.heuristic_tree.selection()
         if not sel:
             messagebox.showinfo("Select", "Select a heuristic work first.")
             return None
-        return self._heuristic_work_map.get(sel[0])
+        iid = sel[0]
+        # If a track child is selected, walk up to the work parent
+        if iid not in self._heuristic_work_map:
+            parent = self.heuristic_tree.parent(iid)
+            if parent:
+                iid = parent
+        return self._heuristic_work_map.get(iid)
 
     def _set_work_name_override(self):
         """Set a work_name override for the selected heuristic work's tracks."""

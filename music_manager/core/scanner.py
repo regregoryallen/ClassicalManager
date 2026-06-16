@@ -412,9 +412,10 @@ _MOVEMENT_MARKERS = re.compile(
     r"""
     (?:^|\s|:|\.\s)         # preceded by start, space, colon, or period+space
     (?:
-        [IVXLCDM]+\.?       # Roman numeral (possibly with trailing dot)
+        [IVXLCDM]+\.?(?![a-z])  # Roman numeral, not followed by lowercase (avoid "Christmas", "Days", etc.)
       | No\.\s*\d+          # "No. N"
       | \d+\.\s             # "1. " numbering
+      | \d+\s*[-–]          # "1 -" / "1-" section numbering
       | Allegro | Adagio | Andante | Moderato | Presto | Vivace
       | Largo | Lento | Scherzo | Menuett?o | Finale | Rondo
       | Overture | Prelude | Intermezzo | Maestoso | Grave
@@ -570,7 +571,8 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
 
     Within a single album/disc, find tracks sharing a common title prefix
     before a movement delimiter.  Requires ≥2 tracks and a recognized
-    movement marker.  Conservative: when in doubt, leave ungrouped.
+    movement marker (unless the prefix ends with a delimiter like ':').
+    Conservative: when in doubt, leave ungrouped.
     """
     # Group unassigned tracks by disc
     by_disc: dict[int, list[PendingTrack]] = {}
@@ -586,12 +588,18 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
         # Sort by track number for stable processing
         disc_tracks.sort(key=lambda pt: pt.db_track.track_number)
 
+        # --- Sub-step: group contiguous tracks with identical titles ---
+        # Tracks with the same title on the same disc are clearly parts of
+        # one work (e.g. multi-part pieces with the same name).  Handle
+        # these before the general prefix loop to avoid prefix erosion.
+        _group_identical_titles(album, disc_tracks, assigned)
+
         # Try to find common prefixes
         titles = [(pt, pt.db_track.title) for pt in disc_tracks]
         used = set()
 
         for i, (pt_i, title_i) in enumerate(titles):
-            if id(pt_i) in used:
+            if id(pt_i) in used or pt_i.db_track.id in assigned:
                 continue
 
             # Find tracks sharing a substantial prefix with this one
@@ -599,7 +607,7 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
             prefix = title_i
 
             for j, (pt_j, title_j) in enumerate(titles):
-                if j <= i or id(pt_j) in used:
+                if j <= i or id(pt_j) in used or pt_j.db_track.id in assigned:
                     continue
 
                 common = _common_prefix(prefix, title_j)
@@ -619,10 +627,15 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
                     # "String Quartet in G...").
                     if len(group) > 1 and len(trimmed) < len(prefix) * 0.6:
                         continue
-                    # Check that the remainder starts with a movement marker
+                    # When the prefix ends with a delimiter (e.g. ":"),
+                    # the delimiter itself signals "Work: Movement" structure
+                    # — don't require movement markers in the remainder.
+                    prefix_stripped = trimmed.rstrip()
+                    delimiter_ended = prefix_stripped.endswith((":", "–", "-"))
                     remainder_i = title_i[len(trimmed):]
                     remainder_j = title_j[len(trimmed):]
-                    if (_has_movement_marker(remainder_i) and
+                    if delimiter_ended or (
+                            _has_movement_marker(remainder_i) and
                             _has_movement_marker(remainder_j)):
                         group.append(pt_j)
                         prefix = trimmed
@@ -648,6 +661,41 @@ def _assign_by_heuristic(album: Album, pending: list[PendingTrack],
                                          tracks=run)
                             assigned.update(pt.db_track.id for pt in run)
                             used.update(id(pt) for pt in run)
+
+
+def _group_identical_titles(album: Album, disc_tracks: list[PendingTrack],
+                            assigned: set[int]) -> None:
+    """Group contiguous tracks with identical titles into heuristic works.
+
+    Handles cases like multi-part pieces where all parts share the same
+    title (e.g. "Musicological Journey Through the Twelve Days of Christmas"
+    repeated 12 times).  Must be called before the general prefix-matching
+    loop to avoid prefix erosion on identical titles.
+    """
+    # Build runs of identical titles among unassigned contiguous tracks
+    i = 0
+    while i < len(disc_tracks):
+        if disc_tracks[i].db_track.id in assigned:
+            i += 1
+            continue
+        title = disc_tracks[i].db_track.title
+        run = [disc_tracks[i]]
+        j = i + 1
+        while j < len(disc_tracks):
+            pt = disc_tracks[j]
+            if pt.db_track.id in assigned:
+                break
+            if pt.db_track.title != title:
+                break
+            if pt.db_track.track_number != run[-1].db_track.track_number + 1:
+                break
+            run.append(pt)
+            j += 1
+        if len(run) >= 2:
+            work_name = re.sub(r"[\s\-:.,]+$", "", title)
+            _create_work(album, work_name, "heuristic", tracks=run)
+            assigned.update(pt.db_track.id for pt in run)
+        i = j
 
 
 def _contiguous_runs(group: list[PendingTrack]) -> list[list[PendingTrack]]:

@@ -208,14 +208,21 @@ Rescans all source folders, rebuilding albums, works, and tracks from file metad
 Overrides are preserved across rescans. During scanning, the button changes to
 **Cancel Scan**.
 
+### Scan Changes
+
+Runs an incremental scan that only processes new, changed, or deleted files. Compares
+each file's modification time and size against stored values to skip unchanged files.
+Much faster than a full rescan for day-to-day library maintenance.
+
+Requires one prior full scan to populate file metadata. Work detection is re-run only
+on albums that had changes.
+
 ### Re-detect Works
 
-Re-runs the title-prefix heuristic work detection using data already in the database,
-without rescanning files from disk. This is much faster than a full rescan and is
-useful when tuning detection parameters or after correcting overrides.
-
-Only heuristic and standalone works are cleared and rebuilt. Works detected via
-MusicBrainz IDs, WORK tags, or manual overrides are preserved.
+Re-runs all five work detection steps (override, MusicBrainz, WORK tag, heuristic,
+standalone) using tag data already stored in the database, without rescanning files
+from disk. This is much faster than a full rescan and is useful after correcting
+overrides or when detection logic has been updated.
 
 ### Source Folders
 
@@ -256,7 +263,8 @@ rules.
 
 - Shows all albums sorted by title
 - Columns: Album name, Year, Track count
-- Use the search bar at the top to filter by album title or artist
+- Use the filter field at the top to narrow by album title or artist (live filtering
+  as you type)
 
 ### Works & Tracks (right pane)
 
@@ -318,10 +326,15 @@ This is the main workspace for creating playlists.
 
 Browse the full library with a hierarchical tree: Albums > Works > Tracks.
 
+- **Columns**: Name, Composer (album artist for albums, work/track composer), Info
+  (track count or duration)
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded
-- **Filter**: Type in the filter box to narrow the view (case-insensitive, matches
-  at any level). Parents and children of matching items stay visible.
+- **Filter**: Type in the filter box to narrow the view (live filtering, case-insensitive,
+  matches at any level). Parents and children of matching items stay visible.
+- **+/−**: Expand or collapse all tree nodes
 - **Add items**: Select one or more items and click **Add >>**, or double-click
+- **Right-click**: Context menu with **Details...** (work/track details popup) and
+  **Show Album** (full album view with editing)
 
 ### Playlist Pane (right)
 
@@ -329,6 +342,7 @@ Shows only the items that will be in your playlist.
 
 - **Filter**: Same text filter as the library pane
 - **Remove items**: Select and click **<< Remove**, or double-click
+- **Right-click**: Same Details/Show Album context menu as the library pane
 
 ### Action Buttons (bottom)
 
@@ -343,26 +357,62 @@ Shows only the items that will be in your playlist.
 
 ## Cleanup / Overlay Tab
 
-This tab is for reviewing and correcting metadata, particularly for works detected
-by the title-prefix heuristic.
+This tab is for reviewing, correcting, and managing work groupings and metadata
+overrides across your library.
 
-### Heuristic Works Review
+### Works Browser
 
-The top section lists all works whose grouping was determined by the title-prefix
-heuristic (as opposed to MusicBrainz or explicit WORK tags). These are the most
-likely to need correction.
+The top section lists works with filtering and search controls:
 
-Select a work to see its details and use the edit fields:
+- **Source dropdown**: Filter by detection method — Heuristic, Standalone, All Works,
+  Override, MB Work ID, or Work Tag
+- **Search field**: Live filtering by work name, album title, or composer
+- **Hide 1-track checkbox**: Hides standalone (single-track) works to focus on
+  multi-track groupings (enabled by default)
+- **+/−**: Expand or collapse all tree nodes
+- **Multi-select**: Use Ctrl+click or Shift+click to select multiple works
 
-- **Set Work Name**: Change the display name of the work (creates an override)
-- **Set Group Key**: Assign a work group key to manually control which tracks
-  belong to this work. This is the highest-precedence grouping method. Requires
-  a rescan to take effect.
-- **Set Composer**: Assign or correct the composer for all tracks in the work
+Works are shown hierarchically with their tracks as children. Columns: Name, Source,
+Album, Tracks, Composer.
+
+### Right-Click Context Menu
+
+Right-click any work in the browser for:
+
+- **Details...**: Opens a read-only popup showing all work and track metadata
+  (names, paths, MB IDs, durations) with copy buttons for work name and MB work ID
+- **Show Album**: Opens the album popup (see below)
+- **Set Work Name/Group Key/Composer**: Focuses the corresponding edit field
+- **Make Standalone**: Sets `__standalone__` group key for all tracks in the selected
+  work(s), suppressing erroneous groupings on the next re-detect
+
+### Edit Section
+
+Edit controls that operate on all selected works:
+
+- **Set Work Name**: Change the display name (creates a `work_name` override)
+- **Set Group Key**: Assign a `work_group_key` override to control grouping.
+  Requires re-detect or rescan to take effect.
+- **Make Standalone**: Marks tracks with a special `__standalone__` group key that
+  forces each track into its own standalone work, bypassing all detection steps.
+  Useful for suppressing erroneous WORK tags or MB work IDs.
+- **Set Composer**: Override the composer for all tracks
+- **Show Album**: Opens the Show Album popup for the selected work's album
+
+### Show Album Popup
+
+A detailed album view for inspecting and editing all works and tracks in an album:
+
+- **Album header**: Edit album title, artist, and year (creates album-scope overrides)
+- **Works/Tracks tree**: Shows all works with tracks as children, multi-select enabled
+- **Track actions**: Set Group Key, Work Name, or Composer for selected tracks.
+  A **Make Standalone** button sets `__standalone__` for selected tracks.
+- Selection count shows how many tracks are currently selected
 
 ### Current Overrides
 
-The bottom section lists all metadata overrides for the active library.
+The bottom section lists all metadata overrides for the active library with a live
+search field for filtering.
 
 Overrides are non-destructive: they modify database values without touching your
 audio files. They survive rescans (applied automatically after each scan).
@@ -432,10 +482,26 @@ python main.py --cli <command> [options]
 ### Commands
 
 #### scan
-Rescan a library's source folders.
+Full rescan of a library's source folders.
 ```bash
-python main.py --cli scan --library "My Collection" [-v]
+python main.py --cli scan --library "My Collection" [-v] [-q]
 ```
+
+#### scan-changes
+Incremental scan: only processes new, changed, or deleted files.
+```bash
+python main.py --cli scan-changes --library "My Collection" [-v] [-q]
+```
+Compares file modification time and size against stored values. Much faster than
+a full rescan for routine updates. Requires one prior full scan.
+
+#### redetect
+Re-run all work detection steps using tag data stored in the database.
+```bash
+python main.py --cli redetect --library "My Collection" [-v] [-q]
+```
+Much faster than a full rescan. Re-runs all five detection steps (override,
+MusicBrainz, WORK tag, heuristic, standalone) without reading audio files.
 
 #### preview
 Dry-run a profile without writing files.
@@ -456,22 +522,14 @@ python main.py --cli generate --profile "Sunday Classical" --format json --outpu
 python main.py --cli generate --profile "Sunday Classical" --target plex
 ```
 
-#### redetect
-Re-run heuristic work detection without rescanning files from disk.
-```bash
-python main.py --cli redetect --library "My Collection" [-v]
-```
-Much faster than a full rescan. Only rebuilds heuristic and standalone works;
-preserves works from overrides, MusicBrainz IDs, and WORK tags.
-
 #### generate-all
 Generate playlists for all profiles in a library.
 ```bash
 # Export all as M3U files to a directory
-python main.py --cli generate-all --library "My Collection" --output-dir ./playlists
+python main.py --cli generate-all --library "My Collection" --output-dir ./playlists [-q]
 
 # Push all to Plex
-python main.py --cli generate-all --library "My Collection" --target plex
+python main.py --cli generate-all --library "My Collection" --target plex [-q]
 ```
 
 #### integrity
@@ -491,7 +549,12 @@ python main.py --cli overrides export --library "My Collection" --output overrid
 python main.py --cli overrides import --library "My Collection" --input overrides.json
 ```
 
-All commands accept `-v` / `--verbose` for debug-level logging.
+#### Common Flags
+
+| Flag | Description |
+|------|-------------|
+| `-v` / `--verbose` | Debug-level logging |
+| `-q` / `--quiet` | Suppress progress output; only show errors (ideal for cron jobs) |
 
 ---
 
@@ -524,9 +587,20 @@ All commands accept `-v` / `--verbose` for debug-level logging.
 If the scanner grouped tracks incorrectly:
 
 1. Go to the **Cleanup / Overlay** tab
-2. Find the work in the Heuristic Works list
-3. Use **Set Group Key** to assign matching group keys to tracks that belong together
-4. Rescan the library to apply the new grouping
+2. Use the **Source** dropdown to filter by detection method (e.g., MB Work ID, Work Tag)
+3. Find the work and right-click → **Show Album** to see the full album context
+4. To merge tracks into one work: select tracks, set the same **Group Key** for all
+5. To break apart an incorrect grouping: select the work(s) and click **Make Standalone**
+6. Click **Re-detect Works** in the sidebar to apply changes
+
+### Suppressing Erroneous Work Tags
+
+Some files have incorrect WORK tags (e.g., "PMEDIA" from bulk tagging). To clear these:
+
+1. Switch the Source dropdown to **Work Tag** or **MB Work ID**
+2. Multi-select the incorrect works (Ctrl+click or Shift+click)
+3. Click **Make Standalone** to mark all tracks as standalone
+4. Click **Re-detect Works** to apply
 
 ### Migrating from Simple Playlists
 
@@ -610,18 +684,19 @@ Click **View Logs** to see which tracks failed to match. Adjust path rules in
 Settings.
 
 ### Works grouped incorrectly
-Go to the **Cleanup / Overlay** tab to review heuristic works. Use **Set Group Key**
-to manually control grouping. Works detected via MusicBrainz IDs or WORK tags are
-generally reliable; heuristic groupings are the most likely to need correction.
+Go to the **Cleanup / Overlay** tab. Use the Source dropdown to filter by detection
+method and the search field to find specific works. Right-click → **Details** to
+inspect metadata, or **Show Album** to see the full album context and edit
+track-level overrides.
 
-After making corrections, click **Re-detect Works** in the sidebar to rebuild
-heuristic groupings without a full rescan. This is much faster and preserves
-override, MusicBrainz, and WORK tag groupings.
+Use **Set Group Key** to merge tracks into a work, or **Make Standalone** to break
+apart incorrect groupings. Click **Re-detect Works** to apply changes without a
+full rescan.
 
 ### Scan takes too long
-Large collections (thousands of albums) may take several minutes. You can cancel
-and resume later. The scan clears and rebuilds all data, so partial scans leave
-the library incomplete.
+Large collections (thousands of albums) may take several minutes for a full scan.
+Use **Scan Changes** for routine updates — it only processes new, changed, or
+deleted files and is much faster. You can cancel either scan type mid-operation.
 
 ### Database path change not taking effect
 Database path changes require an application restart. Close and reopen the app.

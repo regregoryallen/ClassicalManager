@@ -18,9 +18,14 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 
 - Database: SQLite via Peewee ORM (`music_manager/core/database.py`)
 - Work detection precedence: override > MusicBrainz work ID > WORK tag > title-prefix heuristic > standalone
+- MB work ID merging: tracks with different MB work IDs but the same WORK tag are merged into a single work
+- WORK tag reading: ID3 `TXXX:Work` (any case), `TIT1`, `GRP1`; Vorbis `WORK`; MP4 `©wrk`
 - Heuristic work detection (`scanner.py:_assign_by_heuristic`): requires minimum 3-word prefix, 5+ chars, movement markers, and contiguous track numbers
-- `redetect_heuristic_works()` re-runs heuristic/standalone detection from DB data without rescanning files
+- `redetect_works()` re-runs all 5 detection steps from DB-stored tag data without rescanning files
+- `scan_incremental()` compares file mtime/size to skip unchanged files, only processes additions/changes/deletions
+- `__standalone__` override value for `work_group_key` forces tracks to standalone, bypassing all detection
 - Non-destructive overrides survive rescans
+- Track model stores raw tag data: `work_tag`, `mb_work_id`, `file_mtime`, `file_size`
 - GUI uses CustomTkinter; file dialogs use zenity/kdialog on Linux, native on Win/Mac
 - Profile names must be unique across all libraries
 - Library scans are long-running (minutes for large collections) — never run them automatically
@@ -28,17 +33,23 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 ## Session Status (2026-06-16)
 
 ### Recently completed
-- Heuristic work detection tuning (four fixes in `scanner.py`):
-  - Delimiter-aware prefix matching: prefix ending with `:`, `–`, or `-` skips movement marker requirement
-  - Identical-title grouping pre-pass: contiguous tracks with same title grouped before prefix loop (avoids prefix erosion)
-  - Tightened Roman numeral regex: `(?![a-z])` lookahead prevents false matches ("Christmas", "Days", etc.)
-  - Digit-dash section numbering: `\d+\s*[-–]` recognizes "Scene 1 -" style markers
-- Re-detect works feature (CLI `redetect` command + GUI button) — re-runs heuristic without full rescan
-- Cross-platform file dialogs (zenity/kdialog/tkinter hybrid)
-- Scan cancellation, tree filtering, expand/collapse, last-library memory
-- Per-library Plex sections, profile uniqueness enforcement
-- CLI `generate-all` command, integrity check popup
-- Context menu fix (tk_popup instead of post)
+- Cleanup/Overlay tab overhaul:
+  - Works browser with source filter dropdown, live search, multi-select, expand/collapse
+  - Right-click context menu: Details popup, Show Album, edit shortcuts, Make Standalone
+  - Show Album popup: album metadata editing, works/tracks treeview with multi-select, per-track overrides
+  - Hide 1-track checkbox, overrides search
+- Work detection improvements:
+  - TXXX:Work tag reading (mixed-case ID3 user-defined frame)
+  - MB work ID merging when tracks share the same WORK tag
+  - `__standalone__` override to suppress erroneous work tags
+  - Delimiter-aware prefix matching, identical-title pre-pass, tighter Roman numeral regex, digit-dash markers
+- Full redetect (`redetect_works`): re-runs all 5 detection steps from DB data
+- Incremental scan (`scan_incremental` / CLI `scan-changes` / GUI "Scan Changes"): only processes new/changed/deleted files
+- DB: `work_tag`, `mb_work_id`, `file_mtime`, `file_size` columns on Track with auto-migration
+- Playlist builder: composer column, info column centering, right-click Details/Show Album context menu
+- Live search with debounce on cleanup, overrides, and explorer tabs
+- CLI: `--quiet` flag on scan, scan-changes, redetect, generate-all
+- Stale data handling in playlist builder context menu
 
 ### Pending/known issues
 - The `_MIN_PREFIX_WORDS` constant (currently 3) may benefit from being configurable

@@ -25,10 +25,14 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Profile names must be unique across all libraries
 - Library scans are long-running (minutes for large collections) — never run them automatically
 
-## Session Status (2026-06-15)
+## Session Status (2026-06-16)
 
 ### Recently completed
-- Heuristic work detection improvements: word-boundary prefix trimming, minimum 3-word prefix, contiguous track requirement
+- Heuristic work detection tuning (four fixes in `scanner.py`):
+  - Delimiter-aware prefix matching: prefix ending with `:`, `–`, or `-` skips movement marker requirement
+  - Identical-title grouping pre-pass: contiguous tracks with same title grouped before prefix loop (avoids prefix erosion)
+  - Tightened Roman numeral regex: `(?![a-z])` lookahead prevents false matches ("Christmas", "Days", etc.)
+  - Digit-dash section numbering: `\d+\s*[-–]` recognizes "Scene 1 -" style markers
 - Re-detect works feature (CLI `redetect` command + GUI button) — re-runs heuristic without full rescan
 - Cross-platform file dialogs (zenity/kdialog/tkinter hybrid)
 - Scan cancellation, tree filtering, expand/collapse, last-library memory
@@ -37,6 +41,6 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Context menu fix (tk_popup instead of post)
 
 ### Pending/known issues
-- Heuristic work detection still needs further tuning (some false groupings remain)
 - The `_MIN_PREFIX_WORDS` constant (currently 3) may benefit from being configurable
+- Heuristic work names can retain structural words from the prefix (e.g. "Petrouchka (1947 ver): Scene") — cosmetic, correctable via overrides
 

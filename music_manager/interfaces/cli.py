@@ -47,6 +47,7 @@ def _get_library(name: str):
 def scan(
     library: str = typer.Option(..., help="Library name to scan"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
     """Rescan a library's source folders."""
     _setup_logging(verbose)
@@ -57,56 +58,101 @@ def scan(
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
 
-    typer.echo(f"Scanning library: {lib.name}")
-    stats = scan_library(lib, progress_callback=progress)
-    typer.echo("")  # newline after progress
+    if not quiet:
+        typer.echo(f"Scanning library: {lib.name}")
+    stats = scan_library(lib, progress_callback=None if quiet else progress)
+    if not quiet:
+        typer.echo("")  # newline after progress
 
-    # Print health report
-    typer.echo(f"\n--- Scan Report ---")
-    typer.echo(f"Files found:      {stats.files_found}")
-    typer.echo(f"Files scanned:    {stats.files_scanned}")
-    typer.echo(f"Files failed:     {len(stats.files_failed)}")
-    typer.echo(f"Albums created:   {stats.albums_created}")
-    typer.echo(f"Works created:    {stats.works_created}")
-    typer.echo(f"Tracks created:   {stats.tracks_created}")
+        typer.echo(f"\n--- Scan Report ---")
+        typer.echo(f"Files found:      {stats.files_found}")
+        typer.echo(f"Files scanned:    {stats.files_scanned}")
+        typer.echo(f"Files failed:     {len(stats.files_failed)}")
+        typer.echo(f"Albums created:   {stats.albums_created}")
+        typer.echo(f"Works created:    {stats.works_created}")
+        typer.echo(f"Tracks created:   {stats.tracks_created}")
 
-    if stats.tracks_no_composer:
-        typer.echo(f"⚠ Tracks without composer: {stats.tracks_no_composer}")
-    if stats.tracks_no_duration:
-        typer.echo(f"⚠ Tracks with zero duration: {stats.tracks_no_duration}")
-    if stats.heuristic_works:
-        typer.echo(f"⚠ Works detected by heuristic (review recommended): "
-                   f"{stats.heuristic_works}")
+        if stats.tracks_no_composer:
+            typer.echo(f"⚠ Tracks without composer: {stats.tracks_no_composer}")
+        if stats.tracks_no_duration:
+            typer.echo(f"⚠ Tracks with zero duration: {stats.tracks_no_duration}")
+        if stats.heuristic_works:
+            typer.echo(f"⚠ Works detected by heuristic (review recommended): "
+                       f"{stats.heuristic_works}")
+
     if stats.files_failed:
-        typer.echo(f"\nFailed files:")
+        typer.echo(f"\nFailed files:", err=quiet)
         for f in stats.files_failed[:20]:
-            typer.echo(f"  {f}")
+            typer.echo(f"  {f}", err=quiet)
         if len(stats.files_failed) > 20:
-            typer.echo(f"  ... and {len(stats.files_failed) - 20} more")
+            typer.echo(f"  ... and {len(stats.files_failed) - 20} more", err=quiet)
+
+
+@app.command("scan-changes")
+def scan_changes(
+    library: str = typer.Option(..., help="Library name to scan"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
+):
+    """Incremental scan: only process new, changed, or deleted files."""
+    _setup_logging(verbose)
+
+    from music_manager.core.scanner import scan_incremental
+    lib = _get_library(library)
+
+    def progress(current, total, message):
+        typer.echo(f"\r[{current}/{total}] {message}", nl=False)
+
+    if not quiet:
+        typer.echo(f"Incremental scan: {lib.name}")
+    stats = scan_incremental(lib, progress_callback=None if quiet else progress)
+    if not quiet:
+        typer.echo("")
+
+        typer.echo(f"\n--- Incremental Scan Report ---")
+        typer.echo(f"Files found:      {stats.files_found}")
+        typer.echo(f"Unchanged:        {stats.files_unchanged}")
+        typer.echo(f"Added:            {stats.files_added}")
+        typer.echo(f"Updated:          {stats.files_updated}")
+        typer.echo(f"Removed:          {stats.files_removed}")
+        typer.echo(f"Albums affected:  {stats.albums_affected}")
+
+    if stats.files_failed:
+        typer.echo(f"\nFailed files:", err=quiet)
+        for f in stats.files_failed[:20]:
+            typer.echo(f"  {f}", err=quiet)
+        if len(stats.files_failed) > 20:
+            typer.echo(f"  ... and {len(stats.files_failed) - 20} more", err=quiet)
 
 
 @app.command()
 def redetect(
     library: str = typer.Option(..., help="Library name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
-    """Re-run heuristic work detection without rescanning files."""
+    """Re-run all work detection steps using tag data in the database."""
     _setup_logging(verbose)
 
-    from music_manager.core.scanner import redetect_heuristic_works
+    from music_manager.core.scanner import redetect_works
     lib = _get_library(library)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
 
-    typer.echo(f"Re-detecting works for: {lib.name}")
-    result = redetect_heuristic_works(lib, progress_callback=progress)
-    typer.echo("")  # newline after progress
+    if not quiet:
+        typer.echo(f"Re-detecting works for: {lib.name}")
+    result = redetect_works(lib, progress_callback=None if quiet else progress)
+    if not quiet:
+        typer.echo("")  # newline after progress
 
-    typer.echo(f"\n--- Redetect Report ---")
-    typer.echo(f"Albums processed:    {result['albums_processed']}")
-    typer.echo(f"Heuristic works:     {result['heuristic_works']}")
-    typer.echo(f"Standalone works:    {result['standalone_works']}")
+        typer.echo(f"\n--- Redetect Report ---")
+        typer.echo(f"Albums processed:    {result['albums_processed']}")
+        typer.echo(f"Override:            {result['override']}")
+        typer.echo(f"MB Work ID:          {result['mb_workid']}")
+        typer.echo(f"Work Tag:            {result['work_tag']}")
+        typer.echo(f"Heuristic:           {result['heuristic']}")
+        typer.echo(f"Standalone:          {result['standalone']}")
 
 
 def _get_profile(name: str):
@@ -170,7 +216,7 @@ def generate(
     _output_result(prof, result, format=format, output=output, target=target)
 
 
-def _output_result(prof, result, *, format="m3u", output=None, target=None):
+def _output_result(prof, result, *, format="m3u", output=None, target=None, quiet=False):
     """Output a generated playlist to the specified format/target."""
     if target == "plex":
         from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
@@ -184,7 +230,8 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None):
         serializer = PlexSerializer()
         try:
             serializer.serialize(result.playlist, plex_config)
-            typer.echo(f"Pushed playlist '{prof.name}' to Plex")
+            if not quiet:
+                typer.echo(f"Pushed playlist '{prof.name}' to Plex")
         except PlexConnectionError as exc:
             typer.echo(f"Plex connection error: {exc}", err=True)
             raise typer.Exit(1)
@@ -198,7 +245,7 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None):
         )
         if not output:
             typer.echo(json_out)
-        else:
+        elif not quiet:
             typer.echo(f"Wrote JSON to {output}")
     elif format == "m3u":
         if not output:
@@ -211,13 +258,15 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None):
         m3u_config["output_path"] = output
         serializer = M3USerializer()
         serializer.serialize(result.playlist, m3u_config)
-        typer.echo(f"Wrote M3U to {output}")
+        if not quiet:
+            typer.echo(f"Wrote M3U to {output}")
     else:
         typer.echo(f"Error: unknown format '{format}'", err=True)
         raise typer.Exit(1)
 
-    typer.echo(f"Generated: {result.track_count} tracks, "
-               f"{result.total_duration_ms // 1000}s total", err=True)
+    if not quiet:
+        typer.echo(f"Generated: {result.track_count} tracks, "
+                   f"{result.total_duration_ms // 1000}s total", err=True)
 
 
 @app.command("generate-all")
@@ -227,6 +276,7 @@ def generate_all(
     output_dir: str = typer.Option(".", help="Output directory for files"),
     target: str = typer.Option(None, help="Target: plex"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
     """Generate all profiles for a library."""
     _setup_logging(verbose)
@@ -243,21 +293,24 @@ def generate_all(
         typer.echo("No profiles found for this library.", err=True)
         raise typer.Exit(1)
 
-    typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
+    if not quiet:
+        typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
     out_path = Path(output_dir)
 
     for prof in profiles:
-        typer.echo(f"\n--- {prof.name} ---")
+        if not quiet:
+            typer.echo(f"\n--- {prof.name} ---")
         result = generate_playlist(prof)
         if target:
-            _output_result(prof, result, target=target)
+            _output_result(prof, result, target=target, quiet=quiet)
         else:
             ext = ".json" if format == "json" else ".m3u"
             safe_name = prof.name.replace(" ", "_").replace("/", "_")
             output = str(out_path / f"{safe_name}{ext}")
-            _output_result(prof, result, format=format, output=output)
+            _output_result(prof, result, format=format, output=output, quiet=quiet)
 
-    typer.echo(f"\nDone: {len(profiles)} profiles generated.")
+    if not quiet:
+        typer.echo(f"\nDone: {len(profiles)} profiles generated.")
 
 
 @app.command()

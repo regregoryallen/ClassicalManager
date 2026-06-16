@@ -192,7 +192,8 @@ def _extract_id3(id3_tags, tags: RawTags) -> None:
         if len(parts) > 1:
             tags.disc_total = _parse_int(parts[1])
 
-    # MusicBrainz IDs (stored in TXXX frames)
+    # TXXX user-defined frames (MusicBrainz IDs, Work tag)
+    txxx_work = ""
     for frame_key, frame_val in id3_tags.items():
         if frame_key.startswith("TXXX:"):
             desc = frame_key.split(":", 1)[1].upper()
@@ -203,9 +204,12 @@ def _extract_id3(id3_tags, tags: RawTags) -> None:
                 tags.mb_recording_id = val
             elif desc in ("MUSICBRAINZ_WORKID", "MUSICBRAINZ WORK ID"):
                 tags.mb_work_id = val
+            elif desc == "WORK":
+                txxx_work = val
 
     # Work/movement tags - ID3
-    tags.work = get("TIT1") or get("GRP1")  # Grouping / content group
+    # Prefer TXXX:Work, fall back to TIT1 (content group) / GRP1
+    tags.work = txxx_work or get("TIT1") or get("GRP1")
     # MVNM / MVIN (iTunes movement tags in ID3)
     mvnm = get("MVNM")
     if mvnm:
@@ -512,13 +516,23 @@ def _create_work(album: Album, name: str, source: str,
 
 def _assign_by_override(album: Album, pending: list[PendingTrack],
                         assigned: set[int]) -> None:
-    """Step 0: Group tracks by manual work_group_key overrides."""
+    """Step 0: Group tracks by manual work_group_key overrides.
+
+    Special key ``__standalone__`` forces each track into its own standalone
+    work, bypassing all later detection steps (MB work ID, WORK tag,
+    heuristic).  Use this to suppress erroneous WORK tags.
+    """
+    _STANDALONE_KEY = "__standalone__"
     groups: dict[str, list[PendingTrack]] = {}
     for pt in pending:
         if pt.db_track.id in assigned:
             continue
         if pt.override_work_key:
-            groups.setdefault(pt.override_work_key, []).append(pt)
+            if pt.override_work_key == _STANDALONE_KEY:
+                _create_work(album, pt.db_track.title, "standalone", tracks=[pt])
+                assigned.add(pt.db_track.id)
+            else:
+                groups.setdefault(pt.override_work_key, []).append(pt)
 
     for key, tracks in groups.items():
         tracks.sort(key=lambda pt: (pt.db_track.disc_number, pt.db_track.track_number))
@@ -528,7 +542,12 @@ def _assign_by_override(album: Album, pending: list[PendingTrack],
 
 def _assign_by_mb_work_id(album: Album, pending: list[PendingTrack],
                            assigned: set[int]) -> None:
-    """Step 1: Group tracks sharing a MusicBrainz Work ID."""
+    """Step 1: Group tracks sharing a MusicBrainz Work ID.
+
+    When multiple MB work IDs share the same WORK tag (common for
+    per-movement MB IDs on a multi-movement work), they are merged
+    into a single work grouped by the WORK tag value.
+    """
     groups: dict[str, list[PendingTrack]] = {}
     for pt in pending:
         if pt.db_track.id in assigned:
@@ -536,11 +555,33 @@ def _assign_by_mb_work_id(album: Album, pending: list[PendingTrack],
         if pt.tags.mb_work_id:
             groups.setdefault(pt.tags.mb_work_id, []).append(pt)
 
+    # Merge MB ID groups that share the same WORK tag
+    merged: dict[str, list[PendingTrack]] = {}
+    mb_id_for_merged: dict[str, str] = {}  # work_tag → first mb_id
+    lone_groups: dict[str, list[PendingTrack]] = {}  # mb_id → tracks
+
     for mb_id, tracks in groups.items():
+        work_tag = tracks[0].tags.work if tracks else ""
+        if work_tag:
+            merged.setdefault(work_tag, []).extend(tracks)
+            if work_tag not in mb_id_for_merged:
+                mb_id_for_merged[work_tag] = mb_id
+        else:
+            lone_groups[mb_id] = tracks
+
+    # Create works from merged groups (WORK tag as name)
+    for work_tag, tracks in merged.items():
         tracks.sort(key=lambda pt: (pt.db_track.disc_number,
                                      pt.tags.movement_number or pt.db_track.track_number))
-        # Use the work tag name if available, else first track's title
-        name = tracks[0].tags.work or tracks[0].tags.title
+        _create_work(album, work_tag, "mb_workid",
+                     mb_work_id=mb_id_for_merged[work_tag], tracks=tracks)
+        assigned.update(pt.db_track.id for pt in tracks)
+
+    # Create works from non-merged groups (no WORK tag)
+    for mb_id, tracks in lone_groups.items():
+        tracks.sort(key=lambda pt: (pt.db_track.disc_number,
+                                     pt.tags.movement_number or pt.db_track.track_number))
+        name = tracks[0].tags.title
         _create_work(album, name, "mb_workid", mb_work_id=mb_id, tracks=tracks)
         assigned.update(pt.db_track.id for pt in tracks)
 
@@ -762,66 +803,66 @@ class ScanStats:
     heuristic_works: int = 0
 
 
-def redetect_heuristic_works(library: Library,
-                             progress_callback=None) -> dict:
-    """Re-run heuristic and standalone work detection without rescanning files.
+def redetect_works(library: Library,
+                   progress_callback=None) -> dict:
+    """Re-run all work detection steps using tag data stored in the database.
 
-    Preserves works from overrides, MusicBrainz IDs, and WORK tags.
-    Only clears and rebuilds heuristic/standalone works using data
-    already in the database.
+    Clears all existing works and re-runs the full detection pipeline
+    (override → MB work ID → WORK tag → heuristic → standalone) without
+    reading any audio files.  Requires that ``work_tag`` and ``mb_work_id``
+    columns are populated on Track (from a scan after the schema addition).
 
-    Returns dict with keys: albums_processed, heuristic_works, standalone_works.
+    Returns dict with counts by work source.
     """
     albums = list(Album.select().where(Album.library == library))
-    result = {"albums_processed": 0, "heuristic_works": 0, "standalone_works": 0}
+    work_overrides = _load_work_overrides(library)
+    result = {"albums_processed": 0, "override": 0, "mb_workid": 0,
+              "work_tag": 0, "heuristic": 0, "standalone": 0}
 
     with database.atomic():
         for idx, album in enumerate(albums):
             if progress_callback:
                 progress_callback(idx + 1, len(albums), album.title)
 
-            # Find tracks assigned to heuristic/standalone works
-            old_works = list(Work.select().where(
-                (Work.album == album) &
-                (Work.work_source.in_(["heuristic", "standalone"]))
-            ))
-            if not old_works:
-                # All works are from overrides/MB/WORK tags — skip
-                result["albums_processed"] += 1
-                continue
+            # Clear all works for this album
+            old_works = list(Work.select(Work.id).where(Work.album == album))
+            if old_works:
+                old_ids = [w.id for w in old_works]
+                Track.update(work=None).where(
+                    Track.work_id.in_(old_ids)
+                ).execute()
+                Work.delete().where(Work.id.in_(old_ids)).execute()
 
-            # Null out work references for tracks in those works
-            old_work_ids = [w.id for w in old_works]
-            Track.update(work=None).where(
-                Track.work_id.in_(old_work_ids)
-            ).execute()
-            # Delete the old works
-            Work.delete().where(Work.id.in_(old_work_ids)).execute()
-
-            # Build PendingTrack list from existing DB tracks
+            # Build PendingTrack list with tags reconstructed from DB
             all_tracks = list(Track.select().where(Track.album == album))
             assigned: set[int] = set()
             pending: list[PendingTrack] = []
             for t in all_tracks:
-                pt = PendingTrack(db_track=t)
+                tags = RawTags(
+                    title=t.title,
+                    mb_work_id=t.mb_work_id or "",
+                    work=t.work_tag or "",
+                    movement_number=t.movement_number,
+                )
+                pt = PendingTrack(db_track=t, tags=tags)
+                if t.relative_path in work_overrides:
+                    pt.override_work_key = work_overrides[t.relative_path]
                 pending.append(pt)
-                # Mark tracks still assigned to non-heuristic works
-                if t.work_id is not None:
-                    assigned.add(t.id)
 
-            _assign_by_heuristic(album, pending, assigned)
-            _assign_standalone(album, pending, assigned)
+            detect_works(album, pending)
             result["albums_processed"] += 1
 
-    # Count results
-    result["heuristic_works"] = Work.select().join(Album).where(
-        (Album.library == library) & (Work.work_source == "heuristic")
-    ).count()
-    result["standalone_works"] = Work.select().join(Album).where(
-        (Album.library == library) & (Work.work_source == "standalone")
-    ).count()
+    # Count results by source
+    for source in ("override", "mb_workid", "work_tag", "heuristic", "standalone"):
+        result[source] = Work.select().join(Album).where(
+            (Album.library == library) & (Work.work_source == source)
+        ).count()
 
     return result
+
+
+# Keep old name as alias for backwards compatibility with CLI/GUI references
+redetect_heuristic_works = redetect_works
 
 
 def scan_library(library: Library, progress_callback=None) -> ScanStats:
@@ -921,6 +962,240 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
     return stats
 
 
+@dataclass
+class IncrementalStats:
+    """Statistics from an incremental scan."""
+
+    files_found: int = 0
+    files_unchanged: int = 0
+    files_added: int = 0
+    files_updated: int = 0
+    files_removed: int = 0
+    files_failed: list[str] = field(default_factory=list)
+    albums_affected: int = 0
+
+
+def scan_incremental(library: Library, progress_callback=None) -> IncrementalStats:
+    """Incremental scan: only process new, changed, or deleted files.
+
+    Compares file mtime/size against stored values to skip unchanged files.
+    Re-runs work detection on any album that had changes.
+
+    Requires that file_mtime/file_size columns are populated (from a full
+    scan after the schema addition).  Falls back to a full scan if no
+    tracks have file_mtime populated.
+    """
+    stats = IncrementalStats()
+    source_folders = list(SourceFolder.select().where(
+        SourceFolder.library == library))
+    if not source_folders:
+        return stats
+
+    work_overrides = _load_work_overrides(library)
+
+    # Build index of existing tracks: (folder_id, relative_path) → Track
+    existing: dict[tuple[int, str], Track] = {}
+    for t in Track.select().where(Track.library == library):
+        existing[(t.folder_id, t.relative_path)] = t
+
+    # Check if we have mtime data — if not, can't do incremental
+    if existing and not any(t.file_mtime is not None for t in existing.values()):
+        logger.warning("No file_mtime data — run a full scan first")
+        return stats
+
+    # Discover all current files on disk
+    disk_files: list[tuple[SourceFolder, Path]] = []
+    for sf in source_folders:
+        root = Path(sf.root_path)
+        if not root.exists():
+            logger.warning("Source folder does not exist: %s", root)
+            continue
+        for fpath in sorted(root.rglob("*")):
+            if fpath.is_file() and fpath.suffix.lower() in AUDIO_EXTENSIONS:
+                disk_files.append((sf, fpath))
+
+    stats.files_found = len(disk_files)
+
+    # Classify each file as unchanged / added / updated
+    seen_keys: set[tuple[int, str]] = set()
+    affected_album_keys: set[tuple[int, str]] = set()  # (sf_id, album_key)
+    # Collect files needing processing: (sf, fpath, raw, existing_track_or_None)
+    to_process: list[tuple[SourceFolder, Path, str, Track | None]] = []
+
+    for idx, (sf, fpath) in enumerate(disk_files):
+        if progress_callback:
+            progress_callback(idx + 1, stats.files_found,
+                              f"Checking: {fpath.name}")
+
+        rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
+        key = (sf.id, rel_path)
+        seen_keys.add(key)
+
+        old_track = existing.get(key)
+        if old_track:
+            try:
+                fstat = fpath.stat()
+            except OSError:
+                stats.files_unchanged += 1
+                continue
+            # Compare mtime and size
+            if (old_track.file_mtime is not None
+                    and abs(fstat.st_mtime - old_track.file_mtime) < 0.01
+                    and old_track.file_size == fstat.st_size):
+                stats.files_unchanged += 1
+                continue
+            # File changed
+            to_process.append((sf, fpath, rel_path, old_track))
+        else:
+            # New file
+            to_process.append((sf, fpath, rel_path, None))
+
+    # Detect deleted files
+    deleted_keys = set(existing.keys()) - seen_keys
+    deleted_tracks = [existing[k] for k in deleted_keys]
+    stats.files_removed = len(deleted_tracks)
+
+    # Collect affected albums from deletions
+    for t in deleted_tracks:
+        album_key = str(PurePosixPath(Path(t.relative_path).parent))
+        affected_album_keys.add((t.folder_id, album_key))
+
+    # Process changed/new files
+    for idx, (sf, fpath, rel_path, old_track) in enumerate(to_process):
+        if progress_callback:
+            progress_callback(idx + 1, len(to_process),
+                              f"Scanning: {fpath.name}")
+
+        raw = extract_tags(fpath)
+        if raw is None:
+            stats.files_failed.append(str(fpath))
+            continue
+
+        try:
+            fstat = fpath.stat()
+            f_mtime, f_size = fstat.st_mtime, fstat.st_size
+        except OSError:
+            f_mtime, f_size = None, None
+
+        album_key = str(PurePosixPath(Path(rel_path).parent))
+        affected_album_keys.add((sf.id, album_key))
+
+        composer = get_or_create_composer(library, raw.composer)
+
+        if old_track:
+            # Update existing track
+            old_track.title = raw.title or fpath.stem
+            old_track.composer = composer
+            old_track.disc_number = raw.disc_number
+            old_track.disc_total = raw.disc_total
+            old_track.track_number = raw.track_number
+            old_track.movement_number = raw.movement_number
+            old_track.duration_ms = raw.duration_ms
+            old_track.musicbrainz_recording_id = raw.mb_recording_id or None
+            old_track.work_tag = raw.work or None
+            old_track.mb_work_id = raw.mb_work_id or None
+            old_track.file_mtime = f_mtime
+            old_track.file_size = f_size
+            old_track.save()
+            stats.files_updated += 1
+        else:
+            # Need to find or create the album
+            album = Album.get_or_none(
+                (Album.library == library) &
+                (Album.folder == sf) &
+                (Album.album_key == album_key))
+            if not album:
+                album = Album.create(
+                    library=library, folder=sf, album_key=album_key,
+                    title=raw.album or Path(album_key).name or album_key,
+                    album_artist=raw.album_artist or raw.artist,
+                    year=raw.year,
+                    musicbrainz_album_id=raw.mb_album_id or None,
+                )
+            Track.create(
+                library=library, folder=sf, album=album, composer=composer,
+                title=raw.title or fpath.stem, relative_path=rel_path,
+                disc_number=raw.disc_number, disc_total=raw.disc_total,
+                track_number=raw.track_number, movement_number=raw.movement_number,
+                duration_ms=raw.duration_ms,
+                musicbrainz_recording_id=raw.mb_recording_id or None,
+                work_tag=raw.work or None, mb_work_id=raw.mb_work_id or None,
+                file_mtime=f_mtime, file_size=f_size,
+            )
+            stats.files_added += 1
+
+    # Delete removed tracks and clean up orphan works/albums
+    with database.atomic():
+        if deleted_tracks:
+            del_ids = [t.id for t in deleted_tracks]
+            Track.delete().where(Track.id.in_(del_ids)).execute()
+
+        # Clean up orphan works (no tracks left)
+        orphan_works = list(Work.select().join(Album).where(
+            (Album.library == library) &
+            ~(Work.id.in_(
+                Track.select(Track.work).where(Track.work.is_null(False))
+            ))
+        ))
+        if orphan_works:
+            Work.delete().where(Work.id.in_([w.id for w in orphan_works])).execute()
+
+        # Clean up orphan albums (no tracks left)
+        orphan_albums = list(Album.select().where(
+            (Album.library == library) &
+            ~(Album.id.in_(Track.select(Track.album)))
+        ))
+        if orphan_albums:
+            Album.delete().where(Album.id.in_([a.id for a in orphan_albums])).execute()
+
+    # Re-run work detection on affected albums
+    stats.albums_affected = len(affected_album_keys)
+    if affected_album_keys:
+        with database.atomic():
+            for sf_id, album_key in affected_album_keys:
+                album = Album.get_or_none(
+                    (Album.library == library) &
+                    (Album.folder_id == sf_id) &
+                    (Album.album_key == album_key))
+                if not album:
+                    continue
+
+                # Clear existing works for this album
+                old_works = list(Work.select(Work.id).where(Work.album == album))
+                if old_works:
+                    old_ids = [w.id for w in old_works]
+                    Track.update(work=None).where(
+                        Track.work_id.in_(old_ids)).execute()
+                    Work.delete().where(Work.id.in_(old_ids)).execute()
+
+                # Rebuild works
+                tracks = list(Track.select().where(Track.album == album))
+                pending: list[PendingTrack] = []
+                for t in tracks:
+                    tags = RawTags(
+                        title=t.title,
+                        mb_work_id=t.mb_work_id or "",
+                        work=t.work_tag or "",
+                        movement_number=t.movement_number,
+                    )
+                    pt = PendingTrack(db_track=t, tags=tags)
+                    if t.relative_path in work_overrides:
+                        pt.override_work_key = work_overrides[t.relative_path]
+                    pending.append(pt)
+
+                detect_works(album, pending)
+
+    logger.info(
+        "Incremental scan: %d found, %d unchanged, %d added, %d updated, "
+        "%d removed, %d albums affected, %d failed",
+        stats.files_found, stats.files_unchanged, stats.files_added,
+        stats.files_updated, stats.files_removed, stats.albums_affected,
+        len(stats.files_failed),
+    )
+
+    return stats
+
+
 def _load_work_overrides(library: Library) -> dict[str, str]:
     """Load work_group_key overrides for a library.
 
@@ -970,6 +1245,12 @@ def _process_album_group(
         rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
         composer = get_or_create_composer(library, raw.composer)
 
+        try:
+            fstat = fpath.stat()
+            f_mtime, f_size = fstat.st_mtime, fstat.st_size
+        except OSError:
+            f_mtime, f_size = None, None
+
         track = Track.create(
             library=library,
             folder=sf,
@@ -983,6 +1264,10 @@ def _process_album_group(
             movement_number=raw.movement_number,
             duration_ms=raw.duration_ms,
             musicbrainz_recording_id=raw.mb_recording_id or None,
+            work_tag=raw.work or None,
+            mb_work_id=raw.mb_work_id or None,
+            file_mtime=f_mtime,
+            file_size=f_size,
         )
         stats.tracks_created += 1
 

@@ -242,6 +242,10 @@ class App:
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
 
+        ctk.CTkButton(self.sidebar, text="Scan Changes",
+                      command=self._scan_changes).pack(
+            padx=15, pady=(3, 0), fill="x")
+
         ctk.CTkButton(self.sidebar, text="Re-detect Works",
                       command=self._redetect_works).pack(
             padx=15, pady=(3, 0), fill="x")
@@ -806,21 +810,83 @@ class App:
 
         self.root.after(0, finish)
 
-    def _redetect_works(self):
-        """Re-run heuristic work detection without rescanning files."""
+    def _scan_changes(self):
+        """Run an incremental scan (only new/changed/deleted files)."""
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
             return
 
-        from music_manager.core.scanner import redetect_heuristic_works
-        result = redetect_heuristic_works(self.active_library)
+        self._scan_cancel = threading.Event()
+        self.scan_btn.configure(state="normal", text="Cancel Scan",
+                                command=self._cancel_scan)
+        self.scan_progress.set(0)
+        self.scan_status.configure(text="Checking for changes...")
+
+        lib = self.active_library
+        thread = threading.Thread(target=self._run_scan_changes,
+                                  args=(lib,), daemon=True)
+        thread.start()
+
+    def _run_scan_changes(self, library):
+        """Run incremental scan in a background thread."""
+        from music_manager.core.scanner import scan_incremental
+        from music_manager.core.overrides import apply_overrides
+
+        def progress(current, total, message):
+            if self._scan_cancel.is_set():
+                raise _ScanCancelled()
+            frac = current / total if total else 0
+            self.root.after(0, lambda: self.scan_progress.set(frac))
+            self.root.after(0, lambda: self.scan_status.configure(
+                text=f"[{current}/{total}] {message}"))
+
+        try:
+            stats = scan_incremental(library, progress_callback=progress)
+            if stats.files_added or stats.files_updated or stats.files_removed:
+                apply_overrides(library)
+            msg = (f"Done: +{stats.files_added} added, "
+                   f"~{stats.files_updated} updated, "
+                   f"-{stats.files_removed} removed, "
+                   f"{stats.files_unchanged} unchanged")
+            if stats.files_failed:
+                msg += f", {len(stats.files_failed)} failed"
+        except _ScanCancelled:
+            msg = "Scan cancelled"
+        except Exception as exc:
+            msg = f"Scan error: {exc}"
+            logger.exception("Incremental scan failed")
+
+        def finish():
+            self.scan_status.configure(text=msg)
+            self.scan_progress.set(1 if not self._scan_cancel.is_set() else 0)
+            self.scan_btn.configure(state="normal", text="Rescan Library",
+                                    command=self._start_scan)
+            self._refresh_metrics()
+            self._refresh_explorer()
+            self._refresh_builder_tree()
+            self._refresh_cleanup()
+
+        self.root.after(0, finish)
+
+    def _redetect_works(self):
+        """Re-run all work detection steps using tag data in the database."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        from music_manager.core.scanner import redetect_works
+        result = redetect_works(self.active_library)
         self._refresh_metrics()
         self._refresh_cleanup()
+        self._refresh_explorer()
         messagebox.showinfo(
             "Re-detect Complete",
             f"Albums processed: {result['albums_processed']}\n"
-            f"Heuristic works: {result['heuristic_works']}\n"
-            f"Standalone works: {result['standalone_works']}")
+            f"Override: {result['override']}  |  "
+            f"MB Work ID: {result['mb_workid']}  |  "
+            f"Work Tag: {result['work_tag']}\n"
+            f"Heuristic: {result['heuristic']}  |  "
+            f"Standalone: {result['standalone']}")
 
     def _run_integrity_check(self):
         """Run integrity checks and show results in a popup."""
@@ -1210,13 +1276,14 @@ class App:
         # Search bar
         search_frame = ctk.CTkFrame(tab, fg_color="transparent")
         search_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(search_frame, text="Search:").pack(side="left", padx=5)
+        ctk.CTkLabel(search_frame, text="Filter:").pack(side="left", padx=5)
+        self._explorer_search_var = tk.StringVar()
+        self._explorer_search_var.trace_add("write", lambda *_: self._debounce_explorer_search())
         self.explorer_search = ctk.CTkEntry(search_frame, width=300,
-                                            placeholder_text="Filter albums and works...")
+                                            placeholder_text="Filter albums and works...",
+                                            textvariable=self._explorer_search_var)
         self.explorer_search.pack(side="left", padx=5)
-        ctk.CTkButton(search_frame, text="Search", width=80,
-                      command=self._refresh_explorer).pack(side="left", padx=5)
-        self.explorer_search.bind("<Return>", lambda e: self._refresh_explorer())
+        self._explorer_search_after = None
 
         # Paned view: albums left, works/tracks right
         pane = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1520,12 +1587,14 @@ class App:
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
         self.builder_lib_tree = ttk.Treeview(
-            left_frame, columns=("info",),
+            left_frame, columns=("composer", "info"),
             show="tree headings", selectmode="extended")
         self.builder_lib_tree.heading("#0", text="Name")
+        self.builder_lib_tree.heading("composer", text="Composer")
         self.builder_lib_tree.heading("info", text="Info")
-        self.builder_lib_tree.column("#0", width=300)
-        self.builder_lib_tree.column("info", width=70, anchor="e")
+        self.builder_lib_tree.column("#0", width=250)
+        self.builder_lib_tree.column("composer", width=130)
+        self.builder_lib_tree.column("info", width=90, anchor="center")
         self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         lib_scroll = ttk.Scrollbar(left_frame, orient="vertical",
@@ -1536,6 +1605,7 @@ class App:
                          in_=self.builder_lib_tree)
 
         self.builder_lib_tree.bind("<Double-1>", self._builder_include_selected)
+        self.builder_lib_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "lib"))
         self._builder_lib_iid_map = {}  # iid → (level, entity_id)
 
         # Tag styles for visual state (colorblind-friendly)
@@ -1589,12 +1659,14 @@ class App:
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
         self.builder_pl_tree = ttk.Treeview(
-            right_frame, columns=("info",),
+            right_frame, columns=("composer", "info"),
             show="tree headings", selectmode="extended")
         self.builder_pl_tree.heading("#0", text="Name")
+        self.builder_pl_tree.heading("composer", text="Composer")
         self.builder_pl_tree.heading("info", text="Info")
-        self.builder_pl_tree.column("#0", width=300)
-        self.builder_pl_tree.column("info", width=70, anchor="e")
+        self.builder_pl_tree.column("#0", width=250)
+        self.builder_pl_tree.column("composer", width=130)
+        self.builder_pl_tree.column("info", width=90, anchor="center")
         self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         pl_scroll = ttk.Scrollbar(right_frame, orient="vertical",
@@ -1604,6 +1676,7 @@ class App:
                         in_=self.builder_pl_tree)
 
         self.builder_pl_tree.bind("<Double-1>", self._builder_exclude_selected)
+        self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
         self._builder_pl_iid_map = {}  # iid → (level, entity_id)
 
         # -- Bottom: action buttons --
@@ -1783,9 +1856,10 @@ class App:
                 album_tag = ""
 
             track_count = Track.select().where(Track.album == album).count()
+            album_artist = album.album_artist or ""
             album_iid = self.builder_lib_tree.insert(
                 "", "end", text=album.title,
-                values=(f"{track_count} trk",),
+                values=(album_artist, f"{track_count} trk"),
                 tags=(album_tag,) if album_tag else ())
             self._builder_lib_iid_map[album_iid] = ("album", album.id)
 
@@ -1819,9 +1893,10 @@ class App:
                 else:
                     work_tag = ""
 
+                work_composer = work.composer.name if work.composer_id else ""
                 work_iid = self.builder_lib_tree.insert(
                     album_iid, "end", text=work.work_name,
-                    values=(f"{len(tracks)} trk",),
+                    values=(work_composer, f"{len(tracks)} trk"),
                     tags=(work_tag,) if work_tag else ())
                 self._builder_lib_iid_map[work_iid] = ("work", work.id)
 
@@ -1837,10 +1912,11 @@ class App:
                     else:
                         t_tag = ""
 
+                    t_composer = t.composer.name if t.composer_id else ""
                     t_iid = self.builder_lib_tree.insert(
                         work_iid, "end",
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(dur_str,),
+                        values=(t_composer, dur_str),
                         tags=(t_tag,) if t_tag else ())
                     self._builder_lib_iid_map[t_iid] = ("track", t.id)
 
@@ -1914,24 +1990,27 @@ class App:
                 continue
 
             total_tracks = sum(len(ts) for _, ts in work_entries)
+            album_artist = album.album_artist or ""
             album_iid = self.builder_pl_tree.insert(
                 "", "end", text=album.title,
-                values=(f"{total_tracks} trk",))
+                values=(album_artist, f"{total_tracks} trk"))
             self._builder_pl_iid_map[album_iid] = ("album", album.id)
 
             for work, vis_tracks in work_entries:
+                work_composer = work.composer.name if work.composer_id else ""
                 work_iid = self.builder_pl_tree.insert(
                     album_iid, "end", text=work.work_name,
-                    values=(f"{len(vis_tracks)} trk",))
+                    values=(work_composer, f"{len(vis_tracks)} trk"))
                 self._builder_pl_iid_map[work_iid] = ("work", work.id)
 
                 for t in vis_tracks:
                     dur_s = (t.duration_ms or 0) // 1000
                     dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                    t_composer = t.composer.name if t.composer_id else ""
                     t_iid = self.builder_pl_tree.insert(
                         work_iid, "end",
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(dur_str,))
+                        values=(t_composer, dur_str))
                     self._builder_pl_iid_map[t_iid] = ("track", t.id)
 
             # Auto-expand albums in playlist view
@@ -1941,6 +2020,49 @@ class App:
         # Re-apply active filter if any
         if self._pl_filter_var.get().strip():
             self._apply_tree_filter("pl")
+
+    def _builder_context_menu(self, event, pane):
+        """Right-click context menu on playlist builder trees."""
+        tree = self.builder_lib_tree if pane == "lib" else self.builder_pl_tree
+        iid_map = self._builder_lib_iid_map if pane == "lib" else self._builder_pl_iid_map
+
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return
+        if iid not in tree.selection():
+            tree.selection_set(iid)
+
+        entry = iid_map.get(iid)
+        if not entry:
+            return
+        level, entity_id = entry
+
+        menu = tk.Menu(self.root, tearoff=0)
+
+        try:
+            if level == "work":
+                from music_manager.core.database import Work
+                work = Work.get_by_id(entity_id)
+                menu.add_command(label="Details...",
+                                 command=lambda: self._show_work_details(entity_id))
+                menu.add_command(label="Show Album",
+                                 command=lambda: self._show_album_popup(work.album_id))
+            elif level == "track":
+                from music_manager.core.database import Track
+                track = Track.get_by_id(entity_id)
+                if track.work_id:
+                    menu.add_command(label="Details...",
+                                     command=lambda: self._show_work_details(track.work_id))
+                menu.add_command(label="Show Album",
+                                 command=lambda: self._show_album_popup(track.album_id))
+            elif level == "album":
+                menu.add_command(label="Show Album",
+                                 command=lambda: self._show_album_popup(entity_id))
+        except Exception:
+            messagebox.showinfo("Stale Data", "Data has changed. Please refresh the view.")
+            return
+
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""
@@ -2542,41 +2664,86 @@ class App:
                       command=self._export_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Import Overrides JSON", width=180,
                       command=self._import_overrides).pack(side="left", padx=5)
-        ctk.CTkButton(top, text="Refresh", width=80,
+
+        # Works browser with source filter + search
+        filter_frame = ctk.CTkFrame(tab, fg_color="transparent")
+        filter_frame.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(filter_frame, text="Works Browser",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(
+            side="left", padx=5)
+        ctk.CTkButton(filter_frame, text="+", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.works_tree, True)
+                      ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(filter_frame, text="\u2013", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=lambda: self._toggle_tree(self.works_tree, False)
+                      ).pack(side="left")
+
+        ctk.CTkButton(filter_frame, text="Refresh", width=80,
                       command=self._refresh_cleanup).pack(side="right", padx=5)
 
-        # Heuristic works review
-        ctk.CTkLabel(tab, text="Works Detected by Heuristic (review recommended)",
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(
-            padx=10, pady=(10, 5), anchor="w")
+        self._cleanup_search_var = tk.StringVar()
+        self._cleanup_search_var.trace_add("write", lambda *_: self._debounce_cleanup_search())
+        self.cleanup_search = ctk.CTkEntry(filter_frame, width=200,
+                                           placeholder_text="Search works...",
+                                           textvariable=self._cleanup_search_var)
+        self.cleanup_search.pack(side="right", padx=5)
+        self._cleanup_search_after = None
 
-        self.heuristic_tree = ttk.Treeview(
-            tab, columns=("album", "tracks", "composer"),
-            show="tree headings", selectmode="browse", height=10)
-        self.heuristic_tree.heading("#0", text="Name")
-        self.heuristic_tree.heading("album", text="Album")
-        self.heuristic_tree.heading("tracks", text="Tracks")
-        self.heuristic_tree.heading("composer", text="Composer")
-        self.heuristic_tree.column("#0", width=350)
-        self.heuristic_tree.column("album", width=200)
-        self.heuristic_tree.column("tracks", width=60, anchor="center")
-        self.heuristic_tree.column("composer", width=150)
-        self.heuristic_tree.pack(fill="both", expand=True, padx=10, pady=5)
+        self.cleanup_hide_single = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(filter_frame, text="Hide 1-track",
+                        variable=self.cleanup_hide_single,
+                        command=self._refresh_works_list,
+                        width=20).pack(side="right", padx=5)
 
-        h_scroll = ttk.Scrollbar(self.heuristic_tree, orient="vertical",
-                                 command=self.heuristic_tree.yview)
-        self.heuristic_tree.configure(yscrollcommand=h_scroll.set)
-        h_scroll.pack(side="right", fill="y")
+        _SOURCE_OPTIONS = ["Heuristic", "Standalone", "All Works",
+                           "Override", "MB Work ID", "Work Tag"]
+        self.cleanup_source_var = tk.StringVar(value="Heuristic")
+        self.cleanup_source_menu = ctk.CTkOptionMenu(
+            filter_frame, variable=self.cleanup_source_var,
+            values=_SOURCE_OPTIONS, width=140,
+            command=lambda _: self._refresh_works_list())
+        self.cleanup_source_menu.pack(side="right", padx=5)
+        ctk.CTkLabel(filter_frame, text="Source:").pack(side="right", padx=(5, 0))
 
-        self._heuristic_work_map = {}  # iid → work.id (work-level items only)
+        self.works_tree = ttk.Treeview(
+            tab, columns=("source", "album", "tracks", "composer"),
+            show="tree headings", selectmode="extended", height=10)
+        self.works_tree.heading("#0", text="Name")
+        self.works_tree.heading("source", text="Source")
+        self.works_tree.heading("album", text="Album")
+        self.works_tree.heading("tracks", text="Tracks")
+        self.works_tree.heading("composer", text="Composer")
+        self.works_tree.column("#0", width=300)
+        self.works_tree.column("source", width=80)
+        self.works_tree.column("album", width=200)
+        self.works_tree.column("tracks", width=60, anchor="center")
+        self.works_tree.column("composer", width=150)
+        self.works_tree.pack(fill="both", expand=True, padx=10, pady=5)
+
+        w_scroll = ttk.Scrollbar(self.works_tree, orient="vertical",
+                                 command=self.works_tree.yview)
+        self.works_tree.configure(yscrollcommand=w_scroll.set)
+        w_scroll.pack(side="right", fill="y")
+        self.works_tree.bind("<Button-3>", self._cleanup_work_context_menu)
+
+        self._cleanup_work_map = {}  # iid → work.id (work-level items only)
 
         # Edit section
         edit_frame = ctk.CTkFrame(tab)
         edit_frame.pack(fill="x", padx=10, pady=10)
 
-        ctk.CTkLabel(edit_frame, text="Edit Selected Work / Track",
+        edit_top = ctk.CTkFrame(edit_frame, fg_color="transparent")
+        edit_top.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(edit_top, text="Edit Selected Work",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(
-            padx=10, pady=5, anchor="w")
+            side="left", padx=0)
+        ctk.CTkButton(edit_top, text="Show Album", width=110,
+                      command=self._show_album_for_selected).pack(
+            side="right", padx=5)
 
         row_e1 = ctk.CTkFrame(edit_frame, fg_color="transparent")
         row_e1.pack(fill="x", padx=10, pady=3)
@@ -2593,6 +2760,8 @@ class App:
         self.edit_group_key.pack(side="left", padx=5)
         ctk.CTkButton(row_e2, text="Set Group Key", width=120,
                       command=self._set_work_group_key_override).pack(side="left", padx=5)
+        ctk.CTkButton(row_e2, text="Make Standalone", width=120,
+                      command=self._make_work_standalone).pack(side="left", padx=5)
 
         row_e3 = ctk.CTkFrame(edit_frame, fg_color="transparent")
         row_e3.pack(fill="x", padx=10, pady=3)
@@ -2603,9 +2772,18 @@ class App:
                       command=self._set_composer_override).pack(side="left", padx=5)
 
         # Overrides list
-        ctk.CTkLabel(tab, text="Current Overrides",
+        ov_header = ctk.CTkFrame(tab, fg_color="transparent")
+        ov_header.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(ov_header, text="Current Overrides",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(
-            padx=10, pady=(10, 5), anchor="w")
+            side="left", padx=5)
+        self._overrides_search_var = tk.StringVar()
+        self._overrides_search_var.trace_add("write", lambda *_: self._debounce_overrides_search())
+        self.overrides_search = ctk.CTkEntry(ov_header, width=200,
+                                             placeholder_text="Filter overrides...",
+                                             textvariable=self._overrides_search_var)
+        self.overrides_search.pack(side="right", padx=5)
+        self._overrides_search_after = None
 
         self.overrides_tree = ttk.Treeview(
             tab, columns=("scope", "field", "value", "match"),
@@ -2626,46 +2804,89 @@ class App:
         ctk.CTkButton(del_btn_frame, text="Delete Override", width=140,
                       command=self._delete_override).pack(side="left", padx=5)
 
+    def _debounce_cleanup_search(self):
+        """Debounce live search on the cleanup works tree."""
+        if self._cleanup_search_after:
+            self.root.after_cancel(self._cleanup_search_after)
+        self._cleanup_search_after = self.root.after(250, self._refresh_works_list)
+
+    def _debounce_overrides_search(self):
+        """Debounce live search on the overrides list."""
+        if self._overrides_search_after:
+            self.root.after_cancel(self._overrides_search_after)
+        self._overrides_search_after = self.root.after(250, self._refresh_overrides_list)
+
+    def _debounce_explorer_search(self):
+        """Debounce live search on the explorer album list."""
+        if self._explorer_search_after:
+            self.root.after_cancel(self._explorer_search_after)
+        self._explorer_search_after = self.root.after(250, self._refresh_explorer)
+
     def _refresh_cleanup(self):
-        """Reload heuristic works and overrides lists."""
-        self._refresh_heuristic_works()
+        """Reload works list and overrides."""
+        self._refresh_works_list()
         self._refresh_overrides_list()
 
-    def _refresh_heuristic_works(self):
-        """Reload the heuristic works treeview with track children."""
-        self.heuristic_tree.delete(*self.heuristic_tree.get_children())
-        self._heuristic_work_map.clear()
+    def _refresh_works_list(self):
+        """Reload the works treeview based on source filter and search."""
+        self.works_tree.delete(*self.works_tree.get_children())
+        self._cleanup_work_map.clear()
 
         if not self.active_library:
             return
 
         from music_manager.core.database import Work, Album, Track
 
-        works = (Work.select(Work, Album)
-                 .join(Album)
-                 .where((Album.library == self.active_library) &
-                        (Work.work_source == "heuristic"))
-                 .order_by(Album.title, Work.work_name))
+        source_label = self.cleanup_source_var.get()
+        source_map = {
+            "Heuristic": "heuristic",
+            "Standalone": "standalone",
+            "Override": "override",
+            "MB Work ID": "mb_workid",
+            "Work Tag": "work_tag",
+        }
 
-        for work in works:
+        query = (Work.select(Work, Album)
+                 .join(Album)
+                 .where(Album.library == self.active_library))
+
+        if source_label in source_map:
+            query = query.where(Work.work_source == source_map[source_label])
+
+        query = query.order_by(Album.title, Work.work_name)
+
+        search = self.cleanup_search.get().strip().lower()
+        hide_single = self.cleanup_hide_single.get()
+
+        for work in query:
             tracks = list(Track.select().where(Track.work == work)
                           .order_by(Track.disc_number, Track.track_number))
+
+            if hide_single and len(tracks) <= 1:
+                continue
+
             composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
-            work_iid = self.heuristic_tree.insert(
+
+            if search:
+                haystack = f"{work.work_name} {work.album.title} {composer}".lower()
+                if search not in haystack:
+                    continue
+
+            work_iid = self.works_tree.insert(
                 "", "end", text=work.work_name,
-                values=(work.album.title, len(tracks), composer))
-            self._heuristic_work_map[work_iid] = work.id
+                values=(work.work_source, work.album.title, len(tracks), composer))
+            self._cleanup_work_map[work_iid] = work.id
 
             for t in tracks:
                 dur_s = (t.duration_ms or 0) // 1000
                 dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-                self.heuristic_tree.insert(
+                self.works_tree.insert(
                     work_iid, "end",
                     text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                    values=("", dur_str, ""))
+                    values=("", "", dur_str, ""))
 
     def _refresh_overrides_list(self):
-        """Reload the overrides treeview."""
+        """Reload the overrides treeview with optional search filter."""
         self.overrides_tree.delete(*self.overrides_tree.get_children())
         self._override_id_map.clear()
 
@@ -2674,31 +2895,477 @@ class App:
 
         from music_manager.core.database import Override
 
+        search = self.overrides_search.get().strip().lower() if hasattr(self, "overrides_search") else ""
+
         for ov in Override.select().where(Override.library == self.active_library):
             match = ov.match_mb_id or ov.match_relative_path or ""
+            if search:
+                haystack = f"{ov.scope} {ov.field} {ov.value} {match}".lower()
+                if search not in haystack:
+                    continue
             iid = self.overrides_tree.insert("", "end", values=(
                 ov.scope, ov.field, ov.value, match
             ))
             self._override_id_map[iid] = ov.id
 
-    def _get_selected_heuristic_work(self):
-        """Get the work ID of the selected heuristic work (or its parent if a track is selected)."""
-        sel = self.heuristic_tree.selection()
+    def _get_selected_cleanup_work(self):
+        """Get the work ID of the first selected work (or its parent if a track is selected)."""
+        sel = self.works_tree.selection()
         if not sel:
-            messagebox.showinfo("Select", "Select a heuristic work first.")
+            messagebox.showinfo("Select", "Select a work first.")
             return None
         iid = sel[0]
-        # If a track child is selected, walk up to the work parent
-        if iid not in self._heuristic_work_map:
-            parent = self.heuristic_tree.parent(iid)
+        if iid not in self._cleanup_work_map:
+            parent = self.works_tree.parent(iid)
             if parent:
                 iid = parent
-        return self._heuristic_work_map.get(iid)
+        return self._cleanup_work_map.get(iid)
+
+    def _get_selected_cleanup_works(self):
+        """Get work IDs for all selected items (resolving tracks to their parent works)."""
+        sel = self.works_tree.selection()
+        if not sel:
+            messagebox.showinfo("Select", "Select one or more works first.")
+            return []
+        work_ids = []
+        seen = set()
+        for iid in sel:
+            if iid not in self._cleanup_work_map:
+                parent = self.works_tree.parent(iid)
+                if parent:
+                    iid = parent
+            wid = self._cleanup_work_map.get(iid)
+            if wid and wid not in seen:
+                work_ids.append(wid)
+                seen.add(wid)
+        return work_ids
+
+    def _cleanup_work_context_menu(self, event):
+        """Right-click context menu on the works tree."""
+        iid = self.works_tree.identify_row(event.y)
+        if not iid:
+            return
+        # Add to selection if not already selected (preserve multi-select)
+        if iid not in self.works_tree.selection():
+            self.works_tree.selection_set(iid)
+
+        # Resolve clicked item to work level
+        click_iid = iid
+        if click_iid not in self._cleanup_work_map:
+            parent = self.works_tree.parent(click_iid)
+            if parent:
+                click_iid = parent
+        work_id = self._cleanup_work_map.get(click_iid)
+        if not work_id:
+            return
+
+        from music_manager.core.database import Work
+        work = Work.get_by_id(work_id)
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Details...",
+                         command=lambda: self._show_work_details(work_id))
+        menu.add_command(label="Show Album",
+                         command=lambda: self._show_album_popup(work.album_id))
+        menu.add_separator()
+        menu.add_command(label="Set Work Name...",
+                         command=lambda: self.edit_work_name.focus_set())
+        menu.add_command(label="Set Group Key...",
+                         command=lambda: self.edit_group_key.focus_set())
+        menu.add_command(label="Set Composer...",
+                         command=lambda: self.edit_composer.focus_set())
+        menu.add_separator()
+        menu.add_command(label="Make Standalone",
+                         command=self._make_work_standalone)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _show_album_for_selected(self):
+        """Open the Show Album popup for the album containing the selected work."""
+        work_id = self._get_selected_cleanup_work()
+        if not work_id:
+            return
+        from music_manager.core.database import Work
+        work = Work.get_by_id(work_id)
+        self._show_album_popup(work.album_id)
+
+    def _show_work_details(self, work_id):
+        """Show a details popup for a work and its tracks."""
+        from music_manager.core.database import Work, Track, Album
+        ctk = self.ctk
+
+        work = Work.get_by_id(work_id)
+        album = work.album
+        tracks = list(Track.select().where(Track.work == work)
+                      .order_by(Track.disc_number, Track.track_number))
+        composer_name = work.composer.name if work.composer_id else ""
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Details: {work.work_name}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 750, 500)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        # Scrollable text widget with all details
+        text = tk.Text(popup, wrap="word", font=("monospace", 10),
+                       bg="#2b2b2b", fg="#dcdcdc", insertbackground="#dcdcdc",
+                       selectbackground="#4a6984", padx=10, pady=10)
+        text.pack(fill="both", expand=True, padx=10, pady=(10, 5))
+        scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+
+        def _add(label, value):
+            text.insert("end", f"{label}: ", "label")
+            text.insert("end", f"{value}\n")
+
+        text.tag_configure("label", foreground="#88aacc", font=("monospace", 10, "bold"))
+        text.tag_configure("heading", foreground="#ccddaa", font=("monospace", 11, "bold"))
+        text.tag_configure("sep", foreground="#555555")
+
+        text.insert("end", "WORK\n", "heading")
+        _add("  Name", work.work_name)
+        _add("  Source", work.work_source)
+        _add("  Composer", composer_name)
+        _add("  Sequence", work.work_sequence)
+        _add("  MB Work ID", work.musicbrainz_work_id or "")
+        _add("  Album", album.title)
+        _add("  Album Artist", album.album_artist or "")
+        _add("  Album Key", album.album_key)
+
+        text.insert("end", f"\nTRACKS ({len(tracks)})\n", "heading")
+        for t in tracks:
+            dur_s = (t.duration_ms or 0) // 1000
+            dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+            t_composer = t.composer.name if t.composer_id else ""
+            text.insert("end", "-" * 60 + "\n", "sep")
+            _add(f"  {t.disc_number}-{t.track_number:02d}", t.title)
+            _add("    Composer", t_composer)
+            _add("    Duration", dur_str)
+            _add("    Path", t.relative_path)
+            _add("    MB Recording", t.musicbrainz_recording_id or "")
+            if t.movement_number is not None:
+                _add("    Movement #", t.movement_number)
+
+        text.configure(state="disabled")
+
+        # Bottom buttons
+        btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(btn_frame, text="Copy Work Name", width=130,
+                      command=lambda: (self.root.clipboard_clear(),
+                                       self.root.clipboard_append(work.work_name))
+                      ).pack(side="left", padx=5)
+        if work.musicbrainz_work_id:
+            ctk.CTkButton(btn_frame, text="Copy MB Work ID", width=130,
+                          command=lambda: (self.root.clipboard_clear(),
+                                           self.root.clipboard_append(
+                                               work.musicbrainz_work_id))
+                          ).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Close", width=80,
+                      command=popup.destroy).pack(side="right", padx=5)
+
+    def _show_album_popup(self, album_id):
+        """Open a popup showing all works and tracks in an album for editing."""
+        from music_manager.core.database import Album, Work, Track
+        from music_manager.core.overrides import set_override
+
+        album = Album.get_by_id(album_id)
+        ctk = self.ctk
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Album: {album.title}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 1100, 750)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        # --- Album header edit fields ---
+        header = ctk.CTkFrame(popup)
+        header.pack(fill="x", padx=10, pady=(10, 5))
+
+        for row_idx, (label, field, current_val, scope_field) in enumerate([
+            ("Album Title:", "album_title", album.title, "album_title"),
+            ("Album Artist:", "album_artist", album.album_artist or "", "album_artist"),
+            ("Year:", "year", str(album.year) if album.year else "", "year"),
+        ]):
+            row = ctk.CTkFrame(header, fg_color="transparent")
+            row.pack(fill="x", padx=5, pady=2)
+            ctk.CTkLabel(row, text=label, width=100, anchor="w").pack(side="left")
+            entry = ctk.CTkEntry(row, width=350)
+            entry.insert(0, current_val)
+            entry.pack(side="left", padx=5)
+
+            def _make_album_setter(ent, sf, alb):
+                def _set():
+                    val = ent.get().strip()
+                    if not val:
+                        return
+                    set_override(
+                        library=self.active_library, scope="album",
+                        field=sf, value=val,
+                        match_relative_path=alb.album_key,
+                        match_mb_id=alb.musicbrainz_album_id,
+                    )
+                    if sf == "album_title":
+                        alb.title = val
+                    elif sf == "album_artist":
+                        alb.album_artist = val
+                    elif sf == "year":
+                        alb.year = int(val) if val.isdigit() else None
+                    alb.save()
+                    messagebox.showinfo("Done", f"Set {sf} to '{val}'.",
+                                        parent=popup)
+                    self._refresh_overrides_list()
+                return _set
+
+            ctk.CTkButton(row, text="Set", width=60,
+                          command=_make_album_setter(entry, scope_field, album)
+                          ).pack(side="left", padx=5)
+
+        # --- Works/Tracks treeview ---
+        tree_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        album_tree = ttk.Treeview(
+            tree_frame, columns=("source", "composer", "detail"),
+            show="tree headings", selectmode="extended", height=15)
+        album_tree.heading("#0", text="Name")
+        album_tree.heading("source", text="Source")
+        album_tree.heading("composer", text="Composer")
+        album_tree.heading("detail", text="Tracks/Duration")
+        album_tree.column("#0", width=400)
+        album_tree.column("source", width=80)
+        album_tree.column("composer", width=150)
+        album_tree.column("detail", width=80, anchor="center")
+        album_tree.pack(side="left", fill="both", expand=True)
+
+        a_scroll = ttk.Scrollbar(tree_frame, orient="vertical",
+                                 command=album_tree.yview)
+        album_tree.configure(yscrollcommand=a_scroll.set)
+        a_scroll.pack(side="right", fill="y")
+
+        # Track map for resolving selections
+        popup_track_map = {}  # iid → ("work", work_id) or ("track", track_id)
+
+        works = Work.select().where(Work.album == album).order_by(Work.work_sequence)
+        for work in works:
+            tracks = list(Track.select().where(Track.work == work)
+                          .order_by(Track.disc_number, Track.track_number))
+            composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
+            work_iid = album_tree.insert(
+                "", "end", text=work.work_name,
+                values=(work.work_source, composer, f"{len(tracks)} tracks"))
+            popup_track_map[work_iid] = ("work", work.id)
+
+            for t in tracks:
+                dur_s = (t.duration_ms or 0) // 1000
+                dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                t_iid = album_tree.insert(
+                    work_iid, "end",
+                    text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
+                    values=("", t.composer.name if t.composer_id else "", dur_str))
+                popup_track_map[t_iid] = ("track", t.id)
+
+        # Selection info
+        sel_label = ctk.CTkLabel(popup, text="No tracks selected",
+                                 font=ctk.CTkFont(size=11))
+        sel_label.pack(padx=10, pady=(5, 0), anchor="w")
+
+        def _update_selection_label(event=None):
+            tracks = _resolve_selected_tracks()
+            sel_label.configure(text=f"{len(tracks)} track(s) selected")
+
+        album_tree.bind("<<TreeviewSelect>>", _update_selection_label)
+
+        def _resolve_selected_tracks():
+            """Resolve selected treeview items to a list of Track objects."""
+            sel = album_tree.selection()
+            track_ids = set()
+            for iid in sel:
+                entry = popup_track_map.get(iid)
+                if not entry:
+                    continue
+                level, eid = entry
+                if level == "track":
+                    track_ids.add(eid)
+                elif level == "work":
+                    for t in Track.select(Track.id).where(Track.work == eid):
+                        track_ids.add(t.id)
+            return list(Track.select().where(Track.id.in_(list(track_ids)))
+                        ) if track_ids else []
+
+        # --- Action buttons ---
+        action_frame = ctk.CTkFrame(popup)
+        action_frame.pack(fill="x", padx=10, pady=5)
+
+        # Group Key
+        row_g = ctk.CTkFrame(action_frame, fg_color="transparent")
+        row_g.pack(fill="x", padx=5, pady=3)
+        ctk.CTkLabel(row_g, text="Group Key:").pack(side="left", padx=5)
+        popup_group_key = ctk.CTkEntry(row_g, width=280)
+        popup_group_key.pack(side="left", padx=5)
+
+        def _set_group_key():
+            key = popup_group_key.get().strip()
+            if not key:
+                messagebox.showwarning("Empty", "Enter a group key.",
+                                       parent=popup)
+                return
+            tracks = _resolve_selected_tracks()
+            if not tracks:
+                messagebox.showwarning("Select", "Select tracks first.",
+                                       parent=popup)
+                return
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track",
+                    field="work_group_key", value=key,
+                    match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            messagebox.showinfo(
+                "Done",
+                f"Set work_group_key to '{key}' for {len(tracks)} track(s).\n"
+                f"Re-detect Works or Rescan to apply.",
+                parent=popup)
+            self._refresh_overrides_list()
+
+        ctk.CTkButton(row_g, text="Set for Selected", width=130,
+                      command=_set_group_key).pack(side="left", padx=5)
+
+        def _make_standalone():
+            tracks = _resolve_selected_tracks()
+            if not tracks:
+                messagebox.showwarning("Select", "Select tracks first.",
+                                       parent=popup)
+                return
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track",
+                    field="work_group_key", value="__standalone__",
+                    match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            messagebox.showinfo(
+                "Done",
+                f"Marked {len(tracks)} track(s) as standalone.\n"
+                f"Re-detect Works or Rescan to apply.",
+                parent=popup)
+            self._refresh_overrides_list()
+
+        ctk.CTkButton(row_g, text="Make Standalone", width=130,
+                      command=_make_standalone).pack(side="left", padx=5)
+
+        # Work Name
+        row_w = ctk.CTkFrame(action_frame, fg_color="transparent")
+        row_w.pack(fill="x", padx=5, pady=3)
+        ctk.CTkLabel(row_w, text="Work Name:").pack(side="left", padx=5)
+        popup_work_name = ctk.CTkEntry(row_w, width=280)
+        popup_work_name.pack(side="left", padx=5)
+
+        def _set_work_name():
+            name = popup_work_name.get().strip()
+            if not name:
+                messagebox.showwarning("Empty", "Enter a work name.",
+                                       parent=popup)
+                return
+            tracks = _resolve_selected_tracks()
+            if not tracks:
+                messagebox.showwarning("Select", "Select tracks first.",
+                                       parent=popup)
+                return
+            work_ids_updated = set()
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track",
+                    field="work_name", value=name,
+                    match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+                if t.work_id:
+                    work_ids_updated.add(t.work_id)
+            for wid in work_ids_updated:
+                w = Work.get_by_id(wid)
+                w.work_name = name
+                w.save()
+            messagebox.showinfo(
+                "Done",
+                f"Set work name to '{name}' for {len(tracks)} track(s).",
+                parent=popup)
+            self._refresh_overrides_list()
+            self._refresh_works_list()
+            # Refresh the popup tree
+            _refresh_popup_tree()
+
+        ctk.CTkButton(row_w, text="Set for Selected", width=130,
+                      command=_set_work_name).pack(side="left", padx=5)
+
+        # Composer
+        row_c = ctk.CTkFrame(action_frame, fg_color="transparent")
+        row_c.pack(fill="x", padx=5, pady=3)
+        ctk.CTkLabel(row_c, text="Composer:").pack(side="left", padx=5)
+        popup_composer = ctk.CTkEntry(row_c, width=280)
+        popup_composer.pack(side="left", padx=5)
+
+        def _set_composer():
+            comp = popup_composer.get().strip()
+            if not comp:
+                messagebox.showwarning("Empty", "Enter a composer name.",
+                                       parent=popup)
+                return
+            tracks = _resolve_selected_tracks()
+            if not tracks:
+                messagebox.showwarning("Select", "Select tracks first.",
+                                       parent=popup)
+                return
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track",
+                    field="composer", value=comp,
+                    match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            messagebox.showinfo(
+                "Done",
+                f"Set composer to '{comp}' for {len(tracks)} track(s).\n"
+                f"Rescan or apply overrides to update.",
+                parent=popup)
+            self._refresh_overrides_list()
+
+        ctk.CTkButton(row_c, text="Set for Selected", width=130,
+                      command=_set_composer).pack(side="left", padx=5)
+
+        def _refresh_popup_tree():
+            """Reload the popup treeview after changes."""
+            album_tree.delete(*album_tree.get_children())
+            popup_track_map.clear()
+            for work in Work.select().where(Work.album == album).order_by(Work.work_sequence):
+                tracks = list(Track.select().where(Track.work == work)
+                              .order_by(Track.disc_number, Track.track_number))
+                composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
+                w_iid = album_tree.insert(
+                    "", "end", text=work.work_name,
+                    values=(work.work_source, composer, f"{len(tracks)} tracks"))
+                popup_track_map[w_iid] = ("work", work.id)
+                for t in tracks:
+                    dur_s = (t.duration_ms or 0) // 1000
+                    dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                    t_iid = album_tree.insert(
+                        w_iid, "end",
+                        text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
+                        values=("", t.composer.name if t.composer_id else "", dur_str))
+                    popup_track_map[t_iid] = ("track", t.id)
+            sel_label.configure(text="No tracks selected")
+
+        # Bottom bar
+        ctk.CTkButton(popup, text="Close", width=80,
+                      command=popup.destroy).pack(pady=(0, 10))
 
     def _set_work_name_override(self):
-        """Set a work_name override for the selected heuristic work's tracks."""
-        work_id = self._get_selected_heuristic_work()
-        if not work_id:
+        """Set a work_name override for all selected works' tracks."""
+        work_ids = self._get_selected_cleanup_works()
+        if not work_ids:
             return
         new_name = self.edit_work_name.get().strip()
         if not new_name:
@@ -2708,29 +3375,29 @@ class App:
         from music_manager.core.database import Work, Track
         from music_manager.core.overrides import set_override
 
-        work = Work.get_by_id(work_id)
-        tracks = list(Track.select().where(Track.work == work))
-
-        for t in tracks:
-            set_override(
-                library=self.active_library, scope="track", field="work_name",
-                value=new_name, match_relative_path=t.relative_path,
-                match_mb_id=t.musicbrainz_recording_id,
-            )
-
-        # Also update the work directly for immediate display
-        work.work_name = new_name
-        work.save()
+        total = 0
+        for work_id in work_ids:
+            work = Work.get_by_id(work_id)
+            tracks = list(Track.select().where(Track.work == work))
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track", field="work_name",
+                    value=new_name, match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            work.work_name = new_name
+            work.save()
+            total += len(tracks)
 
         messagebox.showinfo("Done", f"Set work name to '{new_name}' "
-                           f"for {len(tracks)} tracks.")
+                           f"for {total} tracks across {len(work_ids)} work(s).")
         self._refresh_cleanup()
         self._refresh_explorer()
 
     def _set_work_group_key_override(self):
-        """Set work_group_key overrides for the selected work's tracks."""
-        work_id = self._get_selected_heuristic_work()
-        if not work_id:
+        """Set work_group_key overrides for all selected works' tracks."""
+        work_ids = self._get_selected_cleanup_works()
+        if not work_ids:
             return
         group_key = self.edit_group_key.get().strip()
         if not group_key:
@@ -2740,24 +3407,53 @@ class App:
         from music_manager.core.database import Work, Track
         from music_manager.core.overrides import set_override
 
-        work = Work.get_by_id(work_id)
-        tracks = list(Track.select().where(Track.work == work))
-
-        for t in tracks:
-            set_override(
-                library=self.active_library, scope="track", field="work_group_key",
-                value=group_key, match_relative_path=t.relative_path,
-                match_mb_id=t.musicbrainz_recording_id,
-            )
+        total = 0
+        for work_id in work_ids:
+            work = Work.get_by_id(work_id)
+            tracks = list(Track.select().where(Track.work == work))
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track", field="work_group_key",
+                    value=group_key, match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            total += len(tracks)
 
         messagebox.showinfo("Done", f"Set work_group_key to '{group_key}' "
-                           f"for {len(tracks)} tracks. Rescan to apply.")
+                           f"for {total} tracks across {len(work_ids)} work(s). "
+                           f"Re-detect or rescan to apply.")
+        self._refresh_cleanup()
+
+    def _make_work_standalone(self):
+        """Set __standalone__ group key for all tracks in all selected works."""
+        work_ids = self._get_selected_cleanup_works()
+        if not work_ids:
+            return
+
+        from music_manager.core.database import Work, Track
+        from music_manager.core.overrides import set_override
+
+        total = 0
+        for work_id in work_ids:
+            work = Work.get_by_id(work_id)
+            tracks = list(Track.select().where(Track.work == work))
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track", field="work_group_key",
+                    value="__standalone__", match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            total += len(tracks)
+
+        messagebox.showinfo("Done", f"Marked {total} tracks across "
+                           f"{len(work_ids)} work(s) as standalone. "
+                           f"Re-detect or rescan to apply.")
         self._refresh_cleanup()
 
     def _set_composer_override(self):
-        """Set a composer override for selected work's tracks."""
-        work_id = self._get_selected_heuristic_work()
-        if not work_id:
+        """Set a composer override for all selected works' tracks."""
+        work_ids = self._get_selected_cleanup_works()
+        if not work_ids:
             return
         composer_name = self.edit_composer.get().strip()
         if not composer_name:
@@ -2767,18 +3463,21 @@ class App:
         from music_manager.core.database import Work, Track
         from music_manager.core.overrides import set_override
 
-        work = Work.get_by_id(work_id)
-        tracks = list(Track.select().where(Track.work == work))
-
-        for t in tracks:
-            set_override(
-                library=self.active_library, scope="track", field="composer",
-                value=composer_name, match_relative_path=t.relative_path,
-                match_mb_id=t.musicbrainz_recording_id,
-            )
+        total = 0
+        for work_id in work_ids:
+            work = Work.get_by_id(work_id)
+            tracks = list(Track.select().where(Track.work == work))
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track", field="composer",
+                    value=composer_name, match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            total += len(tracks)
 
         messagebox.showinfo("Done", f"Set composer to '{composer_name}' "
-                           f"for {len(tracks)} tracks. Rescan or apply overrides to update.")
+                           f"for {total} tracks across {len(work_ids)} work(s). "
+                           f"Rescan or apply overrides to update.")
         self._refresh_cleanup()
 
     def _delete_override(self):

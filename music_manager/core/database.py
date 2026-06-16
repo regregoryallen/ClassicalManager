@@ -65,6 +65,20 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
                                         pw.TextField(default="")))
         logger.info("Migrated: added plex_section to libraries")
 
+    track_cols = {col.name for col in database.get_columns("tracks")}
+    if "work_tag" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "work_tag", pw.TextField(null=True)),
+            migrator.add_column("tracks", "mb_work_id", pw.TextField(null=True)),
+        )
+        logger.info("Migrated: added work_tag, mb_work_id to tracks")
+    if "file_mtime" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "file_mtime", pw.FloatField(null=True)),
+            migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
+        )
+        logger.info("Migrated: added file_mtime, file_size to tracks")
+
     logger.info("Database tables created/verified")
     return database
 
@@ -193,6 +207,10 @@ class Track(BaseModel):
     movement_number = pw.IntegerField(null=True)
     duration_ms = pw.IntegerField()
     musicbrainz_recording_id = pw.TextField(null=True)
+    work_tag = pw.TextField(null=True)          # raw WORK tag from file
+    mb_work_id = pw.TextField(null=True)        # per-track MusicBrainz work ID from file
+    file_mtime = pw.FloatField(null=True)       # file modification time (os.stat)
+    file_size = pw.IntegerField(null=True)       # file size in bytes
 
     class Meta:
         table_name = "tracks"

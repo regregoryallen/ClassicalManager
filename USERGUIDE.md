@@ -248,6 +248,9 @@ a simpler playlist system.
 
 ### Bottom Buttons
 
+- **Library Integrity Check**: Runs integrity checks (orphaned tracks, unscanned
+  files, duplicates, cross-folder works) and displays a report
+- **Profile Summary**: Shows a sortable table of all profiles with counts and durations
 - **Settings**: Opens the configuration dialog (see [Settings](#settings))
 - **View Logs**: Opens a window showing application log output, useful for
   troubleshooting scan or Plex errors
@@ -296,6 +299,8 @@ This is the main workspace for creating playlists.
 - **Load**: Pick from saved profiles to restore settings and rules
 - **Save**: Save current settings and rules under the profile name
 - **Delete**: Remove one or more saved profiles
+- **Profile Summary**: Opens a popup showing a sortable table of all profiles with
+  album, work, track, composer counts, and total duration
 
 ### Settings (second row)
 
@@ -304,7 +309,7 @@ This is the main workspace for creating playlists.
 | **Shuffle** | `track`, `work`, `album` | Unit of shuffling (see below) |
 | **Integrity** | `enforce`, `respect_selection` | How partial works are handled |
 | **Length** | `all`, `count`, `duration` | Playlist length limit |
-| **Length value** | number | Track count or duration in seconds |
+| **Length value** | number or H:MM | Track count or duration (seconds, H:MM, or H:MM:SS) |
 | **Seed** | number | Fixed seed for reproducible shuffles |
 | **No repeats** | checkbox | Remove duplicate tracks |
 
@@ -331,16 +336,25 @@ Browse the full library with a hierarchical tree: Albums > Works > Tracks.
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded
 - **Filter**: Type in the filter box to narrow the view (live filtering, case-insensitive,
   matches at any level). Parents and children of matching items stay visible.
-- **+/−**: Expand or collapse all tree nodes
+- **Hide 1-track**: Checkbox to hide single-track (standalone) works (default off).
+  A gold warning appears when enabled to note that playlist items may be hidden.
+- **+/−**: Expand or collapse all tree nodes (expands to work level only, not
+  individual tracks)
+- **Column sorting**: Double-click any column header to sort. Click again to reverse.
+  An ▲ or ▼ indicator appears next to the sorted column name. Numeric values
+  (track counts, durations, years) are sorted numerically.
 - **Add items**: Select one or more items and click **Add >>**, or double-click
+  (double-clicking the expand/collapse arrow does not trigger add)
 - **Right-click**: Context menu with **Details...** (work/track details popup) and
   **Show Album** (full album view with editing)
 
 ### Playlist Pane (right)
 
-Shows only the items that will be in your playlist.
+Shows only the items that will be in your playlist. Tree expansion, sort order,
+and scroll position are preserved when items are added or removed.
 
 - **Filter**: Same text filter as the library pane
+- **Column sorting**: Same double-click-to-sort as the library pane
 - **Remove items**: Select and click **<< Remove**, or double-click
 - **Right-click**: Same Details/Show Album context menu as the library pane
 
@@ -571,7 +585,8 @@ python main.py --cli overrides import --library "My Collection" --input override
 ### Creating a Time-Limited Playlist
 
 1. Add your desired albums/works to the playlist
-2. Set Length to **duration** and enter a value in seconds (e.g., 3600 for one hour)
+2. Set Length to **duration** and enter a duration: `1:00` for one hour, `2:30` for
+   2.5 hours, or a plain number for seconds (e.g., `3600`)
 3. Set a **Seed** value if you want the same selection each time
 4. Export
 

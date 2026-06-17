@@ -15,6 +15,7 @@ import io
 import logging
 import threading
 import tkinter as tk
+from contextlib import contextmanager
 from tkinter import messagebox, ttk
 from music_manager.interfaces import filedialog
 from pathlib import Path
@@ -102,8 +103,14 @@ class App:
     def __init__(self, ctk, log_handler=None):
         self.ctk = ctk
         self._log_handler = log_handler
-        self.root = ctk.CTk()
+        self.root = ctk.CTk(className="ClassicalManager")
         self.root.title("Classical Music Playlist Manager")
+
+        # Set window / taskbar icon
+        icon_path = Path(__file__).resolve().parent.parent.parent / "app_icon.png"
+        if icon_path.exists():
+            self._icon_img = tk.PhotoImage(file=str(icon_path))
+            self.root.wm_iconphoto(True, self._icon_img)
 
         self._prefs = _load_prefs()
         self.root.geometry(self._prefs.get("window_geometry", "1280x800"))
@@ -113,6 +120,7 @@ class App:
         self._profile_picker_open = False
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
+        self._tree_sort_state = {}     # tree id → (column, reverse)
 
         self._setup_theme()
         self._build_layout()
@@ -138,6 +146,16 @@ class App:
         x = mx - width // 2
         y = my - height // 2
         window.geometry(f"{width}x{height}+{x}+{y}")
+
+    @contextmanager
+    def _busy(self):
+        """Show a watch cursor while a blocking operation runs."""
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            yield
+        finally:
+            self.root.config(cursor="")
 
     def _setup_theme(self):
         """Configure ttk.Treeview style to blend with customtkinter."""
@@ -250,8 +268,12 @@ class App:
                       command=self._redetect_works).pack(
             padx=15, pady=(3, 0), fill="x")
 
-        ctk.CTkButton(self.sidebar, text="Integrity Check",
+        ctk.CTkButton(self.sidebar, text="Library Integrity Check",
                       command=self._run_integrity_check).pack(
+            padx=15, pady=(3, 0), fill="x")
+
+        ctk.CTkButton(self.sidebar, text="Profile Summary",
+                      command=self._show_profile_summary).pack(
             padx=15, pady=(3, 0), fill="x")
 
         # Source folders
@@ -345,11 +367,12 @@ class App:
         self.plex_section_entry.delete(0, "end")
         if self.active_library.plex_section:
             self.plex_section_entry.insert(0, self.active_library.plex_section)
-        self._refresh_metrics()
-        self._refresh_source_folders()
-        self._refresh_explorer()
-        self._refresh_builder_tree()
-        self._refresh_cleanup()
+        with self._busy():
+            self._refresh_metrics()
+            self._refresh_source_folders()
+            self._refresh_explorer()
+            self._refresh_builder_tree()
+            self._refresh_cleanup()
 
     def _refresh_metrics(self):
         """Update sidebar metric counts."""
@@ -875,10 +898,11 @@ class App:
             return
 
         from music_manager.core.scanner import redetect_works
-        result = redetect_works(self.active_library)
-        self._refresh_metrics()
-        self._refresh_cleanup()
-        self._refresh_explorer()
+        with self._busy():
+            result = redetect_works(self.active_library)
+            self._refresh_metrics()
+            self._refresh_cleanup()
+            self._refresh_explorer()
         messagebox.showinfo(
             "Re-detect Complete",
             f"Albums processed: {result['albums_processed']}\n"
@@ -888,6 +912,113 @@ class App:
             f"Heuristic: {result['heuristic']}  |  "
             f"Standalone: {result['standalone']}")
 
+    def _show_profile_summary(self):
+        """Show a popup summarizing all profiles for the active library."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        from music_manager.core.database import (
+            PlaylistProfile, ProfileRule, Album, Work, Track, Composer,
+        )
+
+        profiles = list(PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (~PlaylistProfile.name.startswith("__temp_"))))
+
+        if not profiles:
+            messagebox.showinfo("No Profiles",
+                                "No saved profiles for this library.")
+            return
+
+        with self._busy():
+            rows = []
+            for prof in profiles:
+                rules = list(ProfileRule.select().where(
+                    ProfileRule.profile == prof))
+                included = set()
+                excluded = set()
+                for r in rules:
+                    key = (r.target_level, r.target_id)
+                    if r.rule_type == "include":
+                        included.add(key)
+                    else:
+                        excluded.add(key)
+
+                albums_set = set()
+                works_set = set()
+                tracks_list = []
+                composers_set = set()
+
+                for album in Album.select().where(
+                        Album.library == self.active_library):
+                    ak = ("album", album.id)
+                    if ak in excluded:
+                        continue
+                    album_inc = ak in included
+
+                    for work in Work.select().where(Work.album == album):
+                        wk = ("work", work.id)
+                        if wk in excluded:
+                            continue
+                        work_inc = wk in included or album_inc
+
+                        for t in Track.select().where(Track.work == work):
+                            tk_key = ("track", t.id)
+                            if tk_key in excluded:
+                                continue
+                            if tk_key in included or work_inc:
+                                albums_set.add(album.id)
+                                works_set.add(work.id)
+                                tracks_list.append(t.duration_ms or 0)
+                                if t.composer_id:
+                                    composers_set.add(t.composer_id)
+
+                total_ms = sum(tracks_list)
+                total_s = total_ms // 1000
+                dur_str = (f"{total_s // 3600}h {(total_s % 3600) // 60:02d}m"
+                           if total_s >= 3600
+                           else f"{total_s // 60}m {total_s % 60:02d}s")
+
+                rows.append((prof.name, len(albums_set), len(works_set),
+                             len(tracks_list), len(composers_set), dur_str))
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Profile Summary — {self.active_library.name}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 750, 350)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        ctk = self.ctk
+
+        tree = ttk.Treeview(popup,
+                            columns=("albums", "works", "tracks",
+                                     "composers", "duration"),
+                            show="tree headings", selectmode="browse")
+        tree.heading("#0", text="Profile")
+        tree.heading("albums", text="Albums")
+        tree.heading("works", text="Works")
+        tree.heading("tracks", text="Tracks")
+        tree.heading("composers", text="Composers")
+        tree.heading("duration", text="Duration")
+        tree.column("#0", width=200)
+        tree.column("albums", width=70, anchor="center")
+        tree.column("works", width=70, anchor="center")
+        tree.column("tracks", width=70, anchor="center")
+        tree.column("composers", width=90, anchor="center")
+        tree.column("duration", width=100, anchor="center")
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        for name, alb, wrk, trk, comp, dur in rows:
+            tree.insert("", "end", text=name,
+                        values=(alb, wrk, trk, comp, dur))
+
+        self._setup_tree_sort(tree)
+
+        ctk.CTkButton(popup, text="Close",
+                      command=popup.destroy).pack(pady=(0, 10))
+
     def _run_integrity_check(self):
         """Run integrity checks and show results in a popup."""
         if not self.active_library:
@@ -895,7 +1026,8 @@ class App:
             return
 
         from music_manager.core.integrity import run_integrity_checks
-        report = run_integrity_checks(self.active_library)
+        with self._busy():
+            report = run_integrity_checks(self.active_library)
 
         popup = tk.Toplevel(self.root)
         popup.title(f"Integrity Report — {self.active_library.name}")
@@ -1194,6 +1326,9 @@ class App:
         if not paths:
             return
 
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+
         from music_manager.core.database import (
             Album, PlaylistProfile, ProfileRule,
         )
@@ -1258,6 +1393,8 @@ class App:
                 status += f", {len(unmatched)} unmatched"
             results.append(status)
 
+        self.root.config(cursor="")
+
         summary = "\n".join(results)
         if any("unmatched" in r for r in results):
             summary += "\n\nUnmatched albums won't appear in the playlist. " \
@@ -1305,6 +1442,7 @@ class App:
         self.album_tree.pack(fill="both", expand=True, padx=5, pady=5)
         self.album_tree.bind("<<TreeviewSelect>>", self._on_album_selected)
         self.album_tree.bind("<Button-3>", self._album_context_menu)
+        self._setup_tree_sort(self.album_tree)
 
         # Works/Tracks tree
         right = ctk.CTkFrame(pane)
@@ -1323,6 +1461,7 @@ class App:
         self.work_tree.column("movements", width=60, anchor="center")
         self.work_tree.pack(fill="both", expand=True, padx=5, pady=5)
         self.work_tree.bind("<Button-3>", self._work_context_menu)
+        self._setup_tree_sort(self.work_tree)
 
         # Rules display
         rules_frame = ctk.CTkFrame(tab)
@@ -1344,6 +1483,8 @@ class App:
 
     def _refresh_explorer(self):
         """Reload album and work treeviews from the database."""
+        self._clear_tree_sort(self.album_tree)
+        self._clear_tree_sort(self.work_tree)
         self.album_tree.delete(*self.album_tree.get_children())
         self._album_iid_map.clear()
 
@@ -1379,6 +1520,7 @@ class App:
         if not album_id:
             return
 
+        self._clear_tree_sort(self.work_tree)
         self.work_tree.delete(*self.work_tree.get_children())
         self._work_iid_map.clear()
 
@@ -1539,7 +1681,7 @@ class App:
                                            width=90)
         self.length_mode.pack(side="left", padx=(0, 2))
         self.length_mode.set("all")
-        self.length_value = ctk.CTkEntry(row1, width=55, placeholder_text="val")
+        self.length_value = ctk.CTkEntry(row1, width=55, placeholder_text="H:MM")
         self.length_value.pack(side="left", padx=(0, 8))
 
         ctk.CTkLabel(row1, text="Seed:").pack(side="left", padx=(0, 2))
@@ -1586,6 +1728,12 @@ class App:
         ctk.CTkLabel(lib_header, text="Filter:",
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
+        self.builder_hide_single = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(lib_header, text="Hide 1-track",
+                        variable=self.builder_hide_single,
+                        command=self._on_hide_single_changed,
+                        width=20).pack(side="right", padx=5)
+
         self.builder_lib_tree = ttk.Treeview(
             left_frame, columns=("composer", "info"),
             show="tree headings", selectmode="extended")
@@ -1604,7 +1752,8 @@ class App:
         lib_scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
                          in_=self.builder_lib_tree)
 
-        self.builder_lib_tree.bind("<Double-1>", self._builder_include_selected)
+        self._setup_tree_sort(self.builder_lib_tree,
+                              row_dbl_click=self._builder_include_selected)
         self.builder_lib_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "lib"))
         self._builder_lib_iid_map = {}  # iid → (level, entity_id)
 
@@ -1658,6 +1807,10 @@ class App:
         ctk.CTkLabel(pl_header, text="Filter:",
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
+        self._pl_hide_warning = ctk.CTkLabel(
+            pl_header, text="  (filter may hide items)",
+            text_color="#b08830", font=ctk.CTkFont(size=11))
+
         self.builder_pl_tree = ttk.Treeview(
             right_frame, columns=("composer", "info"),
             show="tree headings", selectmode="extended")
@@ -1675,7 +1828,8 @@ class App:
         pl_scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
                         in_=self.builder_pl_tree)
 
-        self.builder_pl_tree.bind("<Double-1>", self._builder_exclude_selected)
+        self._setup_tree_sort(self.builder_pl_tree,
+                              row_dbl_click=self._builder_exclude_selected)
         self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
         self._builder_pl_iid_map = {}  # iid → (level, entity_id)
 
@@ -1701,11 +1855,185 @@ class App:
     # ------------------------------------------------------------------
 
     def _toggle_tree(self, tree, expand):
-        """Expand or collapse all nodes in a treeview."""
+        """Expand or collapse all nodes in a treeview.
+
+        When expanding, opens down to the work level only — albums are
+        opened to reveal works, but works stay closed so individual tracks
+        remain hidden.  When collapsing, closes everything.
+        """
         for iid in tree.get_children():
             tree.item(iid, open=expand)
             for child in tree.get_children(iid):
-                tree.item(child, open=expand)
+                tree.item(child, open=False)
+
+    # ------------------------------------------------------------------
+    # Treeview column sorting
+    # ------------------------------------------------------------------
+
+    def _setup_tree_sort(self, tree, row_dbl_click=None):
+        """Bind double-click on column headers to sort the treeview.
+
+        If *row_dbl_click* is given it will be called when the double-click
+        lands on a row instead of a heading.
+        """
+        # Store original heading texts so indicators can be toggled
+        show = str(tree.cget("show"))
+        cols = (["#0"] if "tree" in show else []) + list(tree["columns"])
+        tree._sort_orig_headings = {c: tree.heading(c, "text") for c in cols}
+
+        def on_dbl(event):
+            region = tree.identify_region(event.x, event.y)
+            if region == "heading":
+                col_id = tree.identify_column(event.x)
+                if col_id == "#0":
+                    col = "#0"
+                else:
+                    idx = int(col_id.lstrip("#")) - 1
+                    col = list(tree["columns"])[idx]
+                self._sort_treeview_column(tree, col)
+                return "break"
+            if row_dbl_click:
+                # Ignore double-clicks on the disclosure arrow so fast
+                # expand/collapse clicks don't trigger add/remove
+                element = tree.identify_element(event.x, event.y)
+                if element == "Treeitem.indicator":
+                    return
+                return row_dbl_click(event)
+
+        tree.bind("<Double-1>", on_dbl)
+
+    def _sort_treeview_column(self, tree, col):
+        """Sort top-level items of *tree* by *col*, toggling direction."""
+        tid = id(tree)
+        prev_col, prev_rev = self._tree_sort_state.get(tid, (None, False))
+        reverse = not prev_rev if col == prev_col else False
+        self._tree_sort_state[tid] = (col, reverse)
+
+        # Collect (sort_key, iid) for each top-level item
+        items = []
+        for iid in tree.get_children():
+            if col == "#0":
+                val = tree.item(iid, "text")
+            else:
+                val = tree.set(iid, col)
+            items.append((val, iid))
+
+        # Try numeric sort when all values look like numbers
+        def numeric_key(val):
+            v = val.strip()
+            # Handle "N trk" style values
+            if v.endswith(" trk"):
+                v = v[:-4]
+            # Handle "M:SS" durations
+            if ":" in v:
+                parts = v.split(":")
+                try:
+                    return sum(float(p) * (60 ** i) for i, p in enumerate(reversed(parts)))
+                except ValueError:
+                    return None
+            try:
+                return float(v)
+            except ValueError:
+                return None
+
+        numeric_vals = [numeric_key(v) for v, _ in items]
+        if items and all(n is not None for n in numeric_vals):
+            decorated = sorted(zip(numeric_vals, [iid for _, iid in items]),
+                               reverse=reverse)
+            sorted_iids = [iid for _, iid in decorated]
+        else:
+            items.sort(key=lambda x: x[0].lower(), reverse=reverse)
+            sorted_iids = [iid for _, iid in items]
+
+        for idx, iid in enumerate(sorted_iids):
+            tree.move(iid, "", idx)
+
+        # Update heading indicators
+        orig = getattr(tree, "_sort_orig_headings", {})
+        for c, txt in orig.items():
+            tree.heading(c, text=txt)
+        arrow = " \u25b2" if not reverse else " \u25bc"
+        base = orig.get(col, col)
+        tree.heading(col, text=base + arrow)
+
+        # Update snapshot if this is a builder tree (so filter still works)
+        if tree is getattr(self, "builder_lib_tree", None):
+            self._lib_tree_snapshot = self._snapshot_tree(tree)
+        elif tree is getattr(self, "builder_pl_tree", None):
+            self._pl_tree_snapshot = self._snapshot_tree(tree)
+
+    def _clear_tree_sort(self, tree):
+        """Reset sort state and heading indicators for a tree."""
+        tid = id(tree)
+        self._tree_sort_state.pop(tid, None)
+        orig = getattr(tree, "_sort_orig_headings", {})
+        for c, txt in orig.items():
+            tree.heading(c, text=txt)
+
+    def _save_builder_view_state(self):
+        """Capture expansion, sort, and scroll state for both builder trees."""
+        state = {}
+        for key, tree, iid_map in [
+            ("lib", self.builder_lib_tree, self._builder_lib_iid_map),
+            ("pl", self.builder_pl_tree, self._builder_pl_iid_map),
+        ]:
+            # Which entity keys are expanded
+            open_keys = set()
+            for iid in self._all_tree_iids(tree):
+                if tree.item(iid, "open"):
+                    entity = iid_map.get(iid)
+                    if entity:
+                        open_keys.add(entity)
+            # Sort state
+            sort = self._tree_sort_state.get(id(tree))
+            # Scroll position
+            scroll = tree.yview()
+            state[key] = {"open": open_keys, "sort": sort, "scroll": scroll}
+        return state
+
+    def _restore_builder_view_state(self, state):
+        """Re-apply expansion, sort, and scroll state after a rebuild."""
+        for key, tree, iid_map in [
+            ("lib", self.builder_lib_tree, self._builder_lib_iid_map),
+            ("pl", self.builder_pl_tree, self._builder_pl_iid_map),
+        ]:
+            s = state.get(key)
+            if not s:
+                continue
+            # Close everything first (rebuild may auto-expand albums)
+            for iid in self._all_tree_iids(tree):
+                try:
+                    tree.item(iid, open=False)
+                except tk.TclError:
+                    pass
+            # Invert iid_map: entity_key → iid
+            entity_to_iid = {v: k for k, v in iid_map.items()}
+            # Restore only what was previously open
+            for entity_key in s["open"]:
+                iid = entity_to_iid.get(entity_key)
+                if iid:
+                    try:
+                        tree.item(iid, open=True)
+                    except tk.TclError:
+                        pass
+            # Restore sort
+            if s["sort"]:
+                col, reverse = s["sort"]
+                # Apply sort twice if we need descending (first call = asc)
+                self._sort_treeview_column(tree, col)
+                if reverse:
+                    self._sort_treeview_column(tree, col)
+            # Restore scroll
+            if s["scroll"]:
+                tree.yview_moveto(s["scroll"][0])
+
+    def _all_tree_iids(self, tree):
+        """Yield all iids in a tree (recursive)."""
+        def walk(parent=""):
+            for iid in tree.get_children(parent):
+                yield iid
+                yield from walk(iid)
+        yield from walk()
 
     def _snapshot_tree(self, tree):
         """Capture tree structure as list of (iid, parent, index, text, open)."""
@@ -1721,6 +2049,15 @@ class App:
 
     def _apply_tree_filter(self, which):
         """Filter library or playlist tree by search text, using detach/reattach."""
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            self._apply_tree_filter_inner(which)
+        finally:
+            self.root.config(cursor="")
+
+    def _apply_tree_filter_inner(self, which):
+        """Inner implementation of tree filter."""
         if which == "lib":
             tree = self.builder_lib_tree
             snapshot = self._lib_tree_snapshot
@@ -1787,6 +2124,15 @@ class App:
                     pass
                 p = parent_map.get(p, "")
 
+    def _on_hide_single_changed(self):
+        """Toggle the 1-track filter and show/hide the playlist warning."""
+        if self.builder_hide_single.get():
+            self._pl_hide_warning.pack(side="left", padx=(4, 0))
+        else:
+            self._pl_hide_warning.pack_forget()
+        with self._busy():
+            self._refresh_builder_tree()
+
     def _refresh_builder_tree(self):
         """Populate the library tree and refresh the playlist tree."""
         self._builder_lib_data = {}   # entity_id → {level, album_id, work_id, ...}
@@ -1795,6 +2141,13 @@ class App:
 
     def _rebuild_library_tree(self):
         """Rebuild the left (library) tree with visual clues for included/excluded."""
+        self._clear_tree_sort(self.builder_lib_tree)
+        # Reattach any filter-detached items so delete catches everything
+        for iid, parent, idx, txt, opn in self._lib_tree_snapshot:
+            try:
+                self.builder_lib_tree.reattach(iid, "", "end")
+            except tk.TclError:
+                pass
         self._lib_tree_snapshot = []
         self.builder_lib_tree.delete(*self.builder_lib_tree.get_children())
         self._builder_lib_iid_map.clear()
@@ -1814,6 +2167,8 @@ class App:
             else:
                 excluded.add(key)
 
+        hide_single = self.builder_hide_single.get()
+
         albums = (Album.select()
                   .where(Album.library == self.active_library)
                   .order_by(Album.title))
@@ -1825,6 +2180,12 @@ class App:
             works = list(Work.select()
                          .where(Work.album == album)
                          .order_by(Work.work_sequence))
+
+            # Pre-load track counts per work for hide-single filtering
+            work_track_counts = {}
+            for work in works:
+                work_track_counts[work.id] = Track.select().where(
+                    Track.work == work).count()
 
             # Pre-scan children to detect partial state
             album_has_excluded_child = False
@@ -1842,6 +2203,13 @@ class App:
                         album_has_included_child = True
                     if ("track", t.id) in excluded:
                         album_has_excluded_child = True
+
+            # Filter works for display when hiding single-track works
+            visible_works = works
+            if hide_single:
+                visible_works = [w for w in works if work_track_counts[w.id] > 1]
+                if not visible_works:
+                    continue
 
             # Determine album tag
             if album_key in excluded:
@@ -1863,7 +2231,7 @@ class App:
                 tags=(album_tag,) if album_tag else ())
             self._builder_lib_iid_map[album_iid] = ("album", album.id)
 
-            for work in works:
+            for work in visible_works:
                 work_key = ("work", work.id)
                 tracks = list(Track.select().where(Track.work == work)
                               .order_by(Track.disc_number, Track.track_number))
@@ -1927,6 +2295,13 @@ class App:
 
     def _rebuild_playlist_tree(self):
         """Rebuild the right (playlist) tree showing effectively-included items."""
+        self._clear_tree_sort(self.builder_pl_tree)
+        # Reattach any filter-detached items so delete catches everything
+        for iid, parent, idx, txt, opn in self._pl_tree_snapshot:
+            try:
+                self.builder_pl_tree.reattach(iid, "", "end")
+            except tk.TclError:
+                pass
         self._pl_tree_snapshot = []
         self.builder_pl_tree.delete(*self.builder_pl_tree.get_children())
         self._builder_pl_iid_map.clear()
@@ -1937,6 +2312,8 @@ class App:
             return  # empty rules = all tracks (shown via label)
 
         from music_manager.core.database import Album, Work, Track
+
+        hide_single = self.builder_hide_single.get()
 
         # Build include/exclude sets
         included = set()
@@ -1983,6 +2360,8 @@ class App:
                         visible_tracks.append(t)
 
                 if visible_tracks:
+                    if hide_single and len(visible_tracks) <= 1:
+                        continue
                     work_entries.append((work, visible_tracks))
                     album_has_content = True
 
@@ -2062,6 +2441,16 @@ class App:
             messagebox.showinfo("Stale Data", "Data has changed. Please refresh the view.")
             return
 
+        menu.add_separator()
+        if pane == "lib":
+            menu.add_command(label="Add >>",
+                             command=self._builder_include_selected)
+            menu.add_command(label="<< Remove",
+                             command=self._builder_exclude_selected)
+        else:
+            menu.add_command(label="<< Remove",
+                             command=self._builder_exclude_selected)
+
         menu.tk_popup(event.x_root, event.y_root)
 
     def _builder_include_selected(self, event=None):
@@ -2096,9 +2485,10 @@ class App:
             if not removed:
                 self._add_rule("include", level, entity_id, refresh=False)
 
-        self._refresh_rules_display()
-        self._rebuild_library_tree()
-        self._rebuild_playlist_tree()
+        with self._busy():
+            view_state = self._save_builder_view_state()
+            self._refresh_rules_display()
+            self._restore_builder_view_state(view_state)
         return "break"
 
     def _builder_exclude_selected(self, event=None):
@@ -2141,9 +2531,10 @@ class App:
                            for r in self._current_profile_rules):
                     self._add_rule("exclude", level, entity_id, refresh=False)
 
-        self._refresh_rules_display()
-        self._rebuild_library_tree()
-        self._rebuild_playlist_tree()
+        with self._busy():
+            view_state = self._save_builder_view_state()
+            self._refresh_rules_display()
+            self._restore_builder_view_state(view_state)
         return "break"
 
     def _cascade_remove_children(self, level, entity_id):
@@ -2191,7 +2582,7 @@ class App:
             shuffle_mode=self.shuffle_mode.get(),
             work_integrity=self.work_integrity.get(),
             length_mode=self.length_mode.get(),
-            length_value=int(length_val) if length_val else None,
+            length_value=self._parse_length_value(length_val),
             seed=int(seed_val) if seed_val else None,
             no_repeat_tracks=self.no_repeat_var.get() == 1,
         )
@@ -2205,6 +2596,27 @@ class App:
             )
 
         return profile
+
+    @staticmethod
+    def _parse_length_value(text):
+        """Parse a length value that may be an integer, or H:MM / M:SS duration.
+
+        Returns seconds (int) or None if empty.  Raises ValueError on bad input.
+        """
+        text = text.strip()
+        if not text:
+            return None
+        if ":" in text:
+            parts = text.split(":")
+            if len(parts) == 2:
+                h_or_m, m_or_s = int(parts[0]), int(parts[1])
+                return h_or_m * 3600 + m_or_s * 60  # treat as H:MM
+            elif len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+                return h * 3600 + m * 60 + s
+            else:
+                raise ValueError(f"Invalid duration format: {text}")
+        return int(text)
 
     def _delete_temp_profile(self, profile):
         """Delete a temporarily-created profile."""
@@ -2220,13 +2632,14 @@ class App:
         if not profile:
             return
 
-        try:
-            from music_manager.core.engine import generate_playlist
-            result = generate_playlist(profile)
-        except Exception as exc:
-            self._delete_temp_profile(profile)
-            messagebox.showerror("Preview Error", str(exc))
-            return
+        with self._busy():
+            try:
+                from music_manager.core.engine import generate_playlist
+                result = generate_playlist(profile)
+            except Exception as exc:
+                self._delete_temp_profile(profile)
+                messagebox.showerror("Preview Error", str(exc))
+                return
 
         self._delete_temp_profile(profile)
 
@@ -2440,7 +2853,7 @@ class App:
             shuffle_mode=self.shuffle_mode.get(),
             work_integrity=self.work_integrity.get(),
             length_mode=self.length_mode.get(),
-            length_value=int(length_val) if length_val else None,
+            length_value=self._parse_length_value(length_val),
             seed=int(seed_val) if seed_val else None,
             no_repeat_tracks=self.no_repeat_var.get() == 1,
         )
@@ -2604,6 +3017,8 @@ class App:
         except PlaylistProfile.DoesNotExist:
             messagebox.showwarning("Not Found", f"Profile '{name}' not found.")
             return
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
 
         # Populate UI
         self.profile_name_entry.delete(0, "end")
@@ -2647,6 +3062,7 @@ class App:
                 "display": f"{rule.rule_type.upper()}: {rule.target_level} — {display_name}",
             })
         self._refresh_rules_display()
+        self.root.config(cursor="")
 
     # ------------------------------------------------------------------
     # Tab 3: Cleanup / Overlay (§10)
@@ -2681,9 +3097,6 @@ class App:
                       text_color="gray70", font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.works_tree, False)
                       ).pack(side="left")
-
-        ctk.CTkButton(filter_frame, text="Refresh", width=80,
-                      command=self._refresh_cleanup).pack(side="right", padx=5)
 
         self._cleanup_search_var = tk.StringVar()
         self._cleanup_search_var.trace_add("write", lambda *_: self._debounce_cleanup_search())
@@ -2729,6 +3142,7 @@ class App:
         self.works_tree.configure(yscrollcommand=w_scroll.set)
         w_scroll.pack(side="right", fill="y")
         self.works_tree.bind("<Button-3>", self._cleanup_work_context_menu)
+        self._setup_tree_sort(self.works_tree)
 
         self._cleanup_work_map = {}  # iid → work.id (work-level items only)
 
@@ -2797,6 +3211,7 @@ class App:
         self.overrides_tree.column("value", width=300)
         self.overrides_tree.column("match", width=300)
         self.overrides_tree.pack(fill="both", expand=True, padx=10, pady=5)
+        self._setup_tree_sort(self.overrides_tree)
         self._override_id_map = {}
 
         del_btn_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -2829,6 +3244,7 @@ class App:
 
     def _refresh_works_list(self):
         """Reload the works treeview based on source filter and search."""
+        self._clear_tree_sort(self.works_tree)
         self.works_tree.delete(*self.works_tree.get_children())
         self._cleanup_work_map.clear()
 
@@ -2887,6 +3303,7 @@ class App:
 
     def _refresh_overrides_list(self):
         """Reload the overrides treeview with optional search filter."""
+        self._clear_tree_sort(self.overrides_tree)
         self.overrides_tree.delete(*self.overrides_tree.get_children())
         self._override_id_map.clear()
 

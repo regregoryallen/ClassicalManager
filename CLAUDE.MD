@@ -30,9 +30,23 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Profile names must be unique across all libraries
 - Library scans are long-running (minutes for large collections) — never run them automatically
 
-## Session Status (2026-06-16)
+## Session Status (2026-06-17)
 
 ### Recently completed
+- GUI polish and usability:
+  - App icon: treble clef (𝄞) on dark background, shown in window and taskbar via `wm_iconphoto`
+  - `className="ClassicalManager"` on CTk constructor for correct WM_CLASS / taskbar tooltip
+  - Column sorting: double-click any column header to sort (▲/▼ indicators), numeric-aware for tracks/duration/year
+  - Busy/watch cursor (`_busy()` context manager) for blocking operations: re-detect, integrity check, import playlists, filter toggles
+  - Tree state persistence: expansion, sort, and scroll position preserved across playlist add/remove operations
+  - Expand/collapse only opens to work level (not individual tracks)
+  - Double-click add/remove restricted to text area (skips disclosure arrow via `identify_element`)
+  - Ghost node bugfix: detached items (from text filters) reattached before tree clear to prevent orphans
+- Playlist builder enhancements:
+  - Hide 1-track filter (default off) with gold warning label "(filter may hide items)"
+  - Profile Summary popup: sortable table showing per-profile album/work/track/composer/duration stats
+  - H:MM and H:MM:SS duration format support for time-limited playlists (`_parse_length_value`)
+  - "Library Integrity Check" button relabel
 - Cleanup/Overlay tab overhaul:
   - Works browser with source filter dropdown, live search, multi-select, expand/collapse
   - Right-click context menu: Details popup, Show Album, edit shortcuts, Make Standalone

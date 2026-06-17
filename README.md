@@ -15,6 +15,8 @@ Standard music players and playlist generators treat every track independently. 
 - **Incremental scanning** that detects only new, changed, or deleted files for fast library updates
 - **Multiple export targets**: M3U files, JSON, or direct push to Plex servers
 - **Multiple libraries** to organize distinct collections (e.g., classical, holiday music)
+- **Column sorting** with numeric-aware ordering across all tree views
+- **Profile summary** with per-profile album, work, track, composer, and duration statistics
 - **GUI and CLI** interfaces — the GUI for interactive work, the CLI for scripting and cron jobs
 
 ## Quick Start

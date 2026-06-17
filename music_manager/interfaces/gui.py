@@ -13,6 +13,8 @@ ttk.Treeview themed to approximate the customtkinter palette.
 import json
 import io
 import logging
+import platform
+import sys
 import threading
 import tkinter as tk
 from contextlib import contextmanager
@@ -106,11 +108,8 @@ class App:
         self.root = ctk.CTk(className="ClassicalManager")
         self.root.title("Classical Music Playlist Manager")
 
-        # Set window / taskbar icon
-        icon_path = Path(__file__).resolve().parent.parent.parent / "app_icon.png"
-        if icon_path.exists():
-            self._icon_img = tk.PhotoImage(file=str(icon_path))
-            self.root.wm_iconphoto(True, self._icon_img)
+        # Set window / taskbar icon (platform-specific)
+        self._setup_app_icon()
 
         self._prefs = _load_prefs()
         self.root.geometry(self._prefs.get("window_geometry", "1280x800"))
@@ -127,6 +126,73 @@ class App:
         self._refresh_library_list()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _setup_app_icon(self):
+        """Set the app icon for the window titlebar and taskbar.
+
+        Linux/X11: wm_iconphoto sets the titlebar icon; a .desktop file is
+        installed to ~/.local/share/applications/ so that GNOME/KDE show the
+        correct icon and tooltip in the taskbar.
+        Windows: Sets AppUserModelID so the taskbar shows our icon instead of
+        the generic Python icon, then uses wm_iconbitmap if an .ico exists
+        or falls back to wm_iconphoto.
+        """
+        icon_path = Path(__file__).resolve().parent.parent.parent / "app_icon.png"
+        if not icon_path.exists():
+            return
+
+        _sys = platform.system()
+
+        if _sys == "Windows":
+            # Give the app its own taskbar identity (not grouped with python.exe)
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "ClassicalManager.App")
+            except Exception:
+                pass
+            # Prefer .ico for Windows taskbar; fall back to wm_iconphoto
+            ico_path = icon_path.with_suffix(".ico")
+            if ico_path.exists():
+                self.root.iconbitmap(str(ico_path))
+            else:
+                self._icon_img = tk.PhotoImage(file=str(icon_path))
+                self.root.wm_iconphoto(True, self._icon_img)
+        else:
+            # Linux / macOS: wm_iconphoto for the titlebar
+            self._icon_img = tk.PhotoImage(file=str(icon_path))
+            self.root.wm_iconphoto(True, self._icon_img)
+
+        if _sys == "Linux":
+            self._install_desktop_entry(icon_path)
+
+    def _install_desktop_entry(self, icon_path):
+        """Create/update a .desktop file for taskbar icon and tooltip on Linux."""
+        desktop_dir = Path.home() / ".local" / "share" / "applications"
+        desktop_file = desktop_dir / "classical-manager.desktop"
+        main_py = Path(__file__).resolve().parent.parent.parent / "main.py"
+        venv_python = Path(sys.executable)
+
+        entry = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=Classical Manager\n"
+            "Comment=Classical-aware music playlist manager\n"
+            f"Exec={venv_python} {main_py}\n"
+            f"Icon={icon_path}\n"
+            "Terminal=false\n"
+            "Categories=Audio;Music;\n"
+            "StartupWMClass=classicalManager\n"
+        )
+
+        try:
+            desktop_dir.mkdir(parents=True, exist_ok=True)
+            # Only write if content changed
+            if desktop_file.exists() and desktop_file.read_text() == entry:
+                return
+            desktop_file.write_text(entry)
+        except OSError as exc:
+            logger.debug("Could not install .desktop file: %s", exc)
 
     def _on_close(self):
         """Save window state and exit."""

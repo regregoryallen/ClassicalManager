@@ -213,6 +213,27 @@ class App:
         y = my - height // 2
         window.geometry(f"{width}x{height}+{x}+{y}")
 
+    def _play_track(self, track_id):
+        """Open a track's audio file in the system default player."""
+        import subprocess
+        from music_manager.core.database import Track
+        try:
+            track = Track.get_by_id(track_id)
+            file_path = Path(track.folder.root_path) / track.relative_path
+            if not file_path.exists():
+                messagebox.showerror("File Not Found", f"File not found:\n{file_path}")
+                return
+            _sys = platform.system()
+            if _sys == "Windows":
+                import os
+                os.startfile(str(file_path))
+            elif _sys == "Darwin":
+                subprocess.Popen(["open", str(file_path)])
+            else:
+                subprocess.Popen(["xdg-open", str(file_path)])
+        except Exception as exc:
+            messagebox.showerror("Playback Error", str(exc))
+
     @contextmanager
     def _busy(self):
         """Show a watch cursor while a blocking operation runs."""
@@ -1647,6 +1668,9 @@ class App:
             menu.add_command(label="Exclude Work",
                              command=lambda: self._add_rule("exclude", "work", entity_id))
         elif level == "track":
+            menu.add_command(label="Play",
+                             command=lambda: self._play_track(entity_id))
+            menu.add_separator()
             menu.add_command(label="Include Track",
                              command=lambda: self._add_rule("include", "track", entity_id))
             menu.add_command(label="Exclude Track",
@@ -2495,6 +2519,8 @@ class App:
             elif level == "track":
                 from music_manager.core.database import Track
                 track = Track.get_by_id(entity_id)
+                menu.add_command(label="Play",
+                                 command=lambda: self._play_track(entity_id))
                 if track.work_id:
                     menu.add_command(label="Details...",
                                      command=lambda: self._show_work_details(track.work_id))
@@ -3211,6 +3237,7 @@ class App:
         self._setup_tree_sort(self.works_tree)
 
         self._cleanup_work_map = {}  # iid → work.id (work-level items only)
+        self._cleanup_track_map = {}  # iid → track.id (track-level children)
 
         # Edit section
         edit_frame = ctk.CTkFrame(tab)
@@ -3313,6 +3340,7 @@ class App:
         self._clear_tree_sort(self.works_tree)
         self.works_tree.delete(*self.works_tree.get_children())
         self._cleanup_work_map.clear()
+        self._cleanup_track_map.clear()
 
         if not self.active_library:
             return
@@ -3362,10 +3390,11 @@ class App:
             for t in tracks:
                 dur_s = (t.duration_ms or 0) // 1000
                 dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-                self.works_tree.insert(
+                track_iid = self.works_tree.insert(
                     work_iid, "end",
                     text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
                     values=("", "", dur_str, ""))
+                self._cleanup_track_map[track_iid] = t.id
 
     def _refresh_overrides_list(self):
         """Reload the overrides treeview with optional search filter."""
@@ -3432,6 +3461,9 @@ class App:
         if iid not in self.works_tree.selection():
             self.works_tree.selection_set(iid)
 
+        # Check if clicked item is a track child
+        track_id = self._cleanup_track_map.get(iid)
+
         # Resolve clicked item to work level
         click_iid = iid
         if click_iid not in self._cleanup_work_map:
@@ -3446,6 +3478,10 @@ class App:
         work = Work.get_by_id(work_id)
 
         menu = tk.Menu(self.root, tearoff=0)
+        if track_id:
+            menu.add_command(label="Play",
+                             command=lambda: self._play_track(track_id))
+            menu.add_separator()
         menu.add_command(label="Details...",
                          command=lambda: self._show_work_details(work_id))
         menu.add_command(label="Show Album",
@@ -3660,6 +3696,24 @@ class App:
             sel_label.configure(text=f"{len(tracks)} track(s) selected")
 
         album_tree.bind("<<TreeviewSelect>>", _update_selection_label)
+
+        def _album_popup_context_menu(event):
+            iid = album_tree.identify_row(event.y)
+            if not iid:
+                return
+            if iid not in album_tree.selection():
+                album_tree.selection_set(iid)
+            entry = popup_track_map.get(iid)
+            if not entry:
+                return
+            level, eid = entry
+            if level == "track":
+                menu = tk.Menu(popup, tearoff=0)
+                menu.add_command(label="Play",
+                                 command=lambda: self._play_track(eid))
+                menu.tk_popup(event.x_root, event.y_root)
+
+        album_tree.bind("<Button-3>", _album_popup_context_menu)
 
         def _resolve_selected_tracks():
             """Resolve selected treeview items to a list of Track objects."""

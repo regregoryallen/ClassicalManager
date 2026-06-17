@@ -279,6 +279,7 @@ rules.
 
 Right-click on any item to include or exclude it:
 
+- **Play** (tracks only): Opens the audio file in your system's default music player
 - **Include Album/Work/Track**: Add an include rule
 - **Exclude Album/Work/Track**: Add an exclude rule
 
@@ -345,8 +346,8 @@ Browse the full library with a hierarchical tree: Albums > Works > Tracks.
   (track counts, durations, years) are sorted numerically.
 - **Add items**: Select one or more items and click **Add >>**, or double-click
   (double-clicking the expand/collapse arrow does not trigger add)
-- **Right-click**: Context menu with **Details...** (work/track details popup) and
-  **Show Album** (full album view with editing)
+- **Right-click**: Context menu with **Play** (tracks), **Details...** (work/track
+  details popup), and **Show Album** (full album view with editing)
 
 ### Playlist Pane (right)
 
@@ -356,7 +357,7 @@ and scroll position are preserved when items are added or removed.
 - **Filter**: Same text filter as the library pane
 - **Column sorting**: Same double-click-to-sort as the library pane
 - **Remove items**: Select and click **<< Remove**, or double-click
-- **Right-click**: Same Details/Show Album context menu as the library pane
+- **Right-click**: Same Play/Details/Show Album context menu as the library pane
 
 ### Action Buttons (bottom)
 
@@ -391,8 +392,9 @@ Album, Tracks, Composer.
 
 ### Right-Click Context Menu
 
-Right-click any work in the browser for:
+Right-click any work or track in the browser for:
 
+- **Play** (tracks only): Opens the audio file in your system's default music player
 - **Details...**: Opens a read-only popup showing all work and track metadata
   (names, paths, MB IDs, durations) with copy buttons for work name and MB work ID
 - **Show Album**: Opens the album popup (see below)
@@ -418,7 +420,8 @@ Edit controls that operate on all selected works:
 A detailed album view for inspecting and editing all works and tracks in an album:
 
 - **Album header**: Edit album title, artist, and year (creates album-scope overrides)
-- **Works/Tracks tree**: Shows all works with tracks as children, multi-select enabled
+- **Works/Tracks tree**: Shows all works with tracks as children, multi-select enabled.
+  Right-click a track to **Play** it in your default music player.
 - **Track actions**: Set Group Key, Work Name, or Composer for selected tracks.
   A **Make Standalone** button sets `__standalone__` for selected tracks.
 - Selection count shows how many tracks are currently selected

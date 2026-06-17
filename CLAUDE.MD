@@ -35,7 +35,8 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 ### Recently completed
 - GUI polish and usability:
   - App icon: treble clef (𝄞) on dark background, shown in window and taskbar via `wm_iconphoto`
-  - `className="ClassicalManager"` on CTk constructor for correct WM_CLASS / taskbar tooltip
+  - `.desktop` file auto-installed on Linux for correct taskbar icon/tooltip; `AppUserModelID` on Windows
+  - Track playback: right-click "Play" on any track opens in system default player (`xdg-open`/`open`/`startfile`)
   - Column sorting: double-click any column header to sort (▲/▼ indicators), numeric-aware for tracks/duration/year
   - Busy/watch cursor (`_busy()` context manager) for blocking operations: re-detect, integrity check, import playlists, filter toggles
   - Tree state persistence: expansion, sort, and scroll position preserved across playlist add/remove operations
@@ -63,6 +64,7 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Playlist builder: composer column, info column centering, right-click Details/Show Album context menu
 - Live search with debounce on cleanup, overrides, and explorer tabs
 - CLI: `--quiet` flag on scan, scan-changes, redetect, generate-all
+- CLI: `-h`/`--help`/`-?` flags print usage summary without launching GUI
 - Stale data handling in playlist builder context menu
 
 ### Pending/known issues

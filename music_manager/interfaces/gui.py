@@ -250,8 +250,9 @@ class App:
 
     @contextmanager
     def _busy(self):
-        """Show a watch cursor while a blocking operation runs."""
-        self.root.config(cursor="watch")
+        """Show a wait/watch cursor while a blocking operation runs."""
+        cursor = "wait" if platform.system() == "Windows" else "watch"
+        self.root.config(cursor=cursor)
         self.root.update_idletasks()
         try:
             yield

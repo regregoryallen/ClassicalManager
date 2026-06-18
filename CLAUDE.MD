@@ -39,6 +39,7 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
   - `.desktop` file auto-installed on Linux for correct taskbar icon/tooltip; `AppUserModelID` on Windows
   - Track playback: right-click "Play" on any track opens in system default player (`xdg-open`/`open`/`startfile`)
   - DB path moved from `gui_prefs.json` to `config.json` so CLI also respects it; auto-migration on first GUI run
+  - Pre-scan source folder checks: detects missing folders and wrong-OS paths; GUI warns/blocks, CLI warns/aborts
   - Column sorting: double-click any column header to sort (▲/▼ indicators), numeric-aware for tracks/duration/year
   - Busy/watch cursor (`_busy()` context manager) for blocking operations: re-detect, integrity check, import playlists, filter toggles
   - Tree state persistence: expansion, sort, and scroll position preserved across playlist add/remove operations
@@ -67,6 +68,8 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Live search with debounce on cleanup, overrides, and explorer tabs
 - CLI: `--quiet` flag on scan, scan-changes, redetect, generate-all
 - CLI: `-h`/`--help`/`-?` flags print usage summary without launching GUI
+- CLI: pre-scan folder checks with warnings for missing/wrong-OS paths
+- Cross-platform: all paths stored as POSIX (forward slashes); `check_source_folders()` in scanner.py
 - Stale data handling in playlist builder context menu
 
 ### Pending/known issues

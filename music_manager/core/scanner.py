@@ -865,6 +865,47 @@ def redetect_works(library: Library,
 redetect_heuristic_works = redetect_works
 
 
+def check_source_folders(library: Library) -> dict:
+    """Check source folder accessibility before scanning.
+
+    Returns a dict with:
+        all_ok (bool): True if all folders exist and are accessible.
+        missing (list): Folders that don't exist on this machine.
+        wrong_os (bool): True if missing paths appear to be from a different OS.
+        total (int): Total number of source folders.
+    """
+    import platform
+    source_folders = list(SourceFolder.select().where(
+        SourceFolder.library == library))
+
+    is_windows = platform.system() == "Windows"
+    missing = []
+
+    for sf in source_folders:
+        root = Path(sf.root_path)
+        if not root.exists():
+            missing.append(sf.root_path)
+
+    # Detect if missing paths look like they're from another OS
+    wrong_os = False
+    if missing:
+        for p in missing:
+            looks_windows = len(p) >= 2 and p[1] == ':'
+            if is_windows and p.startswith('/') and not looks_windows:
+                wrong_os = True
+                break
+            if not is_windows and looks_windows:
+                wrong_os = True
+                break
+
+    return {
+        "all_ok": len(missing) == 0,
+        "missing": missing,
+        "wrong_os": wrong_os,
+        "total": len(source_folders),
+    }
+
+
 def scan_library(library: Library, progress_callback=None) -> ScanStats:
     """Perform a full scan of all source folders in a library.
 

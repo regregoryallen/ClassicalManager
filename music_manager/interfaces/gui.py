@@ -881,10 +881,46 @@ class App:
         SourceFolder.delete_by_id(folder_id)
         self._refresh_source_folders()
 
+    def _check_folders_before_scan(self):
+        """Check source folders and warn if any are missing. Returns True to proceed."""
+        from music_manager.core.scanner import check_source_folders
+        result = check_source_folders(self.active_library)
+
+        if result["total"] == 0:
+            messagebox.showwarning("No Folders",
+                                   "This library has no source folders.\n"
+                                   "Add source folders before scanning.")
+            return False
+
+        if result["all_ok"]:
+            return True
+
+        missing = result["missing"]
+        msg = f"{len(missing)} of {result['total']} source folder(s) not found:\n\n"
+        for p in missing[:5]:
+            msg += f"  {p}\n"
+        if len(missing) > 5:
+            msg += f"  ... and {len(missing) - 5} more\n"
+
+        if result["wrong_os"]:
+            msg += ("\nThese paths appear to be from a different operating system.\n"
+                    "Scanning should be done from the machine where the files "
+                    "are accessible.")
+
+        if len(missing) == result["total"]:
+            messagebox.showerror("All Folders Missing", msg)
+            return False
+
+        msg += "\nOnly accessible folders will be scanned. Continue?"
+        return messagebox.askyesno("Missing Folders", msg)
+
     def _start_scan(self):
         """Start a library scan on a background thread."""
         if not self.active_library:
             messagebox.showwarning("No Library", "Select or create a library first.")
+            return
+
+        if not self._check_folders_before_scan():
             return
 
         self._scan_cancel = threading.Event()
@@ -946,6 +982,9 @@ class App:
         """Run an incremental scan (only new/changed/deleted files)."""
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        if not self._check_folders_before_scan():
             return
 
         self._scan_cancel = threading.Event()

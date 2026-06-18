@@ -53,8 +53,22 @@ def scan(
     """Rescan a library's source folders."""
     _setup_logging(verbose)
 
-    from music_manager.core.scanner import scan_library
+    from music_manager.core.scanner import scan_library, check_source_folders
     lib = _get_library(library)
+
+    check = check_source_folders(lib)
+    if check["total"] == 0:
+        typer.echo("Error: library has no source folders.", err=True)
+        raise typer.Exit(1)
+    if check["missing"]:
+        for p in check["missing"]:
+            typer.echo(f"Warning: source folder not found: {p}", err=True)
+        if check["wrong_os"]:
+            typer.echo("These paths appear to be from a different operating system.",
+                       err=True)
+        if len(check["missing"]) == check["total"]:
+            typer.echo("Error: all source folders are missing.", err=True)
+            raise typer.Exit(1)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
@@ -98,8 +112,22 @@ def scan_changes(
     """Incremental scan: only process new, changed, or deleted files."""
     _setup_logging(verbose)
 
-    from music_manager.core.scanner import scan_incremental
+    from music_manager.core.scanner import scan_incremental, check_source_folders
     lib = _get_library(library)
+
+    check = check_source_folders(lib)
+    if check["total"] == 0:
+        typer.echo("Error: library has no source folders.", err=True)
+        raise typer.Exit(1)
+    if check["missing"]:
+        for p in check["missing"]:
+            typer.echo(f"Warning: source folder not found: {p}", err=True)
+        if check["wrong_os"]:
+            typer.echo("These paths appear to be from a different operating system.",
+                       err=True)
+        if len(check["missing"]) == check["total"]:
+            typer.echo("Error: all source folders are missing.", err=True)
+            raise typer.Exit(1)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)

@@ -478,12 +478,20 @@ Example: if your local path is `/home/user/Music` but Plex sees `/mnt/MediaLib/M
 /home/user/Music -> /mnt/MediaLib/Music
 ```
 
+**Windows note:** All paths are stored internally with forward slashes, even on
+Windows. When writing path rules on Windows, use forward slashes for the `find`
+portion to match the stored paths:
+```
+C:/Users/jane/Music -> /volume1/Music
+```
+
 ### M3U Export
 
 - **Path Style**: `absolute` for full paths, `relative_to_playlist` for paths
   relative to the M3U file's location
 - **Base Path**: Optional prefix for absolute paths
-- **Path Rules**: Same find/replace format as Plex, applied to M3U output paths
+- **Path Rules**: Same find/replace format as Plex, applied to M3U output paths.
+  Use forward slashes on all platforms.
 
 ---
 
@@ -638,6 +646,18 @@ Use **Export Lib** to save the entire library (structure, profiles, overrides) t
 a JSON file. Use **Import Lib** to restore it on the same or different machine.
 Source folders must exist at the same paths (or be updated after import) for
 rescanning to work.
+
+### Sharing a Database Across Systems
+
+You can place the database on a shared drive (set `db_path` in `config.json`)
+and access it from multiple machines — but only run the app on one machine at a
+time (SQLite does not support concurrent access over network filesystems).
+
+If source folders are at different paths on each machine (e.g., `/mnt/Music` on
+Linux vs. `M:/Music` on Windows), scanning should only be done from one machine.
+The other machine can generate playlists using path rules to translate paths for
+its target (Plex, M3U). If you attempt a scan with source folders that don't
+exist on the current machine, the app will warn you before proceeding.
 
 ---
 

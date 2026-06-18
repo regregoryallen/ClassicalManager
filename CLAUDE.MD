@@ -40,8 +40,9 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
   - Track playback: right-click "Play" on any track opens in system default player (`xdg-open`/`open`/`startfile`)
   - DB path moved from `gui_prefs.json` to `config.json` so CLI also respects it; auto-migration on first GUI run
   - Pre-scan source folder checks: detects missing folders and wrong-OS paths; GUI warns/blocks, CLI warns/aborts
+  - Graceful DB connection error handling: diagnostic message (locked, unmounted, wrong path), GUI offers local fallback
   - Column sorting: double-click any column header to sort (▲/▼ indicators), numeric-aware for tracks/duration/year
-  - Busy/watch cursor (`_busy()` context manager) for blocking operations: re-detect, integrity check, import playlists, filter toggles
+  - Busy/watch cursor (`_busy()` context manager) for blocking operations; recursive cursor propagation for Windows
   - Tree state persistence: expansion, sort, and scroll position preserved across playlist add/remove operations
   - Expand/collapse only opens to work level (not individual tracks)
   - Double-click add/remove restricted to text area (skips disclosure arrow via `identify_element`)

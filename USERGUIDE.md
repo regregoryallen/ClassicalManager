@@ -653,6 +653,11 @@ You can place the database on a shared drive (set `db_path` in `config.json`)
 and access it from multiple machines — but only run the app on one machine at a
 time (SQLite does not support concurrent access over network filesystems).
 
+If the app cannot open the database (e.g., another instance has it locked, or
+the network share is not mounted), it will show a diagnostic message explaining
+the likely cause. The GUI offers the option to fall back to the local default
+database; the CLI exits with an error.
+
 If source folders are at different paths on each machine (e.g., `/mnt/Music` on
 Linux vs. `M:/Music` on Windows), scanning should only be done from one machine.
 The other machine can generate playlists using path rules to translate paths for
@@ -741,6 +746,12 @@ full rescan.
 Large collections (thousands of albums) may take several minutes for a full scan.
 Use **Scan Changes** for routine updates — it only processes new, changed, or
 deleted files and is much faster. You can cancel either scan type mid-operation.
+
+### "Cannot open database" or "disk I/O error"
+This typically means the database file is locked by another instance of the app
+on a different machine, or the network share is not mounted. Close the app on
+all other machines and ensure the share is accessible. The GUI will offer to fall
+back to the local default database if the configured path is unreachable.
 
 ### Database path change not taking effect
 Database path changes (in Settings or `config.json`) require an application

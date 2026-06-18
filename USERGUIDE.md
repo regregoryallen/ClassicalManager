@@ -453,8 +453,11 @@ All changes are saved to `config.json`.
 
 ### Database
 
-- **Database File**: Path to the SQLite database file. Changing this requires a
-  restart. Use the browse button to select a location.
+- **Database File**: Path to the SQLite database file. Stored as `db_path` in
+  `config.json`, so both the GUI and CLI use the same database. Changing this
+  requires a restart. Use the browse button to select a location.
+  To move the database, copy the `.db` file (and any `-wal`/`-shm` files) to
+  the new location, then update this setting.
 
 ### Plex
 
@@ -645,6 +648,7 @@ rescanning to work.
 ```json
 {
   "active_library": 1,
+  "db_path": "/path/to/music_manager.db",
   "targets": {
     "plex": {
       "base_url": "http://server:32400",
@@ -665,6 +669,9 @@ rescanning to work.
 ```
 
 - **active_library**: Legacy field (GUI uses selected library)
+- **db_path**: Optional path to the SQLite database file. Omit or leave empty to
+  use the default (`music_manager.db` in the project directory). Both the GUI and
+  CLI read this setting.
 - **targets.plex**: Omit entirely if you don't use Plex
   - At least one of `token` or `token_env` is required
   - `music_section` is optional if set per-library in the sidebar
@@ -672,8 +679,7 @@ rescanning to work.
 
 ### gui_prefs.json (auto-managed)
 
-Stores window geometry, database path override, and last-used export directory.
-Do not edit manually.
+Stores window geometry and last-used export directory. Do not edit manually.
 
 ### Supported Audio Formats
 
@@ -717,7 +723,9 @@ Use **Scan Changes** for routine updates — it only processes new, changed, or
 deleted files and is much faster. You can cancel either scan type mid-operation.
 
 ### Database path change not taking effect
-Database path changes require an application restart. Close and reopen the app.
+Database path changes (in Settings or `config.json`) require an application
+restart. Close and reopen the app. Both GUI and CLI read `db_path` from
+`config.json`.
 
 ### View Logs shows no output
 The log viewer captures output from the current session only. If you just started

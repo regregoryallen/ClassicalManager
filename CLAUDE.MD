@@ -11,12 +11,13 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - `main.py` — Entry point (GUI or CLI via `--cli`)
 - `music_manager/core/` — Scanner, engine, database, config, serializers, overrides, integrity
 - `music_manager/interfaces/` — GUI (`gui.py`), CLI (`cli.py`), file dialogs (`filedialog.py`)
-- `config.json` — User config (gitignored; template at `config.example.json`)
-- `gui_prefs.json` — Auto-managed GUI preferences (gitignored)
+- `config.json` — User config including `db_path` (gitignored; template at `config.example.json`)
+- `gui_prefs.json` — Auto-managed GUI preferences: window geometry (gitignored)
 
 ## Key Architecture Notes
 
-- Database: SQLite via Peewee ORM (`music_manager/core/database.py`)
+- Database: SQLite via Peewee ORM (`music_manager/core/database.py`); path configurable via `db_path` in `config.json`
+- `config.py:get_db_path()` returns the configured DB path (used by both GUI and CLI); `save_config()` writes config back
 - Work detection precedence: override > MusicBrainz work ID > WORK tag > title-prefix heuristic > standalone
 - MB work ID merging: tracks with different MB work IDs but the same WORK tag are merged into a single work
 - WORK tag reading: ID3 `TXXX:Work` (any case), `TIT1`, `GRP1`; Vorbis `WORK`; MP4 `©wrk`
@@ -30,13 +31,14 @@ Ask for clarifications as needed. Stage work so that you have everything upfront
 - Profile names must be unique across all libraries
 - Library scans are long-running (minutes for large collections) — never run them automatically
 
-## Session Status (2026-06-17)
+## Session Status (2026-06-18)
 
 ### Recently completed
 - GUI polish and usability:
   - App icon: treble clef (𝄞) on dark background, shown in window and taskbar via `wm_iconphoto`
   - `.desktop` file auto-installed on Linux for correct taskbar icon/tooltip; `AppUserModelID` on Windows
   - Track playback: right-click "Play" on any track opens in system default player (`xdg-open`/`open`/`startfile`)
+  - DB path moved from `gui_prefs.json` to `config.json` so CLI also respects it; auto-migration on first GUI run
   - Column sorting: double-click any column header to sort (▲/▼ indicators), numeric-aware for tracks/duration/year
   - Busy/watch cursor (`_busy()` context manager) for blocking operations: re-detect, integrity check, import playlists, filter toggles
   - Tree state persistence: expansion, sort, and scroll position preserved across playlist add/remove operations

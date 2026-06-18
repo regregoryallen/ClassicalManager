@@ -77,9 +77,23 @@ def launch_gui():
         return
 
     from music_manager.core.database import initialize_database
+    from music_manager.core.config import get_db_path
     prefs = _load_prefs()
-    db_path = prefs.get("db_path")
-    initialize_database(Path(db_path) if db_path else None)
+
+    # Migrate db_path from gui_prefs.json to config.json (one-time)
+    if "db_path" in prefs:
+        try:
+            from music_manager.core.config import load_config, save_config
+            cfg = load_config()
+            if "db_path" not in cfg:
+                cfg["db_path"] = prefs["db_path"]
+                save_config(cfg)
+            del prefs["db_path"]
+            _save_prefs(prefs)
+        except Exception:
+            pass
+
+    initialize_database(get_db_path())
 
     # Set up logging to capture output for the GUI log viewer
     log_handler = _GUILogHandler()
@@ -622,8 +636,8 @@ class App:
         add_section("Database")
         from music_manager.core.database import DATABASE_PATH
         db_entry = add_browse_field("Database File",
-                                    self._prefs.get("db_path",
-                                                    str(DATABASE_PATH)))
+                                    config.get("db_path",
+                                               str(DATABASE_PATH)))
 
         # -- Plex --
         add_section("Plex")
@@ -731,15 +745,23 @@ class App:
                 "path_rules": parse_rules(m3u_rules_text),
             }
 
-            # Write config.json
-            DEFAULT_CONFIG_PATH.write_text(
-                json.dumps(new_config, indent=2, ensure_ascii=False) + "\n")
-
-            # Save DB path preference (requires restart to take effect)
+            # Database path (stored in config.json, requires restart)
             new_db = db_entry.get().strip()
-            if new_db != str(DATABASE_PATH):
-                self._prefs["db_path"] = new_db
-                _save_prefs(self._prefs)
+            current_db = config.get("db_path", str(DATABASE_PATH))
+            if new_db and new_db != current_db:
+                new_config["db_path"] = new_db
+                db_changed = True
+            elif config.get("db_path"):
+                new_config["db_path"] = config["db_path"]
+                db_changed = False
+            else:
+                db_changed = False
+
+            # Write config.json
+            from music_manager.core.config import save_config
+            save_config(new_config)
+
+            if db_changed:
                 messagebox.showinfo(
                     "Restart Required",
                     "Database path changed. Restart the app for it to take effect.",

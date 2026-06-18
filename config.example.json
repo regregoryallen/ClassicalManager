@@ -1,5 +1,6 @@
 {
   "active_library": 1,
+  "db_path": "",
   "targets": {
     "plex": {
       "base_url": "http://your-plex-server:32400",

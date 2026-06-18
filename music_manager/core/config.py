@@ -58,6 +58,28 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return config
 
 
+def save_config(config: dict[str, Any], path: Path | None = None) -> None:
+    """Write config back to config.json."""
+    config_path = path or DEFAULT_CONFIG_PATH
+    config_path.write_text(
+        json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    logger.info("Configuration saved to %s", config_path)
+
+
+def get_db_path() -> Path:
+    """Return the database path from config.json, or the default."""
+    from music_manager.core.database import DATABASE_PATH
+    try:
+        config = load_config()
+        db = config.get("db_path")
+        if db:
+            return Path(db)
+    except ConfigError:
+        pass
+    return DATABASE_PATH
+
+
 def _validate(config: dict[str, Any], path: Path) -> None:
     """Validate the structure and values of the loaded config.
 

@@ -30,7 +30,8 @@ def _setup_logging(verbose: bool = False) -> None:
 def _get_library(name: str):
     """Look up a library by name, or exit with an error."""
     from music_manager.core.database import Library, initialize_database
-    initialize_database()
+    from music_manager.core.config import get_db_path
+    initialize_database(get_db_path())
     try:
         return Library.get(Library.name == name)
     except Library.DoesNotExist:
@@ -158,7 +159,8 @@ def redetect(
 def _get_profile(name: str):
     """Look up a playlist profile by name (must be unique across libraries)."""
     from music_manager.core.database import PlaylistProfile, initialize_database
-    initialize_database()
+    from music_manager.core.config import get_db_path
+    initialize_database(get_db_path())
     matches = list(PlaylistProfile.select().where(
         (PlaylistProfile.name == name) &
         (~PlaylistProfile.name.startswith("__temp_"))))

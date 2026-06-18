@@ -61,4 +61,16 @@ See the [User Guide](USERGUIDE.md) for detailed documentation covering installat
 
 ## License
 
-This project is provided as-is for personal use.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2026 Roger Gregory-Allen
+
+### Dependency note
+
+The MIT license above covers this project's own source code. This application
+depends on [mutagen](https://github.com/quodlibet/mutagen), which is licensed
+under the GNU GPL v2.0 or later. Installing the dependencies separately (via
+`pip install -r requirements.txt`) and running from source does not affect the
+licensing of this project's code. If you later distribute a *bundled* build that
+packages mutagen together with the application (for example, a PyInstaller
+executable), that combined distribution is subject to the terms of the GPL.

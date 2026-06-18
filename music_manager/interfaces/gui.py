@@ -250,14 +250,29 @@ class App:
 
     @contextmanager
     def _busy(self):
-        """Show a wait/watch cursor while a blocking operation runs."""
+        """Show a wait/watch cursor while a blocking operation runs.
+
+        On Windows, Tk doesn't propagate the cursor from the root to child
+        widgets, so we set it on every widget in the tree.
+        """
         cursor = "wait" if platform.system() == "Windows" else "watch"
-        self.root.config(cursor=cursor)
-        self.root.update_idletasks()
+        self._set_cursor(cursor)
+        self.root.update()
         try:
             yield
         finally:
-            self.root.config(cursor="")
+            self._set_cursor("")
+
+    def _set_cursor(self, cursor):
+        """Set cursor on all widgets (needed for Windows propagation)."""
+        def _apply(widget):
+            try:
+                widget.configure(cursor=cursor)
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                _apply(child)
+        _apply(self.root)
 
     def _setup_theme(self):
         """Configure ttk.Treeview style to blend with customtkinter."""

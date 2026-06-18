@@ -1,6 +1,6 @@
 # Classical Music Playlist Manager
 
-A desktop application for managing and generating playlists from classical music collections. Unlike general-purpose playlist tools, it understands the structure of classical music: multi-movement works, composers, and the relationship between tracks within a composition.
+A desktop application for managing and generating playlists from classical music collections. Unlike general-purpose playlist tools, it understands the structure of classical music: multi-movement works, composers, and the relationship between tracks within a composition. This enables playlist shuffling while keeping multi-movement works together.
 
 ## The Problem
 

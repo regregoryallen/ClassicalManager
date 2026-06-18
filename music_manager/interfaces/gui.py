@@ -93,7 +93,27 @@ def launch_gui():
         except Exception:
             pass
 
-    initialize_database(get_db_path())
+    db_path = get_db_path()
+    try:
+        initialize_database(db_path)
+    except Exception as exc:
+        import tkinter as _tk
+        _tk.Tk().withdraw()
+        from tkinter import messagebox as _mb
+        from music_manager.core.database import DATABASE_PATH
+        msg = (f"Cannot open database:\n{db_path}\n\n"
+               f"Error: {exc}\n\n"
+               f"Possible causes:\n"
+               f"  - The app is open on another machine (database locked)\n"
+               f"  - The network share or drive is not mounted\n"
+               f"  - The path in config.json is incorrect\n\n"
+               f"Close the app on other machines and ensure the path is "
+               f"accessible, or update db_path in config.json.\n\n"
+               f"Fall back to the local default database?")
+        if _mb.askyesno("Database Error", msg):
+            initialize_database(DATABASE_PATH)
+        else:
+            return
 
     # Set up logging to capture output for the GUI log viewer
     log_handler = _GUILogHandler()

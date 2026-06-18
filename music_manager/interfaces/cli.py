@@ -27,11 +27,28 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
+def _init_database():
+    """Initialize the database, with a clear error if it fails."""
+    from music_manager.core.database import initialize_database
+    from music_manager.core.config import get_db_path
+    db_path = get_db_path()
+    try:
+        initialize_database(db_path)
+    except Exception as exc:
+        typer.echo(f"Error: cannot open database: {db_path}", err=True)
+        typer.echo(f"  {exc}", err=True)
+        typer.echo("", err=True)
+        typer.echo("Possible causes:", err=True)
+        typer.echo("  - The app is open on another machine (database locked)", err=True)
+        typer.echo("  - The network share or drive is not mounted", err=True)
+        typer.echo("  - The db_path in config.json is incorrect", err=True)
+        raise typer.Exit(1)
+
+
 def _get_library(name: str):
     """Look up a library by name, or exit with an error."""
-    from music_manager.core.database import Library, initialize_database
-    from music_manager.core.config import get_db_path
-    initialize_database(get_db_path())
+    from music_manager.core.database import Library
+    _init_database()
     try:
         return Library.get(Library.name == name)
     except Library.DoesNotExist:
@@ -186,9 +203,8 @@ def redetect(
 
 def _get_profile(name: str):
     """Look up a playlist profile by name (must be unique across libraries)."""
-    from music_manager.core.database import PlaylistProfile, initialize_database
-    from music_manager.core.config import get_db_path
-    initialize_database(get_db_path())
+    from music_manager.core.database import PlaylistProfile
+    _init_database()
     matches = list(PlaylistProfile.select().where(
         (PlaylistProfile.name == name) &
         (~PlaylistProfile.name.startswith("__temp_"))))

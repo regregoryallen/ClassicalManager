@@ -773,6 +773,37 @@ Check the per-library section in the sidebar and the default in Settings.
 Path rules may not correctly translate local paths to Plex server paths. Click
 **View Logs** to see which tracks failed. Adjust path rules in Settings.
 
+### M3U shows wrong paths / Plex says "no tracks matched" on a different OS
+
+Plex path rules and M3U path rules serve **different purposes** and must be
+configured independently:
+
+- **Plex path rules** translate database paths to what the **Plex server** sees.
+  If the Plex server uses the same paths that were scanned (e.g., both are
+  `/mnt/MediaLib/...`), no Plex rules are needed.
+- **M3U path rules** translate database paths to what the **local machine** sees.
+  If you're exporting M3U on Windows but the library was scanned on Linux, you
+  need an M3U rule like `/mnt/MediaLib -> M:`.
+
+A common mistake when running on a different OS than where the scan was done:
+putting the local path translation in the Plex rules instead of the M3U rules.
+This breaks Plex (which needs server paths, not local paths) and leaves M3U
+untranslated.
+
+**Example — library scanned on Linux at `/mnt/MediaLib`, Plex server at the
+same path, Windows maps the share as `M:`:**
+
+```json
+"plex": {
+  "path_rules": []
+},
+"m3u": {
+  "path_rules": [
+    {"find": "/mnt/MediaLib", "replace": "M:"}
+  ]
+}
+```
+
 ### Works grouped incorrectly
 
 Go to the **Cleanup / Overlay** tab. Use the Source dropdown to filter by detection

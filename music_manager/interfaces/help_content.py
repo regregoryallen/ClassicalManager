@@ -408,6 +408,14 @@ def build_help_content(text: tk.Text) -> None:
     body(" \u2014 Section name must match exactly (case-sensitive). Check per-library field and Settings.\n")
     bold("Plex push: unmatched tracks")
     body(" \u2014 Path rules may not translate correctly. Check View Logs for details. Adjust in Settings.\n")
+    bold("M3U wrong paths / Plex \"no tracks\" on a different OS")
+    body(
+        " \u2014 Plex and M3U path rules are independent. Plex rules translate "
+        "to what the Plex server sees; M3U rules translate to what the local "
+        "machine sees. A common mistake: putting local path translation (e.g. "
+        "/mnt/MediaLib -> M:) in Plex rules instead of M3U rules. This breaks "
+        "Plex and leaves M3U untranslated.\n"
+    )
     bold("Works grouped incorrectly")
     body(" \u2014 Use Cleanup tab. Set Group Key to merge, Make Standalone to split. Re-detect Works to apply.\n")
     bold("Scan takes too long")

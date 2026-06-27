@@ -2079,11 +2079,13 @@ class App:
         self.profile_name_entry = ctk.CTkEntry(row0, width=200,
                                                placeholder_text="e.g. Sunday Classical")
         self.profile_name_entry.pack(side="left", padx=3)
-        ctk.CTkButton(row0, text="Load", width=70,
+        ctk.CTkButton(row0, text="New", width=60,
+                      command=self._new_profile).pack(side="left", padx=3)
+        ctk.CTkButton(row0, text="Load", width=60,
                       command=self._load_profile).pack(side="left", padx=3)
-        ctk.CTkButton(row0, text="Save", width=70,
+        ctk.CTkButton(row0, text="Save", width=60,
                       command=self._save_profile).pack(side="left", padx=3)
-        ctk.CTkButton(row0, text="Delete", width=70,
+        ctk.CTkButton(row0, text="Delete", width=60,
                       command=self._delete_profile).pack(side="left", padx=3)
         ctk.CTkButton(row0, text="?", width=28, height=28,
                       font=ctk.CTkFont(size=14, weight="bold"),
@@ -3336,6 +3338,19 @@ class App:
                 messagebox.showerror("Error", str(exc))
             finally:
                 self._delete_temp_profile(profile)
+
+    def _new_profile(self):
+        """Clear the builder to start a fresh playlist profile."""
+        self.profile_name_entry.delete(0, "end")
+        self.shuffle_mode.set("work")
+        self.work_integrity.set("enforce")
+        self.length_mode.set("all")
+        self.length_value.delete(0, "end")
+        self.seed_entry.delete(0, "end")
+        self.no_repeat_var.select()
+        self._current_profile_rules.clear()
+        self._refresh_rules_display()
+        self._refresh_builder_tree()
 
     def _save_profile(self):
         """Save current settings as a named profile in the DB."""

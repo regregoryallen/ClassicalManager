@@ -45,6 +45,11 @@ class ResolvedTrack:
     work_source: str | None
     composer_id: int | None
     composer_name: str | None
+    # Descriptive metadata
+    genre: str | None
+    performer: str | None
+    conductor: str | None
+    ensemble: str | None
     # Source folder for path realization
     folder_id: int
     folder_root_path: str
@@ -316,6 +321,10 @@ def _build_resolved_tracks(
             work_source=work.work_source if work else None,
             composer_id=composer.id if composer else None,
             composer_name=composer.name if composer else None,
+            genre=t.genre,
+            performer=t.performer,
+            conductor=t.conductor,
+            ensemble=t.ensemble,
             folder_id=t.folder_id,
             folder_root_path=t.folder.root_path,
             admitted_by=admission_map.get(t.id, ""),

@@ -153,6 +153,8 @@ class App:
         self._profile_picker_open = False
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
+        self._lib_search_meta = {}   # iid → searchable text for builder lib tree
+        self._pl_search_meta = {}    # iid → searchable text for builder pl tree
         self._tree_sort_state = {}     # tree id → (column, reverse)
 
         self._setup_theme()
@@ -1615,12 +1617,14 @@ class App:
         left.pack(side="left", fill="both", expand=True, padx=(0, 5))
         ctk.CTkLabel(left, text="Albums",
                      font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=5)
-        self.album_tree = ttk.Treeview(left, columns=("artist", "year", "tracks"),
+        self.album_tree = ttk.Treeview(left, columns=("artist", "genre", "year", "tracks"),
                                        show="headings", selectmode="browse")
         self.album_tree.heading("artist", text="Album")
+        self.album_tree.heading("genre", text="Genre")
         self.album_tree.heading("year", text="Year")
         self.album_tree.heading("tracks", text="Tracks")
-        self.album_tree.column("artist", width=300)
+        self.album_tree.column("artist", width=260)
+        self.album_tree.column("genre", width=100)
         self.album_tree.column("year", width=60, anchor="center")
         self.album_tree.column("tracks", width=60, anchor="center")
         self.album_tree.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1679,13 +1683,31 @@ class App:
 
         search = self.explorer_search.get().strip().lower() if hasattr(self, 'explorer_search') else ""
 
+        # Pre-compute per-album metadata for genre display and search
+        album_genres = {}    # album_id → first non-empty genre
+        album_search = {}    # album_id → set of lowercase searchable strings
+        for t in Track.select().where(Track.library == self.active_library):
+            aid = t.album_id
+            if aid not in album_genres and t.genre:
+                album_genres[aid] = t.genre
+            meta = album_search.setdefault(aid, set())
+            for val in (t.genre, t.performer, t.conductor, t.ensemble,
+                        t.composer.name if t.composer_id else None):
+                if val:
+                    meta.add(val.lower())
+
         albums = Album.select().where(Album.library == self.active_library).order_by(Album.title)
         for album in albums:
-            if search and search not in album.title.lower() and search not in (album.album_artist or "").lower():
-                continue
+            if search:
+                if (search not in album.title.lower()
+                        and search not in (album.album_artist or "").lower()
+                        and not any(search in m for m in album_search.get(album.id, ()))):
+                    continue
             track_count = Track.select().where(Track.album == album).count()
+            genre = album_genres.get(album.id, "")
             iid = self.album_tree.insert("", "end", values=(
                 album.title,
+                genre,
                 album.year or "",
                 track_count,
             ))
@@ -1922,14 +1944,16 @@ class App:
                         width=20).pack(side="right", padx=5)
 
         self.builder_lib_tree = ttk.Treeview(
-            left_frame, columns=("composer", "info"),
+            left_frame, columns=("composer", "genre", "info"),
             show="tree headings", selectmode="extended")
         self.builder_lib_tree.heading("#0", text="Name")
         self.builder_lib_tree.heading("composer", text="Composer")
+        self.builder_lib_tree.heading("genre", text="Genre")
         self.builder_lib_tree.heading("info", text="Info")
-        self.builder_lib_tree.column("#0", width=250)
-        self.builder_lib_tree.column("composer", width=130)
-        self.builder_lib_tree.column("info", width=90, anchor="center")
+        self.builder_lib_tree.column("#0", width=220)
+        self.builder_lib_tree.column("composer", width=120)
+        self.builder_lib_tree.column("genre", width=90)
+        self.builder_lib_tree.column("info", width=70, anchor="center")
         self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         lib_scroll = ttk.Scrollbar(left_frame, orient="vertical",
@@ -1999,14 +2023,16 @@ class App:
             text_color="#b08830", font=ctk.CTkFont(size=11))
 
         self.builder_pl_tree = ttk.Treeview(
-            right_frame, columns=("composer", "info"),
+            right_frame, columns=("composer", "genre", "info"),
             show="tree headings", selectmode="extended")
         self.builder_pl_tree.heading("#0", text="Name")
         self.builder_pl_tree.heading("composer", text="Composer")
+        self.builder_pl_tree.heading("genre", text="Genre")
         self.builder_pl_tree.heading("info", text="Info")
-        self.builder_pl_tree.column("#0", width=250)
-        self.builder_pl_tree.column("composer", width=130)
-        self.builder_pl_tree.column("info", width=90, anchor="center")
+        self.builder_pl_tree.column("#0", width=220)
+        self.builder_pl_tree.column("composer", width=120)
+        self.builder_pl_tree.column("genre", width=90)
+        self.builder_pl_tree.column("info", width=70, anchor="center")
         self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         pl_scroll = ttk.Scrollbar(right_frame, orient="vertical",
@@ -2249,10 +2275,12 @@ class App:
             tree = self.builder_lib_tree
             snapshot = self._lib_tree_snapshot
             query = self._lib_filter_var.get().strip().lower()
+            search_meta = self._lib_search_meta
         else:
             tree = self.builder_pl_tree
             snapshot = self._pl_tree_snapshot
             query = self._pl_filter_var.get().strip().lower()
+            search_meta = self._pl_search_meta
 
         if not snapshot:
             return
@@ -2268,10 +2296,11 @@ class App:
         if not query:
             return
 
-        # Build a set of iids whose text matches (case-insensitive)
+        # Build a set of iids whose text or metadata matches (case-insensitive)
         matching = set()
         for iid, parent, index, text, was_open in snapshot:
-            if query in text.lower():
+            search_text = search_meta.get(iid, text).lower()
+            if query in search_text:
                 matching.add(iid)
 
         # Also keep all ancestors of matching items visible
@@ -2338,6 +2367,7 @@ class App:
         self._lib_tree_snapshot = []
         self.builder_lib_tree.delete(*self.builder_lib_tree.get_children())
         self._builder_lib_iid_map.clear()
+        self._lib_search_meta = {}
 
         if not self.active_library:
             return
@@ -2412,11 +2442,20 @@ class App:
 
             track_count = Track.select().where(Track.album == album).count()
             album_artist = album.album_artist or ""
+            # Get representative genre from first track with one
+            album_genre = ""
+            first_genre_track = (Track.select(Track.genre)
+                                 .where((Track.album == album) & Track.genre.is_null(False))
+                                 .limit(1).first())
+            if first_genre_track:
+                album_genre = first_genre_track.genre or ""
             album_iid = self.builder_lib_tree.insert(
                 "", "end", text=album.title,
-                values=(album_artist, f"{track_count} trk"),
+                values=(album_artist, album_genre, f"{track_count} trk"),
                 tags=(album_tag,) if album_tag else ())
             self._builder_lib_iid_map[album_iid] = ("album", album.id)
+            self._lib_search_meta[album_iid] = " ".join(filter(None, [
+                album.title, album_artist, album_genre]))
 
             for work in visible_works:
                 work_key = ("work", work.id)
@@ -2449,11 +2488,14 @@ class App:
                     work_tag = ""
 
                 work_composer = work.composer.name if work.composer_id else ""
+                work_genre = tracks[0].genre if tracks and tracks[0].genre else ""
                 work_iid = self.builder_lib_tree.insert(
                     album_iid, "end", text=work.work_name,
-                    values=(work_composer, f"{len(tracks)} trk"),
+                    values=(work_composer, work_genre, f"{len(tracks)} trk"),
                     tags=(work_tag,) if work_tag else ())
                 self._builder_lib_iid_map[work_iid] = ("work", work.id)
+                self._lib_search_meta[work_iid] = " ".join(filter(None, [
+                    work.work_name, work_composer, work_genre]))
 
                 for t in tracks:
                     track_key = ("track", t.id)
@@ -2468,12 +2510,16 @@ class App:
                         t_tag = ""
 
                     t_composer = t.composer.name if t.composer_id else ""
+                    t_genre = t.genre or ""
                     t_iid = self.builder_lib_tree.insert(
                         work_iid, "end",
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(t_composer, dur_str),
+                        values=(t_composer, t_genre, dur_str),
                         tags=(t_tag,) if t_tag else ())
                     self._builder_lib_iid_map[t_iid] = ("track", t.id)
+                    self._lib_search_meta[t_iid] = " ".join(filter(None, [
+                        t.title, t_composer, t_genre,
+                        t.performer or "", t.conductor or "", t.ensemble or ""]))
 
         self._lib_tree_snapshot = self._snapshot_tree(self.builder_lib_tree)
         # Re-apply active filter if any
@@ -2492,6 +2538,7 @@ class App:
         self._pl_tree_snapshot = []
         self.builder_pl_tree.delete(*self.builder_pl_tree.get_children())
         self._builder_pl_iid_map.clear()
+        self._pl_search_meta = {}
 
         if not self.active_library:
             return
@@ -2557,27 +2604,45 @@ class App:
 
             total_tracks = sum(len(ts) for _, ts in work_entries)
             album_artist = album.album_artist or ""
+            # Get representative genre from first track
+            album_genre = ""
+            for _, vts in work_entries:
+                for vt in vts:
+                    if vt.genre:
+                        album_genre = vt.genre
+                        break
+                if album_genre:
+                    break
             album_iid = self.builder_pl_tree.insert(
                 "", "end", text=album.title,
-                values=(album_artist, f"{total_tracks} trk"))
+                values=(album_artist, album_genre, f"{total_tracks} trk"))
             self._builder_pl_iid_map[album_iid] = ("album", album.id)
+            self._pl_search_meta[album_iid] = " ".join(filter(None, [
+                album.title, album_artist, album_genre]))
 
             for work, vis_tracks in work_entries:
                 work_composer = work.composer.name if work.composer_id else ""
+                work_genre = vis_tracks[0].genre if vis_tracks and vis_tracks[0].genre else ""
                 work_iid = self.builder_pl_tree.insert(
                     album_iid, "end", text=work.work_name,
-                    values=(work_composer, f"{len(vis_tracks)} trk"))
+                    values=(work_composer, work_genre, f"{len(vis_tracks)} trk"))
                 self._builder_pl_iid_map[work_iid] = ("work", work.id)
+                self._pl_search_meta[work_iid] = " ".join(filter(None, [
+                    work.work_name, work_composer, work_genre]))
 
                 for t in vis_tracks:
                     dur_s = (t.duration_ms or 0) // 1000
                     dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
                     t_composer = t.composer.name if t.composer_id else ""
+                    t_genre = t.genre or ""
                     t_iid = self.builder_pl_tree.insert(
                         work_iid, "end",
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(t_composer, dur_str))
+                        values=(t_composer, t_genre, dur_str))
                     self._builder_pl_iid_map[t_iid] = ("track", t.id)
+                    self._pl_search_meta[t_iid] = " ".join(filter(None, [
+                        t.title, t_composer, t_genre,
+                        t.performer or "", t.conductor or "", t.ensemble or ""]))
 
             # Auto-expand albums in playlist view
             self.builder_pl_tree.item(album_iid, open=True)

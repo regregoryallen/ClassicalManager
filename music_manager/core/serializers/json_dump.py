@@ -95,6 +95,10 @@ def _track_to_dict(rt: ResolvedTrack) -> dict[str, Any]:
             "id": rt.composer_id,
             "name": rt.composer_name,
         } if rt.composer_id else None,
+        "genre": rt.genre,
+        "performer": rt.performer,
+        "conductor": rt.conductor,
+        "ensemble": rt.ensemble,
         "folder_id": rt.folder_id,
         "admitted_by": rt.admitted_by,
     }

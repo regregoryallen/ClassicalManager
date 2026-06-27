@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 TRACK_FIELDS = frozenset({
     "composer", "work_group_key", "work_name", "disc_number",
     "track_number", "movement_number", "title",
+    "genre", "performer", "conductor", "ensemble",
 })
 ALBUM_FIELDS = frozenset({
     "album_title", "album_artist", "year",
@@ -221,6 +222,9 @@ def _apply_track_override(library: Library, ov: Override) -> bool:
             work = Work.get_by_id(track.work_id)
             work.work_name = value
             work.save()
+    elif field in ("genre", "performer", "conductor", "ensemble"):
+        setattr(track, field, value or None)
+        track.save()
 
     return True
 

@@ -78,6 +78,14 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
             migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
         )
         logger.info("Migrated: added file_mtime, file_size to tracks")
+    if "genre" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "genre", pw.TextField(null=True)),
+            migrator.add_column("tracks", "performer", pw.TextField(null=True)),
+            migrator.add_column("tracks", "conductor", pw.TextField(null=True)),
+            migrator.add_column("tracks", "ensemble", pw.TextField(null=True)),
+        )
+        logger.info("Migrated: added genre, performer, conductor, ensemble to tracks")
 
     logger.info("Database tables created/verified")
     return database
@@ -207,6 +215,10 @@ class Track(BaseModel):
     movement_number = pw.IntegerField(null=True)
     duration_ms = pw.IntegerField()
     musicbrainz_recording_id = pw.TextField(null=True)
+    genre = pw.TextField(null=True)              # genre tag from file
+    performer = pw.TextField(null=True)          # performing artist (TPE1/ARTIST)
+    conductor = pw.TextField(null=True)          # conductor (TPE3/CONDUCTOR)
+    ensemble = pw.TextField(null=True)           # orchestra/ensemble
     work_tag = pw.TextField(null=True)          # raw WORK tag from file
     mb_work_id = pw.TextField(null=True)        # per-track MusicBrainz work ID from file
     file_mtime = pw.FloatField(null=True)       # file modification time (os.stat)

@@ -58,6 +58,10 @@ class RawTags:
     movement_name: str = ""
     movement_number: int | None = None
     movement_total: int | None = None
+    # Descriptive metadata
+    genre: str = ""
+    conductor: str = ""
+    ensemble: str = ""
     # Parsing metadata
     disc_from_tag: bool = False  # True if disc came from a real DISCNUMBER tag
 
@@ -167,6 +171,8 @@ def _extract_id3(id3_tags, tags: RawTags) -> None:
     tags.album_artist = get("TPE2")
     tags.album = get("TALB")
     tags.composer = get("TCOM")
+    tags.genre = get("TCON")
+    tags.conductor = get("TPE3")
 
     # Year: try TDRC first, then TYER
     year_str = get("TDRC") or get("TYER")
@@ -192,7 +198,7 @@ def _extract_id3(id3_tags, tags: RawTags) -> None:
         if len(parts) > 1:
             tags.disc_total = _parse_int(parts[1])
 
-    # TXXX user-defined frames (MusicBrainz IDs, Work tag)
+    # TXXX user-defined frames (MusicBrainz IDs, Work tag, Ensemble)
     txxx_work = ""
     for frame_key, frame_val in id3_tags.items():
         if frame_key.startswith("TXXX:"):
@@ -206,6 +212,9 @@ def _extract_id3(id3_tags, tags: RawTags) -> None:
                 tags.mb_work_id = val
             elif desc == "WORK":
                 txxx_work = val
+            elif desc in ("ENSEMBLE", "ORCHESTRA"):
+                if not tags.ensemble:
+                    tags.ensemble = val
 
     # Work/movement tags - ID3
     # Prefer TXXX:Work, fall back to TIT1 (content group) / GRP1
@@ -226,6 +235,7 @@ def _extract_mp4(mp4_tags: dict, tags: RawTags) -> None:
     tags.album_artist = _first_str(mp4_tags.get("aART"))
     tags.album = _first_str(mp4_tags.get("\xa9alb"))
     tags.composer = _first_str(mp4_tags.get("\xa9wrt"))
+    tags.genre = _first_str(mp4_tags.get("\xa9gen"))
 
     year_str = _first_str(mp4_tags.get("\xa9day"))
     if year_str:
@@ -252,14 +262,20 @@ def _extract_mp4(mp4_tags: dict, tags: RawTags) -> None:
             if pair[1]:
                 tags.disc_total = pair[1]
 
-    # MusicBrainz IDs (freeform atoms)
+    # MusicBrainz IDs and other freeform atoms
     for key, val in mp4_tags.items():
-        if "musicbrainz album id" in key.lower():
+        key_lower = key.lower()
+        if "musicbrainz album id" in key_lower:
             tags.mb_album_id = _first_str(val)
-        elif "musicbrainz recording id" in key.lower():
+        elif "musicbrainz recording id" in key_lower:
             tags.mb_recording_id = _first_str(val)
-        elif "musicbrainz work id" in key.lower():
+        elif "musicbrainz work id" in key_lower:
             tags.mb_work_id = _first_str(val)
+        elif "conductor" in key_lower and not tags.conductor:
+            tags.conductor = _first_str(val)
+        elif key_lower.endswith(":ensemble") or key_lower.endswith(":orchestra"):
+            if not tags.ensemble:
+                tags.ensemble = _first_str(val)
 
     # Work/movement tags - MP4
     tags.work = _first_str(mp4_tags.get("\xa9wrk", ""))
@@ -282,6 +298,9 @@ def _extract_vorbis(vorbis_tags: dict, tags: RawTags) -> None:
     tags.album_artist = get("ALBUMARTIST")
     tags.album = get("ALBUM")
     tags.composer = get("COMPOSER")
+    tags.genre = get("GENRE")
+    tags.conductor = get("CONDUCTOR")
+    tags.ensemble = get("ENSEMBLE") or get("ORCHESTRA")
 
     year_str = get("DATE") or get("YEAR")
     if year_str:
@@ -325,6 +344,7 @@ def _extract_easy(easy_tags: dict, tags: RawTags) -> None:
     tags.album_artist = get("albumartist")
     tags.album = get("album")
     tags.composer = get("composer")
+    tags.genre = get("genre")
     tags.track_number = _parse_int(get("tracknumber"), 0)
 
     dn_str = get("discnumber")
@@ -1133,6 +1153,10 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             old_track.movement_number = raw.movement_number
             old_track.duration_ms = raw.duration_ms
             old_track.musicbrainz_recording_id = raw.mb_recording_id or None
+            old_track.genre = raw.genre or None
+            old_track.performer = raw.artist or None
+            old_track.conductor = raw.conductor or None
+            old_track.ensemble = raw.ensemble or None
             old_track.work_tag = raw.work or None
             old_track.mb_work_id = raw.mb_work_id or None
             old_track.file_mtime = f_mtime
@@ -1160,6 +1184,8 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
                 track_number=raw.track_number, movement_number=raw.movement_number,
                 duration_ms=raw.duration_ms,
                 musicbrainz_recording_id=raw.mb_recording_id or None,
+                genre=raw.genre or None, performer=raw.artist or None,
+                conductor=raw.conductor or None, ensemble=raw.ensemble or None,
                 work_tag=raw.work or None, mb_work_id=raw.mb_work_id or None,
                 file_mtime=f_mtime, file_size=f_size,
             )
@@ -1305,6 +1331,10 @@ def _process_album_group(
             movement_number=raw.movement_number,
             duration_ms=raw.duration_ms,
             musicbrainz_recording_id=raw.mb_recording_id or None,
+            genre=raw.genre or None,
+            performer=raw.artist or None,
+            conductor=raw.conductor or None,
+            ensemble=raw.ensemble or None,
             work_tag=raw.work or None,
             mb_work_id=raw.mb_work_id or None,
             file_mtime=f_mtime,

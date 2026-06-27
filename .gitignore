@@ -17,3 +17,6 @@ config.json
 *.m3u
 *.db-shm
 *.db-wal
+CLAUDE.MD
+classical-playlist-manager-spec.md
+windows-packaging-handoff.md

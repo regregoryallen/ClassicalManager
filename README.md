@@ -6,6 +6,8 @@ A desktop application for managing and generating playlists from classical music
 
 Standard music players and playlist generators treat every track independently. For classical music, this means a symphony's four movements get scattered across a shuffled playlist, or a concerto's slow movement plays right after an unrelated opera aria. Classical listeners need tools that understand works as coherent units.
 
+This tool works with music files you own — ripped CDs, purchased downloads, or any audio files stored on disk. It does not connect to or manage streaming services (Spotify, Apple Music, etc.), though downloaded files from those services work like any other audio files.
+
 ## Features
 
 - **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics — with intelligent merging when per-movement MB IDs share a common WORK tag

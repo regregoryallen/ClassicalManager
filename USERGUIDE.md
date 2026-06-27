@@ -35,6 +35,8 @@ Key capabilities:
 - **Multiple libraries** for distinct collections (e.g., classical, holiday music)
 - **GUI and CLI** — the GUI for interactive work, the CLI for scripting and cron jobs
 
+The application works with locally stored audio files — ripped CDs, purchased downloads, or any music collection on disk. It is not a streaming service client and does not connect to Spotify, Apple Music, or similar platforms. Files downloaded from those services are supported like any other audio files.
+
 ---
 
 ## Installation

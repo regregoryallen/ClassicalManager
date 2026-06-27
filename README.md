@@ -103,3 +103,7 @@ under the GNU GPL v2.0 or later. Installing the dependencies separately (via
 licensing of this project's code. If you later distribute a *bundled* build that
 packages mutagen together with the application (for example, a PyInstaller
 executable), that combined distribution is subject to the terms of the GPL.
+
+## Development
+
+This application was built using [Claude Code](https://claude.ai/claude-code) (Anthropic's AI coding assistant). The author provided the specifications, directed development, and performed all testing; Claude wrote the code. The result is a fully functional application that reflects a human-directed, AI-implemented collaboration.

@@ -32,6 +32,28 @@ cp config.example.json config.json
 python main.py
 ```
 
+## Windows
+
+**Prerequisite:** Install Python 3.12+ from [python.org](https://www.python.org/downloads/).
+Check **"Add python.exe to PATH"** during installation and leave **"tcl/tk and IDLE"** checked.
+
+Then from the cloned repo folder:
+
+- **Automated:** Double-click `setup.bat`, then `run.bat` (setup offers to create a desktop shortcut)
+- **CLI usage:** Open a terminal in the repo folder and run `run.bat --cli scan --library "My Collection"`
+
+<details>
+<summary>Manual setup (without batch scripts)</summary>
+
+```
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+copy config.example.json config.json
+python main.py
+```
+</details>
+
 ## How It Works
 
 1. **Scan** your music folders — the scanner reads embedded metadata (MusicBrainz, WORK/MOVEMENT tags, ID3, Vorbis, MP4) and groups tracks into multi-movement works

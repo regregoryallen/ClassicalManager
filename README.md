@@ -22,7 +22,7 @@ Standard music players and playlist generators treat every track independently. 
 
 ## Quick Start
 
-Download and extract the [latest zip](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip), or clone with Git:
+Download and extract the [latest zip](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip) (extracts as `ClassicalManager-master`), or clone with Git:
 
 ```bash
 git clone https://github.com/regregoryallen/ClassicalManager.git
@@ -31,7 +31,7 @@ git clone https://github.com/regregoryallen/ClassicalManager.git
 Then from the extracted folder (Linux/macOS):
 
 ```bash
-cd ClassicalManager
+cd ClassicalManager-master   # or ClassicalManager if cloned
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

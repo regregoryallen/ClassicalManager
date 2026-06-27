@@ -49,7 +49,9 @@ Key capabilities:
 
 Download and extract the
 [latest zip from GitHub](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip),
-then follow the platform-specific instructions below.
+then follow the platform-specific instructions below. The extracted folder will
+be named `ClassicalManager-master` — you can rename it to `ClassicalManager` if
+you prefer.
 
 Alternatively, if you have Git installed:
 ```bash

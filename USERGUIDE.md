@@ -45,13 +45,24 @@ Key capabilities:
 - Tkinter (ships with the python.org installer; on Ubuntu/Debian: `sudo apt install python3-tk`)
 - Optional on Linux: `zenity` (GNOME) or `kdialog` (KDE) for native file dialogs
 
+### Download
+
+Download and extract the
+[latest zip from GitHub](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip),
+then follow the platform-specific instructions below.
+
+Alternatively, if you have Git installed:
+```bash
+git clone https://github.com/regregoryallen/ClassicalManager.git
+```
+
 ### Windows
 
 **Install Python** from [python.org](https://www.python.org/downloads/). During
 installation, check **"Add python.exe to PATH"** and leave **"tcl/tk and IDLE"**
 checked (Tkinter, which the GUI requires, is included via that option).
 
-Then clone the repository and either use the batch scripts or set up manually:
+Open the extracted folder and either use the batch scripts or set up manually:
 
 #### Automated (recommended)
 
@@ -59,7 +70,7 @@ Then clone the repository and either use the batch scripts or set up manually:
    environment, installs dependencies, copies the config template, and offers to
    create a desktop shortcut.
 2. Double-click **`run.bat`** (or the desktop shortcut) to launch the GUI.
-3. For CLI usage, open a terminal in the repo folder:
+3. For CLI usage, open a terminal in the folder:
    ```
    run.bat --cli scan --library "My Collection"
    ```
@@ -76,9 +87,9 @@ python main.py
 
 ### Linux / macOS
 
+Open a terminal in the extracted folder:
+
 ```bash
-git clone https://github.com/regregoryallen/ClassicalManager.git
-cd ClassicalManager
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -267,6 +278,18 @@ a simpler playlist system.
 - **Profile Summary**: Sortable table of all profiles with counts and durations
 - **Settings**: Opens the configuration dialog (see [Settings](#settings))
 - **View Logs**: Shows application log output for the current session
+- **Help**: Opens the in-app help window (see below)
+
+### In-App Help
+
+The **Help** button in the sidebar opens a searchable help window covering setup,
+all tabs, settings, CLI usage, common patterns, and troubleshooting. The help window
+stays open alongside the main app so you can refer to it while working.
+
+Each tab also has a **?** button in its top-right corner that opens the help window
+directly to the relevant section. If the help window is already open, clicking any
+**?** button navigates to that section without opening a second window. A navigation
+bar at the top of the help window lets you jump between all sections.
 
 ---
 

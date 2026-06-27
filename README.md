@@ -22,8 +22,15 @@ Standard music players and playlist generators treat every track independently. 
 
 ## Quick Start
 
+Download and extract the [latest zip](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip), or clone with Git:
+
 ```bash
 git clone https://github.com/regregoryallen/ClassicalManager.git
+```
+
+Then from the extracted folder (Linux/macOS):
+
+```bash
 cd ClassicalManager
 python3 -m venv venv
 source venv/bin/activate
@@ -37,7 +44,7 @@ python main.py
 **Prerequisite:** Install Python 3.12+ from [python.org](https://www.python.org/downloads/).
 Check **"Add python.exe to PATH"** during installation and leave **"tcl/tk and IDLE"** checked.
 
-Then from the cloned repo folder:
+From the extracted folder:
 
 - **Automated:** Double-click `setup.bat`, then `run.bat` (setup offers to create a desktop shortcut)
 - **CLI usage:** Open a terminal in the repo folder and run `run.bat --cli scan --library "My Collection"`

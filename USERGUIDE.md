@@ -1,4 +1,4 @@
-# Classical Music Playlist Manager - User Guide
+# Classical Music Playlist Manager — User Guide
 
 ## Table of Contents
 
@@ -20,20 +20,20 @@
 
 ## Overview
 
-Classical Music Playlist Manager is a desktop application designed for managing and
-generating playlists from classical music collections. Unlike general-purpose playlist
-tools, it understands the structure of classical music: multi-movement works, composers,
-and the relationship between tracks within a work.
+Classical Music Playlist Manager is a desktop application for managing and generating
+playlists from classical music collections. Unlike general-purpose playlist tools, it
+understands multi-movement works, composers, and how tracks relate within a
+composition — so a symphony's movements stay together in a shuffled playlist.
 
 Key capabilities:
 
-- **Automatic work detection** from MusicBrainz tags, WORK/MOVEMENT metadata, or
-  title-prefix heuristics
+- **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics
 - **Work-aware shuffling** that keeps movements together in the correct order
 - **Include/exclude rules** at the composer, album, work, or track level
 - **Export to M3U, JSON, or Plex** with configurable path rewriting
-- **Non-destructive metadata overrides** to correct grouping without modifying files
-- **Multiple libraries** to organize distinct collections (e.g., classical, holiday)
+- **Non-destructive metadata overrides** to correct grouping without modifying audio files
+- **Multiple libraries** for distinct collections (e.g., classical, holiday music)
+- **GUI and CLI** — the GUI for interactive work, the CLI for scripting and cron jobs
 
 ---
 
@@ -42,34 +42,54 @@ Key capabilities:
 ### Prerequisites
 
 - Python 3.12 or later
-- Tkinter (included with most Python installations; on Ubuntu/Debian: `sudo apt install python3-tk`)
-- For Linux: `zenity` (GNOME) or `kdialog` (KDE) for native file dialogs (optional but recommended)
+- Tkinter (ships with the python.org installer; on Ubuntu/Debian: `sudo apt install python3-tk`)
+- Optional on Linux: `zenity` (GNOME) or `kdialog` (KDE) for native file dialogs
 
-### Steps
+### Windows
 
-1. Clone or download the project:
-   ```bash
-   git clone <repository-url>
-   cd ClassicalManager
+**Install Python** from [python.org](https://www.python.org/downloads/). During
+installation, check **"Add python.exe to PATH"** and leave **"tcl/tk and IDLE"**
+checked (Tkinter, which the GUI requires, is included via that option).
+
+Then clone the repository and either use the batch scripts or set up manually:
+
+#### Automated (recommended)
+
+1. Double-click **`setup.bat`** — it checks your Python version, creates a virtual
+   environment, installs dependencies, copies the config template, and offers to
+   create a desktop shortcut.
+2. Double-click **`run.bat`** (or the desktop shortcut) to launch the GUI.
+3. For CLI usage, open a terminal in the repo folder:
+   ```
+   run.bat --cli scan --library "My Collection"
    ```
 
-2. Create a virtual environment and install dependencies:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate    # Linux/macOS
-   venv\Scripts\activate       # Windows
-   pip install -r requirements.txt
-   ```
+#### Manual
 
-3. Create your configuration file from the template:
-   ```bash
-   cp config.example.json config.json
-   ```
+```
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+copy config.example.json config.json
+python main.py
+```
 
-4. Launch the application:
-   ```bash
-   python main.py
-   ```
+### Linux / macOS
+
+```bash
+git clone https://github.com/regregoryallen/ClassicalManager.git
+cd ClassicalManager
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp config.example.json config.json
+python main.py
+```
+
+On Ubuntu/Debian, install Tkinter if it is not already present:
+```bash
+sudo apt install python3-tk
+```
 
 ### Dependencies
 
@@ -94,29 +114,27 @@ If you plan to push playlists to a Plex server, open `config.json` (or use
 - **Token**: Your Plex authentication token
   ([how to find it](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/))
 - **Music Section**: The name of your Plex music library (e.g., `Music`)
-- **Path Rules**: If your music files are at different paths on the Plex server than
-  on your local machine, add find/replace rules
+- **Path Rules**: If your music files are at different paths on the Plex server vs.
+  your local machine, add find/replace rules (see [Settings](#settings))
 
 ### 2. Configure M3U Export (optional)
 
 In the same config file or Settings dialog:
 
-- **Path Style**: `absolute` (full paths) or `relative_to_playlist` (paths relative to
-  the M3U file location)
+- **Path Style**: `absolute` (full file paths) or `relative_to_playlist` (paths
+  relative to the M3U file's location)
 - **Base Path**: Optional prefix prepended to absolute paths
-- **Path Rules**: Same find/replace as Plex, for path translation
+- **Path Rules**: Find/replace rules for path translation, same format as Plex
 
 ### 3. Database Location
 
 By default, the database is stored as `music_manager.db` in the project directory.
-To change this, open **Settings** and set a new database file path. Changes take
-effect after restarting the app.
+To change this, open **Settings** and set a new path. The change takes effect after
+restarting the app.
 
 ---
 
 ## Getting Started
-
-This walkthrough covers the most common first-time workflow.
 
 ### Step 1: Create a Library
 
@@ -128,7 +146,7 @@ settings. You might have one for your main collection and another for holiday mu
 
 ### Step 2: Add Source Folders
 
-Source folders are the root directories where your music files live. Every audio file
+Source folders are the root directories containing your music files. Every audio file
 under these folders will be discovered during scanning.
 
 1. Click **Add Folder**
@@ -139,23 +157,24 @@ under these folders will be discovered during scanning.
 
 Click **Rescan Library**. The scanner will:
 
-- Discover all audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC, and more)
-- Extract metadata: title, artist, album, composer, track/disc numbers, duration
+- Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC, etc.)
+- Extract metadata: title, artist, album, composer, genre, conductor, ensemble,
+  track/disc numbers, duration
 - Read MusicBrainz identifiers if present
 - Group tracks into albums (one album per folder)
 - Detect multi-movement works using metadata and heuristics
 
-The progress bar and status text show scanning progress. For large collections,
-this may take a few minutes. You can click **Cancel Scan** to abort.
+The progress bar shows scanning progress. Large collections may take several minutes.
+Click **Cancel Scan** to abort at any time.
 
-When complete, the **Metrics** section shows counts of albums, works, tracks, and
-composers found.
+When complete, the **Metrics** section in the sidebar shows counts of albums, works,
+tracks, and composers found.
 
 ### Step 4: Browse Your Library
 
-Switch to the **Explorer & Rules** tab to browse what was scanned:
+Switch to the **Explorer & Rules** tab:
 
-- The left pane lists all albums
+- The left pane lists all albums with genre, year, and track count
 - Click an album to see its works and tracks in the right pane
 - The "Source" column shows how each work was detected:
   `mb_workid`, `work_tag`, `heuristic`, or `standalone`
@@ -164,12 +183,12 @@ Switch to the **Explorer & Rules** tab to browse what was scanned:
 
 Switch to the **Playlist Builder** tab:
 
-1. In the Library pane (left), select albums, works, or tracks you want
-2. Click **Add >>** to include them (or double-click)
+1. In the Library pane (left), select albums, works, or tracks
+2. Click **Add >>** (or double-click) to include them
 3. The Playlist pane (right) shows what's included
 4. Adjust settings: shuffle mode, work integrity, length limits
 5. Click **Preview** to see the resolved playlist
-6. Click **Export M3U**, **Export JSON**, or **Push to Plex** to output it
+6. Click **Export M3U**, **Export JSON**, or **Push to Plex**
 
 ### Step 6: Save Your Profile
 
@@ -185,7 +204,7 @@ The sidebar (left panel) is always visible and manages library-level operations.
 ### Library Selector
 
 The dropdown at the top lists all libraries. Selecting one loads its data into all
-tabs. The **(none)** option appears when no libraries exist.
+tabs.
 
 ### Library Management
 
@@ -195,12 +214,12 @@ tabs. The **(none)** option appears when no libraries exist.
 | **Rename** | Rename the active library |
 | **Delete** | Delete the library and all its data (confirmation required) |
 | **Export Lib** | Save the entire library to a JSON file (structure, profiles, overrides) |
-| **Import Lib** | Load a library from a JSON file (auto-handles name collisions) |
+| **Import Lib** | Load a library from a JSON file (handles name collisions automatically) |
 
 ### Metrics
 
 Displays live counts for the active library: Albums, Works, Tracks, Composers.
-Updated automatically after scans and data changes.
+Updated automatically after scans.
 
 ### Rescan Library
 
@@ -210,19 +229,17 @@ Overrides are preserved across rescans. During scanning, the button changes to
 
 ### Scan Changes
 
-Runs an incremental scan that only processes new, changed, or deleted files. Compares
-each file's modification time and size against stored values to skip unchanged files.
-Much faster than a full rescan for day-to-day library maintenance.
+Runs an incremental scan that only processes new, changed, or deleted files by
+comparing each file's modification time and size against stored values. Much faster
+than a full rescan for day-to-day updates.
 
-Requires one prior full scan to populate file metadata. Work detection is re-run only
-on albums that had changes.
+Requires one prior full scan. Work detection re-runs only on albums that had changes.
 
 ### Re-detect Works
 
 Re-runs all five work detection steps (override, MusicBrainz, WORK tag, heuristic,
-standalone) using tag data already stored in the database, without rescanning files
-from disk. This is much faster than a full rescan and is useful after correcting
-overrides or when detection logic has been updated.
+standalone) using tag data already in the database, without rescanning files from disk.
+Useful after editing overrides or when detection logic has been updated.
 
 ### Source Folders
 
@@ -234,11 +251,8 @@ Lists the root directories for the active library.
 
 ### Plex Section
 
-An entry field to map this library to a specific Plex music library section. This
-overrides the default section from config.json, allowing different libraries to push
-to different Plex sections.
-
-Leave blank if you don't use Plex or want to use the default from Settings.
+An entry field to map this library to a specific Plex music library section, overriding
+the default from config.json. Leave blank to use the default from Settings.
 
 ### Import Old Playlists
 
@@ -248,51 +262,51 @@ a simpler playlist system.
 
 ### Bottom Buttons
 
-- **Library Integrity Check**: Runs integrity checks (orphaned tracks, unscanned
-  files, duplicates, cross-folder works) and displays a report
-- **Profile Summary**: Shows a sortable table of all profiles with counts and durations
+- **Library Integrity Check**: Checks for orphaned tracks, unscanned files,
+  duplicates, and cross-folder works
+- **Profile Summary**: Sortable table of all profiles with counts and durations
 - **Settings**: Opens the configuration dialog (see [Settings](#settings))
-- **View Logs**: Opens a window showing application log output, useful for
-  troubleshooting scan or Plex errors
+- **View Logs**: Shows application log output for the current session
 
 ---
 
 ## Explorer & Rules Tab
 
-This tab provides a browsable view of your library and lets you build include/exclude
+This tab provides a browsable view of your library and lets you set include/exclude
 rules.
 
 ### Album List (left pane)
 
-- Shows all albums sorted by title
-- Columns: Album name, Year, Track count
-- Use the filter field at the top to narrow by album title or artist (live filtering
-  as you type)
+- All albums sorted by title
+- Columns: Album, Genre, Year, Tracks
+- Use the filter field to narrow by album title, artist, or track metadata (genre,
+  performer, conductor, ensemble). Filtering is live as you type.
 
 ### Works & Tracks (right pane)
 
-- Click an album to see its works and individual tracks
-- Hierarchical view: Works contain tracks
-- Columns: Name, Source (how the work was detected), Composer, Track count
+Click an album to see its works and tracks in a hierarchical view.
+
+- Columns: Name, Source (detection method), Composer, Tracks
+- Works contain their constituent tracks as children
 
 ### Context Menus
 
-Right-click on any item to include or exclude it:
+Right-click any item for:
 
-- **Play** (tracks only): Opens the audio file in your system's default music player
+- **Play** (tracks only): Opens the audio file in your system's default player
 - **Include Album/Work/Track**: Add an include rule
 - **Exclude Album/Work/Track**: Add an exclude rule
 
 ### Rules Display
 
-The bottom section shows all active rules. Select a rule and click **Remove** to
-delete it. Rules created here are shared with the Playlist Builder tab.
+The bottom section shows all active rules for the selected profile. Select a rule and
+click **Remove** to delete it. Rules are shared with the Playlist Builder tab.
 
 ---
 
 ## Playlist Builder Tab
 
-This is the main workspace for creating playlists.
+The main workspace for creating playlists.
 
 ### Profile Management (top row)
 
@@ -300,8 +314,8 @@ This is the main workspace for creating playlists.
 - **Load**: Pick from saved profiles to restore settings and rules
 - **Save**: Save current settings and rules under the profile name
 - **Delete**: Remove one or more saved profiles
-- **Profile Summary**: Opens a popup showing a sortable table of all profiles with
-  album, work, track, composer counts, and total duration
+- **Profile Summary**: Sortable table of all profiles with album, work, track,
+  composer counts, and total duration
 
 ### Settings (second row)
 
@@ -325,39 +339,39 @@ This is the main workspace for creating playlists.
 #### Work Integrity
 
 - **enforce**: If any track from a work is selected, include the entire work in
-  correct movement order. This ensures you never hear just one movement of a symphony.
+  correct movement order. Ensures you never hear just one movement of a symphony.
 - **respect_selection**: Play exactly what was selected, even if it means partial works.
 
 ### Library Pane (left)
 
-Browse the full library with a hierarchical tree: Albums > Works > Tracks.
+Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
-- **Columns**: Name, Composer (album artist for albums, work/track composer), Info
-  (track count or duration)
+- **Columns**: Name, Composer, Genre, Info (track count or duration)
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded
-- **Filter**: Type in the filter box to narrow the view (live filtering, case-insensitive,
-  matches at any level). Parents and children of matching items stay visible.
-- **Hide 1-track**: Checkbox to hide single-track (standalone) works (default off).
-  A gold warning appears when enabled to note that playlist items may be hidden.
-- **+/−**: Expand or collapse all tree nodes (expands to work level only, not
-  individual tracks)
-- **Column sorting**: Double-click any column header to sort. Click again to reverse.
-  An ▲ or ▼ indicator appears next to the sorted column name. Numeric values
-  (track counts, durations, years) are sorted numerically.
-- **Add items**: Select one or more items and click **Add >>**, or double-click
-  (double-clicking the expand/collapse arrow does not trigger add)
-- **Right-click**: Context menu with **Play** (tracks), **Details...** (work/track
-  details popup), and **Show Album** (full album view with editing)
+- **Filter**: Type to narrow the view (case-insensitive, live filtering). Matches
+  against name, composer, genre, performer, conductor, and ensemble at any level.
+  Parents and children of matching items stay visible.
+- **Hide 1-track**: Hides standalone (single-track) works. A gold warning appears
+  when enabled to note that playlist items may be hidden.
+- **+/−**: Expand or collapse all tree nodes (expands to work level, not individual
+  tracks)
+- **Column sorting**: Double-click any column header to sort; click again to reverse.
+  An arrow indicator (▲/▼) appears next to the sorted column. Numeric values are
+  sorted numerically.
+- **Adding items**: Select one or more items and click **Add >>**, or double-click.
+  Double-clicking the expand/collapse arrow does not trigger an add.
+- **Right-click**: Context menu with **Play** (tracks), **Details** (metadata popup),
+  and **Show Album** (full album view with editing)
 
 ### Playlist Pane (right)
 
-Shows only the items that will be in your playlist. Tree expansion, sort order,
+Shows only the items that will appear in your playlist. Tree expansion, sort order,
 and scroll position are preserved when items are added or removed.
 
-- **Filter**: Same text filter as the library pane
-- **Column sorting**: Same double-click-to-sort as the library pane
-- **Remove items**: Select and click **<< Remove**, or double-click
-- **Right-click**: Same Play/Details/Show Album context menu as the library pane
+- **Filter**: Same text filter as the library pane, matching against the same fields
+- **Column sorting**: Same double-click-to-sort behavior
+- **Removing items**: Select and click **<< Remove**, or double-click
+- **Right-click**: Same context menu as the library pane
 
 ### Action Buttons (bottom)
 
@@ -372,73 +386,70 @@ and scroll position are preserved when items are added or removed.
 
 ## Cleanup / Overlay Tab
 
-This tab is for reviewing, correcting, and managing work groupings and metadata
-overrides across your library.
+Review, correct, and manage work groupings and metadata overrides.
 
 ### Works Browser
 
 The top section lists works with filtering and search controls:
 
-- **Source dropdown**: Filter by detection method — Heuristic, Standalone, All Works,
+- **Source dropdown**: Filter by detection method — All Works, Heuristic, Standalone,
   Override, MB Work ID, or Work Tag
 - **Search field**: Live filtering by work name, album title, or composer
-- **Hide 1-track checkbox**: Hides standalone (single-track) works to focus on
-  multi-track groupings (enabled by default)
+- **Hide 1-track**: Hides standalone works to focus on multi-track groupings
+  (enabled by default)
 - **+/−**: Expand or collapse all tree nodes
-- **Multi-select**: Use Ctrl+click or Shift+click to select multiple works
+- **Multi-select**: Ctrl+click or Shift+click to select multiple works
 
 Works are shown hierarchically with their tracks as children. Columns: Name, Source,
 Album, Tracks, Composer.
 
 ### Right-Click Context Menu
 
-Right-click any work or track in the browser for:
-
-- **Play** (tracks only): Opens the audio file in your system's default music player
-- **Details...**: Opens a read-only popup showing all work and track metadata
-  (names, paths, MB IDs, durations) with copy buttons for work name and MB work ID
+- **Play** (tracks only): Opens the audio file in your system's default player
+- **Details**: Read-only popup showing all work and track metadata (names, paths,
+  MB IDs, durations) with copy buttons
 - **Show Album**: Opens the album popup (see below)
-- **Set Work Name/Group Key/Composer**: Focuses the corresponding edit field
+- **Set Work Name / Group Key / Composer**: Focuses the corresponding edit field
 - **Make Standalone**: Sets `__standalone__` group key for all tracks in the selected
   work(s), suppressing erroneous groupings on the next re-detect
 
 ### Edit Section
 
-Edit controls that operate on all selected works:
+Operates on all selected works:
 
 - **Set Work Name**: Change the display name (creates a `work_name` override)
 - **Set Group Key**: Assign a `work_group_key` override to control grouping.
   Requires re-detect or rescan to take effect.
-- **Make Standalone**: Marks tracks with a special `__standalone__` group key that
-  forces each track into its own standalone work, bypassing all detection steps.
-  Useful for suppressing erroneous WORK tags or MB work IDs.
-- **Set Composer**: Override the composer for all tracks
-- **Show Album**: Opens the Show Album popup for the selected work's album
+- **Make Standalone**: Marks tracks with `__standalone__`, forcing each track into
+  its own work and bypassing all detection. Useful for suppressing incorrect WORK
+  tags or MB work IDs.
+- **Set Composer**: Override the composer for all tracks in the selected works
+- **Show Album**: Opens the album popup for the selected work's album
 
 ### Show Album Popup
 
-A detailed album view for inspecting and editing all works and tracks in an album:
+A detailed album view for inspecting and editing:
 
 - **Album header**: Edit album title, artist, and year (creates album-scope overrides)
-- **Works/Tracks tree**: Shows all works with tracks as children, multi-select enabled.
-  Right-click a track to **Play** it in your default music player.
+- **Works/Tracks tree**: All works with tracks as children; multi-select enabled.
+  Right-click a track to **Play** it.
 - **Track actions**: Set Group Key, Work Name, or Composer for selected tracks.
-  A **Make Standalone** button sets `__standalone__` for selected tracks.
+  **Make Standalone** sets `__standalone__` for selected tracks.
 - Selection count shows how many tracks are currently selected
 
 ### Current Overrides
 
 The bottom section lists all metadata overrides for the active library with a live
-search field for filtering.
+search field.
 
 Overrides are non-destructive: they modify database values without touching your
-audio files. They survive rescans (applied automatically after each scan).
+audio files and survive rescans (applied automatically after each scan).
 
 Supported override fields:
 
 | Scope | Fields |
 |-------|--------|
-| Track | composer, work_group_key, work_name, disc_number, track_number, movement_number, title |
+| Track | composer, work_group_key, work_name, disc_number, track_number, movement_number, title, genre, performer, conductor, ensemble |
 | Album | album_title, album_artist, year |
 
 Use **Export Overrides JSON** and **Import Overrides JSON** to back up or share
@@ -453,34 +464,32 @@ All changes are saved to `config.json`.
 
 ### Database
 
-- **Database File**: Path to the SQLite database file. Stored as `db_path` in
-  `config.json`, so both the GUI and CLI use the same database. Changing this
-  requires a restart. Use the browse button to select a location.
-  To move the database, copy the `.db` file (and any `-wal`/`-shm` files) to
-  the new location, then update this setting.
+- **Database File**: Path to the SQLite database. Both the GUI and CLI read this from
+  `config.json`. Changing the path requires a restart. To move the database, copy the
+  `.db` file (and any `-wal`/`-shm` files) to the new location, then update this
+  setting.
 
 ### Plex
 
 - **Server URL**: Plex server address (e.g., `http://192.168.1.100:32400`)
 - **Token**: Plex authentication token (stored in config.json)
-- **Token Env Var**: Alternative: name of an environment variable holding the token
-  (e.g., `PLEX_TOKEN`). Preferred for security.
+- **Token Env Var**: Name of an environment variable holding the token (e.g.,
+  `PLEX_TOKEN`). Preferred over a plaintext token for security.
 - **Default Section**: Default Plex music library name. Overridden by the per-library
   Plex Section field in the sidebar.
 
 ### Plex Path Rules
 
-If your music files are at different paths on the Plex server than on your local
-machine, add path rewrite rules. Format: one rule per line, `find -> replace`.
+If your music files are at different paths on the Plex server vs. your local machine,
+add rewrite rules. Format: one rule per line, `find -> replace`.
 
-Example: if your local path is `/home/user/Music` but Plex sees `/mnt/MediaLib/Music`:
+Example — local path `/home/user/Music`, Plex sees `/mnt/MediaLib/Music`:
 ```
 /home/user/Music -> /mnt/MediaLib/Music
 ```
 
-**Windows note:** All paths are stored internally with forward slashes, even on
-Windows. When writing path rules on Windows, use forward slashes for the `find`
-portion to match the stored paths:
+All paths are stored internally with forward slashes, even on Windows. Use forward
+slashes in the `find` portion:
 ```
 C:/Users/jane/Music -> /volume1/Music
 ```
@@ -500,10 +509,17 @@ C:/Users/jane/Music -> /volume1/Music
 The CLI provides the same core functionality for scripting and automation.
 
 ```bash
-# Activate your virtual environment first
+# Linux/macOS — activate your virtual environment first
 source venv/bin/activate
+python main.py --cli <command> [options]
+```
 
-# All CLI commands use the --cli flag
+```
+:: Windows — use run.bat or activate manually
+run.bat --cli <command> [options]
+
+:: or
+venv\Scripts\activate
 python main.py --cli <command> [options]
 ```
 
@@ -511,78 +527,67 @@ python main.py --cli <command> [options]
 
 #### scan
 Full rescan of a library's source folders.
-```bash
+```
 python main.py --cli scan --library "My Collection" [-v] [-q]
 ```
 
 #### scan-changes
-Incremental scan: only processes new, changed, or deleted files.
-```bash
+Incremental scan: only processes new, changed, or deleted files. Compares file
+modification time and size against stored values. Much faster than a full rescan.
+Requires one prior full scan.
+```
 python main.py --cli scan-changes --library "My Collection" [-v] [-q]
 ```
-Compares file modification time and size against stored values. Much faster than
-a full rescan for routine updates. Requires one prior full scan.
 
 #### redetect
-Re-run all work detection steps using tag data stored in the database.
-```bash
+Re-run all work detection steps from tag data already in the database, without
+reading audio files.
+```
 python main.py --cli redetect --library "My Collection" [-v] [-q]
 ```
-Much faster than a full rescan. Re-runs all five detection steps (override,
-MusicBrainz, WORK tag, heuristic, standalone) without reading audio files.
 
 #### preview
 Dry-run a profile without writing files.
-```bash
+```
 python main.py --cli preview --profile "Sunday Classical" [-v]
 ```
 
 #### generate
 Generate and export a playlist.
-```bash
-# Export to M3U
-python main.py --cli generate --profile "Sunday Classical" --format m3u --output playlist.m3u
-
-# Export to JSON
-python main.py --cli generate --profile "Sunday Classical" --format json --output playlist.json
-
-# Push to Plex
-python main.py --cli generate --profile "Sunday Classical" --target plex
+```
+python main.py --cli generate --profile "Sunday" --format m3u --output playlist.m3u
+python main.py --cli generate --profile "Sunday" --format json --output playlist.json
+python main.py --cli generate --profile "Sunday" --target plex
 ```
 
 #### generate-all
 Generate playlists for all profiles in a library.
-```bash
-# Export all as M3U files to a directory
+```
 python main.py --cli generate-all --library "My Collection" --output-dir ./playlists [-q]
-
-# Push all to Plex
 python main.py --cli generate-all --library "My Collection" --target plex [-q]
 ```
 
 #### integrity
-Run integrity checks on a library.
-```bash
+Run integrity checks on a library. Reports orphaned tracks, unscanned files,
+duplicates, and cross-folder works.
+```
 python main.py --cli integrity --library "My Collection" [-v]
 ```
-Reports orphaned tracks, unscanned files, duplicates, and cross-folder works.
 
 #### overrides
 Export or import metadata overrides.
-```bash
-# Export
+```
 python main.py --cli overrides export --library "My Collection" --output overrides.json
-
-# Import
 python main.py --cli overrides import --library "My Collection" --input overrides.json
 ```
 
-#### Common Flags
+### Common Flags
 
 | Flag | Description |
 |------|-------------|
 | `-v` / `--verbose` | Debug-level logging |
-| `-q` / `--quiet` | Suppress progress output; only show errors (ideal for cron jobs) |
+| `-q` / `--quiet` | Suppress progress output; errors only (ideal for cron jobs) |
+| `-h` / `--help` | Print usage summary |
 
 ---
 
@@ -599,36 +604,42 @@ python main.py --cli overrides import --library "My Collection" --input override
 ### Creating a Time-Limited Playlist
 
 1. Add your desired albums/works to the playlist
-2. Set Length to **duration** and enter a duration: `1:00` for one hour, `2:30` for
+2. Set Length to **duration** and enter a value: `1:00` for one hour, `2:30` for
    2.5 hours, or a plain number for seconds (e.g., `3600`)
-3. Set a **Seed** value if you want the same selection each time
+3. Set a **Seed** value for a reproducible selection
 4. Export
 
-### Managing Multiple Music Sections in Plex
+### Filtering by Genre or Performer
+
+Use the filter field in the Playlist Builder to search by genre (e.g., "chamber"),
+performer, conductor, or ensemble name. The filter matches against all of these
+metadata fields, not just the displayed name.
+
+### Managing Multiple Plex Sections
 
 1. Create separate libraries (e.g., "Classical", "Christmas")
-2. For each library, set the **Plex Section** field in the sidebar to the
-   corresponding Plex library name (e.g., "MainMusic", "XmasMusic")
-3. When you push a playlist, it automatically targets the correct Plex section
+2. Set the **Plex Section** field in the sidebar to the corresponding Plex library
+   name for each
+3. Playlists automatically target the correct Plex section when pushed
 
 ### Correcting Work Grouping
 
 If the scanner grouped tracks incorrectly:
 
 1. Go to the **Cleanup / Overlay** tab
-2. Use the **Source** dropdown to filter by detection method (e.g., MB Work ID, Work Tag)
-3. Find the work and right-click → **Show Album** to see the full album context
+2. Use the **Source** dropdown to filter by detection method
+3. Find the work and right-click > **Show Album** to see the full album context
 4. To merge tracks into one work: select tracks, set the same **Group Key** for all
-5. To break apart an incorrect grouping: select the work(s) and click **Make Standalone**
-6. Click **Re-detect Works** in the sidebar to apply changes
+5. To split an incorrect grouping: select the work(s) and click **Make Standalone**
+6. Click **Re-detect Works** in the sidebar to apply
 
 ### Suppressing Erroneous Work Tags
 
-Some files have incorrect WORK tags (e.g., "PMEDIA" from bulk tagging). To clear these:
+Some files have incorrect WORK tags (e.g., "PMEDIA" from bulk tagging tools):
 
 1. Switch the Source dropdown to **Work Tag** or **MB Work ID**
 2. Multi-select the incorrect works (Ctrl+click or Shift+click)
-3. Click **Make Standalone** to mark all tracks as standalone
+3. Click **Make Standalone**
 4. Click **Re-detect Works** to apply
 
 ### Migrating from Simple Playlists
@@ -637,32 +648,28 @@ If you have text files listing album directories (one per line):
 
 1. Click **Import Old Playlists** in the sidebar
 2. Select your text files
-3. Each file becomes a named profile with include rules for matched albums
+3. Each file becomes a profile with include rules for matched albums
 4. Load the profile in the Playlist Builder to review and adjust
 
 ### Backing Up Your Library
 
-Use **Export Lib** to save the entire library (structure, profiles, overrides) to
-a JSON file. Use **Import Lib** to restore it on the same or different machine.
-Source folders must exist at the same paths (or be updated after import) for
-rescanning to work.
+**Export Lib** saves the entire library (structure, profiles, overrides) to a JSON
+file. **Import Lib** restores it on the same or a different machine. Source folders
+must exist at the same paths (or be updated after import) for rescanning to work.
 
 ### Sharing a Database Across Systems
 
-You can place the database on a shared drive (set `db_path` in `config.json`)
-and access it from multiple machines — but only run the app on one machine at a
-time (SQLite does not support concurrent access over network filesystems).
+You can place the database on a shared drive (set `db_path` in `config.json`) and
+access it from multiple machines — but only run the app on one machine at a time.
+SQLite does not support concurrent access over network filesystems.
 
-If the app cannot open the database (e.g., another instance has it locked, or
-the network share is not mounted), it will show a diagnostic message explaining
-the likely cause. The GUI offers the option to fall back to the local default
-database; the CLI exits with an error.
+If the app cannot open the database (locked by another instance, network share
+unmounted), it shows a diagnostic message. The GUI offers the option to fall back
+to the local default database; the CLI exits with an error.
 
 If source folders are at different paths on each machine (e.g., `/mnt/Music` on
-Linux vs. `M:/Music` on Windows), scanning should only be done from one machine.
-The other machine can generate playlists using path rules to translate paths for
-its target (Plex, M3U). If you attempt a scan with source folders that don't
-exist on the current machine, the app will warn you before proceeding.
+Linux vs. `M:/Music` on Windows), scan from only one machine. The other machine
+can generate playlists using path rules to translate paths for its target.
 
 ---
 
@@ -693,14 +700,12 @@ exist on the current machine, the app will warn you before proceeding.
 }
 ```
 
-- **active_library**: Legacy field (GUI uses selected library)
-- **db_path**: Optional path to the SQLite database file. Omit or leave empty to
-  use the default (`music_manager.db` in the project directory). Both the GUI and
-  CLI read this setting.
-- **targets.plex**: Omit entirely if you don't use Plex
-  - At least one of `token` or `token_env` is required
-  - `music_section` is optional if set per-library in the sidebar
-- **targets.m3u**: Controls M3U export behavior
+| Field | Notes |
+|-------|-------|
+| `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. |
+| `targets.plex` | Omit entirely if you don't use Plex. At least one of `token` or `token_env` is required. |
+| `targets.plex.music_section` | Optional if set per-library in the sidebar. |
+| `targets.m3u` | Controls M3U export path style and rewriting. |
 
 ### gui_prefs.json (auto-managed)
 
@@ -715,49 +720,61 @@ MP3, FLAC, OGG, OPUS, M4A, MP4, WAV, WMA, AAC, ALAC, APE, WavPack (.wv)
 ## Troubleshooting
 
 ### "No module named customtkinter"
-Run `pip install -r requirements.txt` inside your virtual environment.
+
+Run `pip install -r requirements.txt` inside your virtual environment. On Windows,
+run `setup.bat` to install all dependencies automatically.
+
+### setup.bat says "Python is not installed"
+
+Install Python 3.12+ from [python.org](https://www.python.org/downloads/). Make sure
+to check **"Add python.exe to PATH"** during installation. If you installed Python
+after opening the terminal, close and reopen it so the PATH takes effect.
 
 ### File dialogs look different on Linux
-The app uses zenity (GNOME) or kdialog (KDE) for native file dialogs on Linux.
-If neither is installed, it falls back to Tkinter's built-in dialogs. Install
-zenity with `sudo apt install zenity`.
+
+The app uses zenity (GNOME) or kdialog (KDE) for native file dialogs. If neither is
+installed, it falls back to Tkinter's built-in dialogs:
+```bash
+sudo apt install zenity
+```
 
 ### Plex push fails with "section not found"
-Verify the Plex Section name matches exactly (case-sensitive) with your Plex
-library name. Check the per-library section in the sidebar and the default in
-Settings.
+
+The Plex Section name must match exactly (case-sensitive) with your Plex library name.
+Check the per-library section in the sidebar and the default in Settings.
 
 ### Plex push fails with unmatched tracks
-Your path rules may not correctly translate local paths to Plex server paths.
-Click **View Logs** to see which tracks failed to match. Adjust path rules in
-Settings.
+
+Path rules may not correctly translate local paths to Plex server paths. Click
+**View Logs** to see which tracks failed. Adjust path rules in Settings.
 
 ### Works grouped incorrectly
-Go to the **Cleanup / Overlay** tab. Use the Source dropdown to filter by detection
-method and the search field to find specific works. Right-click → **Details** to
-inspect metadata, or **Show Album** to see the full album context and edit
-track-level overrides.
 
-Use **Set Group Key** to merge tracks into a work, or **Make Standalone** to break
-apart incorrect groupings. Click **Re-detect Works** to apply changes without a
-full rescan.
+Go to the **Cleanup / Overlay** tab. Use the Source dropdown to filter by detection
+method and the search field to find specific works. Right-click > **Details** to
+inspect metadata, or **Show Album** for the full album context.
+
+Use **Set Group Key** to merge tracks, or **Make Standalone** to split them. Click
+**Re-detect Works** to apply changes without a full rescan.
 
 ### Scan takes too long
-Large collections (thousands of albums) may take several minutes for a full scan.
-Use **Scan Changes** for routine updates — it only processes new, changed, or
-deleted files and is much faster. You can cancel either scan type mid-operation.
+
+Large collections may take several minutes for a full scan. Use **Scan Changes** for
+routine updates — it only processes new, changed, or deleted files. Either scan type
+can be cancelled mid-operation.
 
 ### "Cannot open database" or "disk I/O error"
-This typically means the database file is locked by another instance of the app
-on a different machine, or the network share is not mounted. Close the app on
-all other machines and ensure the share is accessible. The GUI will offer to fall
-back to the local default database if the configured path is unreachable.
+
+The database file is likely locked by another instance or the network share is not
+mounted. Close the app on all other machines and verify the share is accessible. The
+GUI offers to fall back to the local default database.
 
 ### Database path change not taking effect
-Database path changes (in Settings or `config.json`) require an application
-restart. Close and reopen the app. Both GUI and CLI read `db_path` from
-`config.json`.
 
-### View Logs shows no output
-The log viewer captures output from the current session only. If you just started
-the app, perform an action (scan, export, etc.) to generate log entries.
+Database path changes require an application restart. Close and reopen the app.
+
+### Console window appears briefly on Windows
+
+When launching via the desktop shortcut, a console window may appear minimized
+briefly while the batch script activates the virtual environment. This is normal
+and closes automatically once the GUI loads.

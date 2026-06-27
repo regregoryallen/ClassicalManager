@@ -156,6 +156,7 @@ class App:
         self._lib_search_meta = {}   # iid → searchable text for builder lib tree
         self._pl_search_meta = {}    # iid → searchable text for builder pl tree
         self._tree_sort_state = {}     # tree id → (column, reverse)
+        self._help_window = None       # singleton help window
 
         self._setup_theme()
         self._build_layout()
@@ -459,12 +460,15 @@ class App:
         # Bottom buttons
         bottom_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         bottom_btns.pack(fill="x", padx=15, pady=(5, 15))
-        ctk.CTkButton(bottom_btns, text="Settings", width=110,
+        ctk.CTkButton(bottom_btns, text="Settings", width=72,
                       fg_color="gray30", hover_color="gray40",
-                      command=self._show_settings).pack(side="left", padx=(0, 5))
-        ctk.CTkButton(bottom_btns, text="View Logs", width=110,
+                      command=self._show_settings).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(bottom_btns, text="View Logs", width=72,
                       fg_color="gray30", hover_color="gray40",
-                      command=self._show_log_viewer).pack(side="left")
+                      command=self._show_log_viewer).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(bottom_btns, text="Help", width=72,
+                      fg_color="gray30", hover_color="gray40",
+                      command=self._show_help).pack(side="left")
 
     def _refresh_library_list(self):
         """Reload the library dropdown from the database."""
@@ -552,6 +556,108 @@ class App:
         value = self.plex_section_entry.get().strip()
         self.active_library.plex_section = value or ""
         self.active_library.save()
+
+    def _show_help(self, section=None):
+        """Open or focus the help window, optionally jumping to a section."""
+        if self._help_window and self._help_window.winfo_exists():
+            self._help_window.lift()
+            self._help_window.focus_force()
+            if section:
+                self._help_jump(section)
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Help \u2014 Classical Music Playlist Manager")
+        win.transient(self.root)
+        self._center_on_main(win, 720, 720)
+        # Non-modal: no grab_set() so main app stays interactive
+
+        self._help_window = win
+
+        def on_close():
+            self._help_window = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        ctk = self.ctk
+
+        # Navigation bar
+        nav = ctk.CTkFrame(win, fg_color="transparent")
+        nav.pack(fill="x", padx=5, pady=(5, 0))
+
+        nav_sections = [
+            ("Setup", "setup"),
+            ("Getting Started", "getting_started"),
+            ("Sidebar", "sidebar"),
+            ("Explorer", "explorer"),
+            ("Builder", "builder"),
+            ("Cleanup", "cleanup"),
+            ("Settings", "settings"),
+            ("CLI", "cli"),
+            ("Patterns", "patterns"),
+            ("Troubleshooting", "troubleshooting"),
+        ]
+        for label, mark in nav_sections:
+            ctk.CTkButton(
+                nav, text=label, width=0, height=24,
+                font=ctk.CTkFont(size=11),
+                fg_color="gray30", hover_color="gray40",
+                command=lambda m=mark: self._help_jump(m),
+            ).pack(side="left", padx=1, pady=2)
+
+        # Text content
+        text = tk.Text(win, bg="#1e1e1e", fg="#cccccc",
+                       font=("Segoe UI", 10), wrap="word",
+                       state="normal", padx=12, pady=8,
+                       relief="flat", borderwidth=0,
+                       selectbackground="#3a5a8a")
+        text.pack(fill="both", expand=True, padx=5, pady=5)
+
+        scroll = ttk.Scrollbar(text, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+
+        # Configure text tags
+        text.tag_configure("title", foreground="#ffffff",
+                           font=("Segoe UI", 16, "bold"),
+                           spacing1=4, spacing3=2)
+        text.tag_configure("h1", foreground="#88ccff",
+                           font=("Segoe UI", 13, "bold"),
+                           spacing1=10, spacing3=1)
+        text.tag_configure("h2", foreground="#bbddaa",
+                           font=("Segoe UI", 11, "bold"),
+                           spacing1=4, spacing3=1)
+        text.tag_configure("bold", foreground="#eeeeee",
+                           font=("Segoe UI", 10, "bold"))
+        text.tag_configure("body", foreground="#cccccc",
+                           font=("Segoe UI", 10))
+        text.tag_configure("code", foreground="#d4a76a",
+                           font=("Consolas", 10))
+        text.tag_configure("sep", foreground="#444444")
+
+        from music_manager.interfaces.help_content import build_help_content
+        build_help_content(text)
+
+        text.configure(state="disabled")
+
+        # Bottom close button
+        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=5, pady=5)
+        ctk.CTkButton(btn_frame, text="Close", width=80,
+                      command=on_close).pack(side="right", padx=3)
+
+        self._help_text = text
+
+        if section:
+            win.after(50, lambda: self._help_jump(section))
+
+    def _help_jump(self, section):
+        """Scroll the help text widget to a named section mark."""
+        try:
+            self._help_text.see(section)
+        except (tk.TclError, AttributeError):
+            pass
 
     def _show_log_viewer(self):
         """Open a window displaying captured log output."""
@@ -1606,6 +1712,11 @@ class App:
                                             placeholder_text="Filter albums and works...",
                                             textvariable=self._explorer_search_var)
         self.explorer_search.pack(side="left", padx=5)
+        ctk.CTkButton(search_frame, text="?", width=28, height=28,
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._show_help("explorer"),
+                      ).pack(side="right", padx=5)
         self._explorer_search_after = None
 
         # Paned view: albums left, works/tracks right
@@ -1868,6 +1979,11 @@ class App:
                       command=self._save_profile).pack(side="left", padx=3)
         ctk.CTkButton(row0, text="Delete", width=70,
                       command=self._delete_profile).pack(side="left", padx=3)
+        ctk.CTkButton(row0, text="?", width=28, height=28,
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._show_help("builder"),
+                      ).pack(side="right", padx=5)
 
         # -- Row 1: Compact settings (all in one line) --
         row1 = ctk.CTkFrame(tab, fg_color="transparent")
@@ -3334,6 +3450,11 @@ class App:
                       command=self._export_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Import Overrides JSON", width=180,
                       command=self._import_overrides).pack(side="left", padx=5)
+        ctk.CTkButton(top, text="?", width=28, height=28,
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._show_help("cleanup"),
+                      ).pack(side="right", padx=5)
 
         # Works browser with source filter + search
         filter_frame = ctk.CTkFrame(tab, fg_color="transparent")

@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 echo.
 echo  Classical Music Playlist Manager - Setup
@@ -70,22 +70,18 @@ echo.
 
 REM --- Offer desktop shortcut ---
 set /p "SHORTCUT=  Create a desktop shortcut? (Y/N): "
-if /i "%SHORTCUT%"=="Y" (
-    powershell -Command ^
-        "$ws = New-Object -ComObject WScript.Shell; ^
-         $s = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\ClassicalManager.lnk'); ^
-         $s.TargetPath = '%~dp0run.bat'; ^
-         $s.WorkingDirectory = '%~dp0'; ^
-         $s.IconLocation = '%~dp0app_icon.ico,0'; ^
-         $s.WindowStyle = 7; ^
-         $s.Save()"
-    if errorlevel 1 (
-        echo  WARNING: Could not create shortcut.
-    ) else (
-        echo  Desktop shortcut created.
-    )
+if /i "!SHORTCUT!"=="Y" goto :mkshortcut
+goto :done
+
+:mkshortcut
+powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\ClassicalManager.lnk'); $s.TargetPath = '%~dp0run.bat'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = '%~dp0app_icon.ico,0'; $s.WindowStyle = 7; $s.Save()"
+if errorlevel 1 (
+    echo  WARNING: Could not create shortcut.
+) else (
+    echo  Desktop shortcut created.
 )
 
+:done
 echo.
 echo  Run the app with:
 echo    run.bat           ^(GUI^)

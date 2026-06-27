@@ -22,6 +22,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Launch the app, passing all arguments through ---
-call venv\Scripts\activate.bat
-python main.py %*
+REM --- Launch the app ---
+REM Use pythonw (no console window) for GUI mode, python for CLI mode
+echo %* | findstr /i "\-\-cli" >NUL 2>&1
+if errorlevel 1 (
+    start "" /b venv\Scripts\pythonw.exe main.py %*
+) else (
+    call venv\Scripts\activate.bat
+    python main.py %*
+)

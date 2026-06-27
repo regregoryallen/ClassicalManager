@@ -87,19 +87,21 @@ python main.py
 
 ### Linux / macOS
 
-Open a terminal in the extracted folder:
+On Ubuntu/Debian, install Tkinter if it is not already present:
 
 ```bash
+sudo apt install python3-tk
+```
+
+Then open a terminal in the extracted folder and run:
+
+```bash
+cd ClassicalManager-master
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp config.example.json config.json
 python main.py
-```
-
-On Ubuntu/Debian, install Tkinter if it is not already present:
-```bash
-sudo apt install python3-tk
 ```
 
 ### Dependencies

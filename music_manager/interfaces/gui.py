@@ -866,8 +866,12 @@ class App:
                 entry.insert(0, str(value))
 
             def browse():
-                path = filedialog.askdirectory(
-                    title=f"Select {label}", parent=dlg)
+                path = filedialog.asksaveasfilename(
+                    title=f"Select {label}", parent=dlg,
+                    defaultextension=".db",
+                    filetypes=[("SQLite Database", "*.db"),
+                               ("All files", "*.*")],
+                    confirmoverwrite=False)
                 if path:
                     entry.delete(0, "end")
                     entry.insert(0, path)
@@ -900,7 +904,7 @@ class App:
 
         # Plex path rules
         add_section("Plex Path Rules")
-        ctk.CTkLabel(frame, text="One per line:  find → replace",
+        ctk.CTkLabel(frame, text="One per line:  find -> replace",
                      text_color="gray", font=ctk.CTkFont(size=11)).grid(
             row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
         row += 1
@@ -913,7 +917,7 @@ class App:
                              padx=20, pady=3, sticky="ew")
         for pr in plex.get("path_rules", []):
             plex_rules_text.insert("end",
-                                   f"{pr['find']} → {pr['replace']}\n")
+                                   f"{pr['find']} -> {pr['replace']}\n")
         row += 1
 
         # -- M3U --
@@ -930,7 +934,7 @@ class App:
 
         # M3U path rules
         add_section("M3U Path Rules")
-        ctk.CTkLabel(frame, text="One per line:  find → replace",
+        ctk.CTkLabel(frame, text="One per line:  find -> replace",
                      text_color="gray", font=ctk.CTkFont(size=11)).grid(
             row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
         row += 1
@@ -943,7 +947,7 @@ class App:
                             padx=20, pady=3, sticky="ew")
         for mr in m3u.get("path_rules", []):
             m3u_rules_text.insert("end",
-                                  f"{mr['find']} → {mr['replace']}\n")
+                                  f"{mr['find']} -> {mr['replace']}\n")
         row += 1
 
         # -- Buttons --
@@ -3174,8 +3178,57 @@ class App:
                     dur_str,
                 ))
 
+    def _save_before_export(self):
+        """Silently save the profile before an export operation."""
+        name = self.profile_name_entry.get().strip()
+        if name and self.active_library:
+            from music_manager.core.database import PlaylistProfile, ProfileRule
+
+            # Skip if there's a cross-library name conflict
+            conflict = PlaylistProfile.select().where(
+                (PlaylistProfile.name == name) &
+                (PlaylistProfile.library != self.active_library) &
+                (~PlaylistProfile.name.startswith("__"))
+            ).first()
+            if conflict:
+                return
+
+            for existing in PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library) &
+                (PlaylistProfile.name == name)
+            ):
+                ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+                existing.delete_instance()
+
+            length_val = self.length_value.get().strip()
+            seed_val = self.seed_entry.get().strip()
+
+            profile = PlaylistProfile.create(
+                library=self.active_library,
+                name=name,
+                shuffle_mode=self.shuffle_mode.get(),
+                work_integrity=self.work_integrity.get(),
+                length_mode=self.length_mode.get(),
+                length_value=self._parse_length_value(length_val),
+                seed=int(seed_val) if seed_val else None,
+                no_repeat_tracks=self.no_repeat_var.get() == 1,
+            )
+
+            for rule in self._current_profile_rules:
+                ProfileRule.create(
+                    profile=profile,
+                    rule_type=rule["rule_type"],
+                    target_level=rule["target_level"],
+                    target_id=rule["target_id"],
+                )
+
+            self._clear_autosave()
+        else:
+            self._autosave()
+
     def _export_m3u(self):
         """Export the playlist to an M3U file."""
+        self._save_before_export()
         default_name = self.profile_name_entry.get().strip() or "playlist"
         initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.asksaveasfilename(
@@ -3215,6 +3268,7 @@ class App:
 
     def _export_json(self):
         """Export the playlist to a JSON file."""
+        self._save_before_export()
         default_name = self.profile_name_entry.get().strip() or "playlist"
         initial_dir = self._prefs.get("last_export_dir", "")
         path = filedialog.asksaveasfilename(
@@ -3248,6 +3302,7 @@ class App:
 
     def _push_plex(self):
         """Push the playlist to Plex."""
+        self._save_before_export()
         profile = self._build_temp_profile()
         if not profile:
             return

@@ -157,10 +157,12 @@ class App:
         self._pl_search_meta = {}    # iid → searchable text for builder pl tree
         self._tree_sort_state = {}     # tree id → (column, reverse)
         self._help_window = None       # singleton help window
+        self._autosave_after_id = None # repeating timer for autosave
 
         self._setup_theme()
         self._build_layout()
         self._refresh_library_list()
+        self._start_autosave_timer()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -232,10 +234,109 @@ class App:
             logger.debug("Could not install .desktop file: %s", exc)
 
     def _on_close(self):
-        """Save window state and exit."""
+        """Save window state, autosave, and exit."""
+        self._autosave()
         self._prefs["window_geometry"] = self.root.geometry()
         _save_prefs(self._prefs)
         self.root.destroy()
+
+    # ------------------------------------------------------------------
+    # Autosave (§2a)
+    # ------------------------------------------------------------------
+
+    def _start_autosave_timer(self):
+        """Start the repeating autosave timer based on config interval."""
+        from music_manager.core.config import load_config, ConfigError
+        try:
+            config = load_config()
+        except ConfigError:
+            config = {}
+        interval = config.get("autosave_interval", 60)
+        if not interval or interval <= 0:
+            return
+        interval_ms = int(interval) * 1000
+
+        def tick():
+            self._autosave()
+            self._autosave_after_id = self.root.after(interval_ms, tick)
+
+        self._autosave_after_id = self.root.after(interval_ms, tick)
+
+    def _autosave(self):
+        """Silently save current builder state as an __autosave__ profile."""
+        if not self.active_library:
+            return
+        from music_manager.core.database import PlaylistProfile, ProfileRule
+
+        # Delete existing autosave for this library
+        for existing in PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (PlaylistProfile.name == "__autosave__")
+        ):
+            ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+            existing.delete_instance()
+
+        # Capture current UI state
+        length_val = self.length_value.get().strip()
+        seed_val = self.seed_entry.get().strip()
+        profile_name = self.profile_name_entry.get().strip()
+
+        profile = PlaylistProfile.create(
+            library=self.active_library,
+            name="__autosave__",
+            shuffle_mode=self.shuffle_mode.get(),
+            work_integrity=self.work_integrity.get(),
+            length_mode=self.length_mode.get(),
+            length_value=self._parse_length_value(length_val),
+            seed=int(seed_val) if seed_val else None,
+            no_repeat_tracks=self.no_repeat_var.get() == 1,
+        )
+
+        for rule in self._current_profile_rules:
+            ProfileRule.create(
+                profile=profile,
+                rule_type=rule["rule_type"],
+                target_level=rule["target_level"],
+                target_id=rule["target_id"],
+            )
+
+        # Remember the profile name entry text separately
+        self._prefs["autosave_profile_name"] = profile_name
+        _save_prefs(self._prefs)
+        logger.debug("Autosaved builder state for library %s",
+                     self.active_library.name)
+
+    def _restore_autosave(self):
+        """Silently restore an autosaved profile if one exists."""
+        if not self.active_library:
+            return
+        from music_manager.core.database import PlaylistProfile
+        autosave = PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (PlaylistProfile.name == "__autosave__")
+        ).first()
+        if not autosave:
+            return
+        self._apply_profile("__autosave__")
+        # Restore the user's actual profile name (not "__autosave__")
+        saved_name = self._prefs.get("autosave_profile_name", "")
+        self.profile_name_entry.delete(0, "end")
+        if saved_name:
+            self.profile_name_entry.insert(0, saved_name)
+        logger.debug("Restored autosave for library %s",
+                     self.active_library.name)
+
+    def _clear_autosave(self):
+        """Delete the autosave profile for the active library."""
+        if not self.active_library:
+            return
+        from music_manager.core.database import PlaylistProfile, ProfileRule
+        for existing in PlaylistProfile.select().where(
+            (PlaylistProfile.library == self.active_library) &
+            (PlaylistProfile.name == "__autosave__")
+        ):
+            ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+            existing.delete_instance()
 
     def mainloop(self):
         """Start the Tk event loop."""
@@ -475,7 +576,7 @@ class App:
         from music_manager.core.database import Library, PlaylistProfile, ProfileRule
         # Clean up any leftover temp profiles
         for temp in PlaylistProfile.select().where(
-                PlaylistProfile.name.startswith("__temp_")):
+                PlaylistProfile.name.startswith("__")):
             ProfileRule.delete().where(ProfileRule.profile == temp).execute()
             temp.delete_instance()
         libs = list(Library.select())
@@ -516,6 +617,7 @@ class App:
             self._refresh_explorer()
             self._refresh_builder_tree()
             self._refresh_cleanup()
+            self._restore_autosave()
 
     def _refresh_metrics(self):
         """Update sidebar metric counts."""
@@ -1216,7 +1318,7 @@ class App:
 
         profiles = list(PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__temp_"))))
+            (~PlaylistProfile.name.startswith("__"))))
 
         if not profiles:
             messagebox.showinfo("No Profiles",
@@ -1447,7 +1549,7 @@ class App:
         # Profiles
         for prof in PlaylistProfile.select().where(
                 (PlaylistProfile.library == lib) &
-                (~PlaylistProfile.name.startswith("__temp_"))):
+                (~PlaylistProfile.name.startswith("__"))):
             rules = []
             for r in ProfileRule.select().where(ProfileRule.profile == prof):
                 rules.append({
@@ -3150,34 +3252,35 @@ class App:
         if not profile:
             return
 
-        try:
-            from music_manager.core.engine import generate_playlist
-            from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
-            from music_manager.core.config import load_config
+        with self._busy():
+            try:
+                from music_manager.core.engine import generate_playlist
+                from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
+                from music_manager.core.config import load_config
 
-            result = generate_playlist(profile)
-            config = load_config()
-            plex_config = config.get("targets", {}).get("plex", {})
-            plex_config["playlist_name"] = self.profile_name_entry.get().strip() or "Untitled"
+                result = generate_playlist(profile)
+                config = load_config()
+                plex_config = config.get("targets", {}).get("plex", {})
+                plex_config["playlist_name"] = self.profile_name_entry.get().strip() or "Untitled"
 
-            # Use per-library Plex section if set, otherwise fall back to config
-            lib_section = (self.active_library.plex_section
-                           if self.active_library and self.active_library.plex_section
-                           else None)
-            if lib_section:
-                plex_config["music_section"] = lib_section
+                # Use per-library Plex section if set, otherwise fall back to config
+                lib_section = (self.active_library.plex_section
+                               if self.active_library and self.active_library.plex_section
+                               else None)
+                if lib_section:
+                    plex_config["music_section"] = lib_section
 
-            serializer = PlexSerializer()
-            serializer.serialize(result.playlist, plex_config)
-            display_name = plex_config["playlist_name"]
-            messagebox.showinfo("Plex", f"Pushed '{display_name}' to Plex "
-                               f"({result.track_count} tracks)")
-        except (PlexConnectionError, PlexPushError) as exc:
-            messagebox.showerror("Plex Error", str(exc))
-        except Exception as exc:
-            messagebox.showerror("Error", str(exc))
-        finally:
-            self._delete_temp_profile(profile)
+                serializer = PlexSerializer()
+                serializer.serialize(result.playlist, plex_config)
+                display_name = plex_config["playlist_name"]
+                messagebox.showinfo("Plex", f"Pushed '{display_name}' to Plex "
+                                   f"({result.track_count} tracks)")
+            except (PlexConnectionError, PlexPushError) as exc:
+                messagebox.showerror("Plex Error", str(exc))
+            except Exception as exc:
+                messagebox.showerror("Error", str(exc))
+            finally:
+                self._delete_temp_profile(profile)
 
     def _save_profile(self):
         """Save current settings as a named profile in the DB."""
@@ -3196,7 +3299,7 @@ class App:
         conflict = PlaylistProfile.select().where(
             (PlaylistProfile.name == name) &
             (PlaylistProfile.library != self.active_library) &
-            (~PlaylistProfile.name.startswith("__temp_"))
+            (~PlaylistProfile.name.startswith("__"))
         ).first()
         if conflict:
             messagebox.showwarning(
@@ -3236,6 +3339,7 @@ class App:
                 target_id=rule["target_id"],
             )
 
+        self._clear_autosave()
         messagebox.showinfo("Saved", f"Profile '{name}' saved.")
 
     def _delete_profile(self):
@@ -3251,7 +3355,7 @@ class App:
 
         profiles = list(PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__temp_"))))
+            (~PlaylistProfile.name.startswith("__"))))
         if not profiles:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")
@@ -3329,7 +3433,7 @@ class App:
         from music_manager.core.database import PlaylistProfile
         profiles = list(PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__temp_"))))
+            (~PlaylistProfile.name.startswith("__"))))
         if not profiles:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")

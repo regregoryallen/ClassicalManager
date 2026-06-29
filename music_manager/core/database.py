@@ -56,13 +56,16 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         Override,
     ])
 
-    # Migrations: add columns that may not exist in older databases
+    # Migrations: add columns that may not exist in older databases.
+    # IMPORTANT: always use null=True in migration field definitions — Peewee's
+    # SqliteMigrator adds a NOT NULL constraint via _update_column, which drops
+    # and recreates the table, triggering ON DELETE CASCADE on related tables.
     from playhouse.migrate import SqliteMigrator, migrate as run_migrate
     migrator = SqliteMigrator(database)
     columns = {col.name for col in database.get_columns("libraries")}
     if "plex_section" not in columns:
         run_migrate(migrator.add_column("libraries", "plex_section",
-                                        pw.TextField(default="")))
+                                        pw.TextField(null=True, default="")))
         logger.info("Migrated: added plex_section to libraries")
 
     track_cols = {col.name for col in database.get_columns("tracks")}
@@ -86,6 +89,18 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
             migrator.add_column("tracks", "ensemble", pw.TextField(null=True)),
         )
         logger.info("Migrated: added genre, performer, conductor, ensemble to tracks")
+
+    profile_cols = {col.name for col in database.get_columns("playlist_profiles")}
+    if "separate_composers" not in profile_cols:
+        run_migrate(
+            migrator.add_column("playlist_profiles", "separate_composers",
+                                pw.BooleanField(null=True, default=False)),
+            migrator.add_column("playlist_profiles", "separate_albums",
+                                pw.BooleanField(null=True, default=False)),
+            migrator.add_column("playlist_profiles", "separate_forms",
+                                pw.BooleanField(null=True, default=False)),
+        )
+        logger.info("Migrated: added separation columns to playlist_profiles")
 
     logger.info("Database tables created/verified")
     return database
@@ -247,6 +262,9 @@ class PlaylistProfile(BaseModel):
     length_value = pw.IntegerField(null=True)
     seed = pw.IntegerField(null=True)
     no_repeat_tracks = pw.BooleanField(default=True)
+    separate_composers = pw.BooleanField(default=False)
+    separate_albums = pw.BooleanField(default=False)
+    separate_forms = pw.BooleanField(default=False)
 
     class Meta:
         table_name = "playlist_profiles"

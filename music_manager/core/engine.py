@@ -19,6 +19,46 @@ from music_manager.core.database import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Form detection for separation constraints
+# ---------------------------------------------------------------------------
+
+_FORM_KEYWORDS = [
+    # Compound forms (longest first to prevent substring shadowing)
+    "String Quartet", "String Quintet", "String Trio", "String Sextet",
+    "Piano Concerto", "Violin Concerto", "Cello Concerto",
+    "Flute Concerto", "Oboe Concerto", "Clarinet Concerto",
+    "Horn Concerto", "Trumpet Concerto", "Double Concerto",
+    "Triple Concerto", "Brandenburg Concerto",
+    "Piano Sonata", "Violin Sonata", "Cello Sonata",
+    "Piano Trio", "Piano Quartet", "Piano Quintet",
+    "Symphonic Poem", "Tone Poem",
+    "Prelude and Fugue", "Prelude & Fugue",
+    # Simple forms
+    "Symphony", "Sinfonietta", "Concerto", "Sonata", "Sonatina",
+    "Quartet", "Quintet", "Trio", "Sextet", "Septet", "Octet",
+    "Suite", "Overture", "Mass", "Requiem", "Oratorio", "Cantata",
+    "Motet", "Magnificat", "Stabat Mater", "Te Deum",
+    "Variations", "Rhapsody",
+    "Nocturne", "Ballade", "Scherzo", "Impromptu",
+    "Prelude", "Fugue", "Toccata",
+    "Etude", "Étude",
+    "Waltz", "Mazurka", "Polonaise", "Barcarolle",
+    "Serenade", "Divertimento",
+]
+_FORM_PATTERNS = [(kw.lower(), kw) for kw in _FORM_KEYWORDS]
+
+
+def _detect_form(work_name: str | None) -> str | None:
+    """Extract the musical form from a work name, if recognizable."""
+    if not work_name:
+        return None
+    name_lower = work_name.lower()
+    for pattern, canonical in _FORM_PATTERNS:
+        if pattern in name_lower:
+            return canonical
+    return None
+
 
 @dataclass
 class ResolvedTrack:
@@ -108,9 +148,12 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
     # Step 3: Build resolved track objects
     resolved = _build_resolved_tracks(selected_ids, admission_map)
 
-    # Step 4: Shuffle
+    # Step 4: Shuffle (with optional separation constraints)
     rng = random.Random(profile.seed) if profile.seed is not None else random.Random()
-    ordered = _shuffle(resolved, profile.shuffle_mode, rng)
+    ordered = _shuffle(resolved, profile.shuffle_mode, rng,
+                       separate_composers=profile.separate_composers,
+                       separate_albums=profile.separate_albums,
+                       separate_forms=profile.separate_forms)
 
     # Step 5: Apply stop conditions
     final = _apply_stop_conditions(ordered, profile)
@@ -342,30 +385,43 @@ def _shuffle(
     tracks: list[ResolvedTrack],
     mode: str,
     rng: random.Random,
+    separate_composers: bool = False,
+    separate_albums: bool = False,
+    separate_forms: bool = False,
 ) -> list[ResolvedTrack]:
     """Shuffle the resolved tracks according to the selected mode."""
+    sep = (separate_composers, separate_albums, separate_forms)
     if mode == "track":
-        return _shuffle_track_mode(tracks, rng)
+        return _shuffle_track_mode(tracks, rng, *sep)
     elif mode == "work":
-        return _shuffle_work_mode(tracks, rng)
+        return _shuffle_work_mode(tracks, rng, *sep)
     elif mode == "album":
-        return _shuffle_album_mode(tracks, rng)
+        return _shuffle_album_mode(tracks, rng, *sep)
     else:
         logger.warning("Unknown shuffle mode '%s', falling back to track", mode)
-        return _shuffle_track_mode(tracks, rng)
+        return _shuffle_track_mode(tracks, rng, *sep)
 
 
 def _shuffle_track_mode(
-    tracks: list[ResolvedTrack], rng: random.Random
+    tracks: list[ResolvedTrack], rng: random.Random,
+    separate_composers: bool = False, separate_albums: bool = False,
+    separate_forms: bool = False,
 ) -> list[ResolvedTrack]:
     """Track mode: shuffle individual tracks."""
     result = list(tracks)
     rng.shuffle(result)
+    if separate_composers or separate_albums or separate_forms:
+        groups = [[t] for t in result]
+        groups = _apply_separation(groups, rng,
+                                   separate_composers, separate_albums, separate_forms)
+        result = [g[0] for g in groups]
     return result
 
 
 def _shuffle_work_mode(
-    tracks: list[ResolvedTrack], rng: random.Random
+    tracks: list[ResolvedTrack], rng: random.Random,
+    separate_composers: bool = False, separate_albums: bool = False,
+    separate_forms: bool = False,
 ) -> list[ResolvedTrack]:
     """Work mode: shuffle works, emit each work's tracks in order.
 
@@ -393,14 +449,22 @@ def _shuffle_work_mode(
     group_keys = list(groups.keys())
     rng.shuffle(group_keys)
 
+    ordered_groups = [groups[key] for key in group_keys]
+    if separate_composers or separate_albums or separate_forms:
+        ordered_groups = _apply_separation(
+            ordered_groups, rng,
+            separate_composers, separate_albums, separate_forms)
+
     result = []
-    for key in group_keys:
-        result.extend(groups[key])
+    for group in ordered_groups:
+        result.extend(group)
     return result
 
 
 def _shuffle_album_mode(
-    tracks: list[ResolvedTrack], rng: random.Random
+    tracks: list[ResolvedTrack], rng: random.Random,
+    separate_composers: bool = False, separate_albums: bool = False,
+    separate_forms: bool = False,
 ) -> list[ResolvedTrack]:
     """Album mode: shuffle albums, emit each album's tracks in order.
 
@@ -433,10 +497,119 @@ def _shuffle_album_mode(
     album_keys = list(by_album.keys())
     rng.shuffle(album_keys)
 
+    ordered_groups = [by_album[key] for key in album_keys]
+    if separate_composers or separate_albums or separate_forms:
+        ordered_groups = _apply_separation(
+            ordered_groups, rng,
+            separate_composers, separate_albums, separate_forms)
+
     result = []
-    for key in album_keys:
-        result.extend(by_album[key])
+    for group in ordered_groups:
+        result.extend(group)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: Separation constraints
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _GroupAttrs:
+    """Pre-computed attributes of a shuffle group for separation checks."""
+    composer_id: int | None
+    album_id: int | None
+    form: str | None
+
+
+def _group_attrs(group: list[ResolvedTrack]) -> _GroupAttrs:
+    """Extract separation-relevant attributes from a group of tracks."""
+    composer_id = None
+    album_id = None
+    form = None
+    for rt in group:
+        if composer_id is None and rt.composer_id is not None:
+            composer_id = rt.composer_id
+        if album_id is None:
+            album_id = rt.album_id
+        if form is None and rt.work_name:
+            form = _detect_form(rt.work_name)
+        if composer_id is not None and album_id is not None and form is not None:
+            break
+    return _GroupAttrs(composer_id=composer_id, album_id=album_id, form=form)
+
+
+def _conflicts(
+    a: _GroupAttrs,
+    b: _GroupAttrs,
+    separate_composers: bool,
+    separate_albums: bool,
+    separate_forms: bool,
+) -> int:
+    """Count how many separation constraints are violated between two groups."""
+    count = 0
+    if separate_composers and a.composer_id is not None and a.composer_id == b.composer_id:
+        count += 1
+    if separate_albums and a.album_id is not None and a.album_id == b.album_id:
+        count += 1
+    if separate_forms and a.form is not None and a.form == b.form:
+        count += 1
+    return count
+
+
+def _apply_separation(
+    groups: list[list[ResolvedTrack]],
+    rng: random.Random,
+    separate_composers: bool,
+    separate_albums: bool,
+    separate_forms: bool,
+) -> list[list[ResolvedTrack]]:
+    """Reorder groups to minimize adjacencies on enabled separation dimensions.
+
+    Uses greedy candidate selection: for each position, pick randomly from
+    candidates that don't conflict with the previous group.  Falls back to the
+    least-conflicting option when no perfect candidate exists.
+    """
+    if not (separate_composers or separate_albums or separate_forms):
+        return groups
+    if len(groups) <= 1:
+        return groups
+
+    attrs = [_group_attrs(g) for g in groups]
+    remaining = list(range(len(groups)))
+    rng.shuffle(remaining)  # randomize pool order for unbiased selection
+    result_indices: list[int] = []
+
+    while remaining:
+        if not result_indices:
+            # First item: pick any
+            chosen = remaining[0]
+        else:
+            prev = attrs[result_indices[-1]]
+            # Find candidates with zero conflicts
+            candidates = [
+                i for i in remaining
+                if _conflicts(prev, attrs[i],
+                              separate_composers, separate_albums, separate_forms) == 0
+            ]
+            if candidates:
+                chosen = candidates[rng.randint(0, len(candidates) - 1)]
+            else:
+                # Fallback: pick the one with fewest conflicts
+                min_score = min(
+                    _conflicts(prev, attrs[i],
+                               separate_composers, separate_albums, separate_forms)
+                    for i in remaining
+                )
+                best = [i for i in remaining
+                        if _conflicts(prev, attrs[i],
+                                      separate_composers, separate_albums,
+                                      separate_forms) == min_score]
+                chosen = best[rng.randint(0, len(best) - 1)]
+
+        result_indices.append(chosen)
+        remaining.remove(chosen)
+
+    return [groups[i] for i in result_indices]
 
 
 # ---------------------------------------------------------------------------

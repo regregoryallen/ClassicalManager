@@ -290,6 +290,9 @@ class App:
             length_value=self._parse_length_value(length_val),
             seed=int(seed_val) if seed_val else None,
             no_repeat_tracks=self.no_repeat_var.get() == 1,
+            separate_composers=self.sep_composer_var.get() == 1,
+            separate_albums=self.sep_album_var.get() == 1,
+            separate_forms=self.sep_form_var.get() == 1,
         )
 
         for rule in self._current_profile_rules:
@@ -1588,6 +1591,9 @@ class App:
                 "length_value": prof.length_value,
                 "seed": prof.seed,
                 "no_repeat_tracks": prof.no_repeat_tracks,
+                "separate_composers": prof.separate_composers,
+                "separate_albums": prof.separate_albums,
+                "separate_forms": prof.separate_forms,
                 "rules": rules,
             })
 
@@ -1703,6 +1709,9 @@ class App:
                 length_value=pd.get("length_value"),
                 seed=pd.get("seed"),
                 no_repeat_tracks=pd.get("no_repeat_tracks", True),
+                separate_composers=pd.get("separate_composers", False),
+                separate_albums=pd.get("separate_albums", False),
+                separate_forms=pd.get("separate_forms", False),
             )
             for rd in pd.get("rules", []):
                 ProfileRule.create(
@@ -1781,6 +1790,9 @@ class App:
                 length_value=None,
                 seed=None,
                 no_repeat_tracks=True,
+                separate_composers=False,
+                separate_albums=False,
+                separate_forms=False,
             )
 
             matched = 0
@@ -2144,6 +2156,18 @@ class App:
         self.no_repeat_var = ctk.CTkCheckBox(row1, text="No repeats", width=30)
         self.no_repeat_var.pack(side="left", padx=(0, 4))
         self.no_repeat_var.select()
+
+        # -- Row 1b: Separation constraints --
+        row1b = ctk.CTkFrame(tab, fg_color="transparent")
+        row1b.pack(fill="x", padx=10, pady=0)
+
+        ctk.CTkLabel(row1b, text="Separate:").pack(side="left", padx=(0, 2))
+        self.sep_composer_var = ctk.CTkCheckBox(row1b, text="Composers", width=30)
+        self.sep_composer_var.pack(side="left", padx=(0, 8))
+        self.sep_album_var = ctk.CTkCheckBox(row1b, text="Albums", width=30)
+        self.sep_album_var.pack(side="left", padx=(0, 8))
+        self.sep_form_var = ctk.CTkCheckBox(row1b, text="Forms", width=30)
+        self.sep_form_var.pack(side="left", padx=(0, 8))
 
         # -- Main area: library pane | buttons | playlist pane --
         main_pane = ctk.CTkFrame(tab, fg_color="transparent")
@@ -3083,6 +3107,9 @@ class App:
             length_value=self._parse_length_value(length_val),
             seed=int(seed_val) if seed_val else None,
             no_repeat_tracks=self.no_repeat_var.get() == 1,
+            separate_composers=self.sep_composer_var.get() == 1,
+            separate_albums=self.sep_album_var.get() == 1,
+            separate_forms=self.sep_form_var.get() == 1,
         )
 
         for rule in self._current_profile_rules:
@@ -3201,7 +3228,13 @@ class App:
                 ))
 
     def _save_before_export(self):
-        """Silently save the profile before an export operation."""
+        """Silently save profile settings before an export operation.
+
+        Only updates an existing profile's settings (shuffle mode, length,
+        etc.) in place — never deletes/recreates the profile or touches its
+        rules.  If no profile with this name exists yet, creates a new one
+        with the current UI rules.
+        """
         name = self.profile_name_entry.get().strip()
         if name and self.active_library:
             from music_manager.core.database import PlaylistProfile, ProfileRule
@@ -3215,34 +3248,49 @@ class App:
             if conflict:
                 return
 
-            for existing in PlaylistProfile.select().where(
-                (PlaylistProfile.library == self.active_library) &
-                (PlaylistProfile.name == name)
-            ):
-                ProfileRule.delete().where(ProfileRule.profile == existing).execute()
-                existing.delete_instance()
-
             length_val = self.length_value.get().strip()
             seed_val = self.seed_entry.get().strip()
 
-            profile = PlaylistProfile.create(
-                library=self.active_library,
-                name=name,
-                shuffle_mode=self.shuffle_mode.get(),
-                work_integrity=self.work_integrity.get(),
-                length_mode=self.length_mode.get(),
-                length_value=self._parse_length_value(length_val),
-                seed=int(seed_val) if seed_val else None,
-                no_repeat_tracks=self.no_repeat_var.get() == 1,
-            )
+            existing = PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library) &
+                (PlaylistProfile.name == name)
+            ).first()
 
-            for rule in self._current_profile_rules:
-                ProfileRule.create(
-                    profile=profile,
-                    rule_type=rule["rule_type"],
-                    target_level=rule["target_level"],
-                    target_id=rule["target_id"],
+            if existing:
+                # Update settings only — never touch rules silently
+                existing.shuffle_mode = self.shuffle_mode.get()
+                existing.work_integrity = self.work_integrity.get()
+                existing.length_mode = self.length_mode.get()
+                existing.length_value = self._parse_length_value(length_val)
+                existing.seed = int(seed_val) if seed_val else None
+                existing.no_repeat_tracks = self.no_repeat_var.get() == 1
+                existing.separate_composers = self.sep_composer_var.get() == 1
+                existing.separate_albums = self.sep_album_var.get() == 1
+                existing.separate_forms = self.sep_form_var.get() == 1
+                existing.save()
+            else:
+                # New profile — safe to write current rules
+                profile = PlaylistProfile.create(
+                    library=self.active_library,
+                    name=name,
+                    shuffle_mode=self.shuffle_mode.get(),
+                    work_integrity=self.work_integrity.get(),
+                    length_mode=self.length_mode.get(),
+                    length_value=self._parse_length_value(length_val),
+                    seed=int(seed_val) if seed_val else None,
+                    no_repeat_tracks=self.no_repeat_var.get() == 1,
+                    separate_composers=self.sep_composer_var.get() == 1,
+                    separate_albums=self.sep_album_var.get() == 1,
+                    separate_forms=self.sep_form_var.get() == 1,
                 )
+
+                for rule in self._current_profile_rules:
+                    ProfileRule.create(
+                        profile=profile,
+                        rule_type=rule["rule_type"],
+                        target_level=rule["target_level"],
+                        target_id=rule["target_id"],
+                    )
 
             self._clear_autosave()
         else:
@@ -3368,6 +3416,9 @@ class App:
         self.length_value.delete(0, "end")
         self.seed_entry.delete(0, "end")
         self.no_repeat_var.select()
+        self.sep_composer_var.deselect()
+        self.sep_album_var.deselect()
+        self.sep_form_var.deselect()
         self._current_profile_rules.clear()
         self._refresh_rules_display()
         self._refresh_builder_tree()
@@ -3419,6 +3470,9 @@ class App:
             length_value=self._parse_length_value(length_val),
             seed=int(seed_val) if seed_val else None,
             no_repeat_tracks=self.no_repeat_var.get() == 1,
+            separate_composers=self.sep_composer_var.get() == 1,
+            separate_albums=self.sep_album_var.get() == 1,
+            separate_forms=self.sep_form_var.get() == 1,
         )
 
         for rule in self._current_profile_rules:
@@ -3600,6 +3654,18 @@ class App:
             self.no_repeat_var.select()
         else:
             self.no_repeat_var.deselect()
+        if profile.separate_composers:
+            self.sep_composer_var.select()
+        else:
+            self.sep_composer_var.deselect()
+        if profile.separate_albums:
+            self.sep_album_var.select()
+        else:
+            self.sep_album_var.deselect()
+        if profile.separate_forms:
+            self.sep_form_var.select()
+        else:
+            self.sep_form_var.deselect()
 
         # Load rules
         self._current_profile_rules.clear()

@@ -2161,12 +2161,12 @@ class App:
         row1b = ctk.CTkFrame(tab, fg_color="transparent")
         row1b.pack(fill="x", padx=10, pady=0)
 
-        ctk.CTkLabel(row1b, text="Separate:").pack(side="left", padx=(0, 2))
-        self.sep_composer_var = ctk.CTkCheckBox(row1b, text="Composers", width=30)
+        ctk.CTkLabel(row1b, text="Avoid adjacent:").pack(side="left", padx=(0, 2))
+        self.sep_composer_var = ctk.CTkCheckBox(row1b, text="Same Composer", width=30)
         self.sep_composer_var.pack(side="left", padx=(0, 8))
-        self.sep_album_var = ctk.CTkCheckBox(row1b, text="Albums", width=30)
+        self.sep_album_var = ctk.CTkCheckBox(row1b, text="Same Album", width=30)
         self.sep_album_var.pack(side="left", padx=(0, 8))
-        self.sep_form_var = ctk.CTkCheckBox(row1b, text="Forms", width=30)
+        self.sep_form_var = ctk.CTkCheckBox(row1b, text="Same Form", width=30)
         self.sep_form_var.pack(side="left", padx=(0, 8))
 
         # -- Main area: library pane | buttons | playlist pane --

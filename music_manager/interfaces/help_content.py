@@ -199,8 +199,8 @@ def build_help_content(text: tk.Text) -> None:
     body("all (no limit), count (max tracks), or duration (seconds, H:MM, or H:MM:SS)\n")
     bold("Seed: ")
     body("fixed number for reproducible shuffles\n")
-    bold("Separate: ")
-    body("avoid placing adjacent items with the same composer, album, or musical "
+    bold("Avoid adjacent: ")
+    body("prevent consecutive items from sharing the same composer, album, or musical "
          "form (e.g. two symphonies back-to-back). Best-effort: if the pool is "
          "dominated by one value, some adjacencies may remain.\n")
 

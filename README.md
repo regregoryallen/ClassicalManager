@@ -30,7 +30,45 @@ Download and extract the [latest zip](https://github.com/regregoryallen/Classica
 git clone https://github.com/regregoryallen/ClassicalManager.git
 ```
 
-Then from the extracted folder (Linux/macOS):
+Then follow the platform-specific instructions below.
+
+## Linux
+
+**Prerequisite:** Python 3.12+ and Tkinter (`sudo apt install python3-tk` on Debian/Ubuntu).
+
+From the extracted folder, run the interactive installer:
+
+```bash
+cd ClassicalManager-master   # or ClassicalManager if cloned
+bash install.sh
+```
+
+The installer will:
+- Check prerequisites and offer to install missing packages
+- Deploy to `~/.local/share/classical-manager` (local) or `/opt/classical-manager` (system-wide)
+- Create a Python virtual environment and install dependencies
+- Walk you through configuring Plex, M3U export, and database location
+- Install a desktop launcher (under Sound & Video) and a `classical-manager` CLI command
+- Copy the cron companion script for scheduled automation
+
+After installation:
+- **GUI:** Launch from the app menu, or run `classical-manager`
+- **CLI:** `classical-manager --cli scan --library "My Collection"`
+- **Uninstall:** `bash install.sh --uninstall`
+
+### Cron automation
+
+The installer places a companion script at `~/.local/share/classical-manager/classical-manager-cron.sh`. Edit the variables at the top of the script to configure the mode, then add it to your crontab:
+
+```bash
+# Push all playlists to Plex every night at 2 AM:
+0 2 * * * /home/user/.local/share/classical-manager/classical-manager-cron.sh
+```
+
+Modes: `plex` (default), `m3u`, `scan`, `scan+plex`, `scan+m3u`. See the comments inside the script for full usage details.
+
+<details>
+<summary>Manual setup (without install script)</summary>
 
 ```bash
 cd ClassicalManager-master   # or ClassicalManager if cloned
@@ -40,6 +78,7 @@ pip install -r requirements.txt
 cp config.example.json config.json
 python main.py
 ```
+</details>
 
 ## Windows
 
@@ -63,6 +102,10 @@ python main.py
 ```
 </details>
 
+## macOS
+
+No installer script is provided yet. Follow the manual Linux steps above (the same commands work on macOS). Tkinter is included with the python.org Python 3.12+ installer for macOS.
+
 ## How It Works
 
 1. **Scan** your music folders — the scanner reads embedded metadata (MusicBrainz, WORK/MOVEMENT tags, ID3, Vorbis, MP4) and groups tracks into multi-movement works
@@ -83,8 +126,8 @@ Works are detected using a five-step precedence chain:
 ## Requirements
 
 - Python 3.12+
-- Tkinter (`sudo apt install python3-tk` on Ubuntu/Debian)
-- Optional: `zenity` or `kdialog` for native file dialogs on Linux
+- Tkinter (included on Windows/macOS; `sudo apt install python3-tk` on Debian/Ubuntu)
+- Optional on Linux: `zenity` or `kdialog` for native file dialogs
 
 ## Documentation
 

@@ -12,6 +12,7 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 
 - **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics — with intelligent merging when per-movement MB IDs share a common WORK tag
 - **Work-aware shuffling** that keeps movements together in correct order while randomizing the sequence of complete works
+- **Avoid adjacent** option to prevent consecutive works by the same composer, from the same album, or of the same musical form
 - **Include/exclude rules** at the composer, album, work, or track level for precise playlist curation
 - **Non-destructive metadata overrides** to correct grouping errors without modifying audio files
 - **Incremental scanning** that detects only new, changed, or deleted files for fast library updates

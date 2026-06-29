@@ -356,6 +356,7 @@ The main workspace for creating playlists.
 | **Length value** | number or H:MM | Track count or duration (seconds, H:MM, or H:MM:SS) |
 | **Seed** | number | Fixed seed for reproducible shuffles |
 | **No repeats** | checkbox | Remove duplicate tracks |
+| **Avoid adjacent** | checkboxes | Prevent consecutive items sharing the same composer, album, or musical form |
 
 #### Shuffle Modes
 
@@ -370,6 +371,16 @@ The main workspace for creating playlists.
 - **enforce**: If any track from a work is selected, include the entire work in
   correct movement order. Ensures you never hear just one movement of a symphony.
 - **respect_selection**: Play exactly what was selected, even if it means partial works.
+
+#### Avoid Adjacent
+
+Three optional constraints that prevent consecutive items from sharing the same attribute after shuffling:
+
+- **Same Composer**: No two adjacent works by the same composer.
+- **Same Album**: No two adjacent works from the same album.
+- **Same Form**: No two adjacent works of the same musical form (e.g., two symphonies or two string quartets back-to-back).
+
+These are best-effort: if the playlist is dominated by one composer, album, or form, some adjacencies are unavoidable. Works without a detected form (standalone tracks, non-classical music) never conflict on the form dimension, so they act as natural separators.
 
 ### Library Pane (left)
 

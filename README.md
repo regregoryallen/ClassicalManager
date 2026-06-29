@@ -85,13 +85,26 @@ python main.py
 **Prerequisite:** Install Python 3.12+ from [python.org](https://www.python.org/downloads/).
 Check **"Add python.exe to PATH"** during installation and leave **"tcl/tk and IDLE"** checked.
 
-From the extracted folder:
+From the extracted folder, run the interactive installer:
 
-- **Automated:** Double-click `setup.bat`, then `run.bat` (setup offers to create a desktop shortcut)
-- **CLI usage:** Open a terminal in the repo folder and run `run.bat --cli scan --library "My Collection"`
+```
+install.bat
+```
+
+The installer will:
+- Check prerequisites (Python 3.12+, Tkinter)
+- Deploy to `%LOCALAPPDATA%\ClassicalManager` (default) or a custom path
+- Create a Python virtual environment and install dependencies
+- Walk you through configuring Plex, M3U export, and database location
+- Create Desktop and Start Menu shortcuts and a `classical-manager` CLI command
+
+After installation:
+- **GUI:** Launch from the Desktop shortcut, Start Menu, or run `classical-manager`
+- **CLI:** `classical-manager --cli scan --library "My Collection"`
+- **Uninstall:** `install.bat --uninstall`
 
 <details>
-<summary>Manual setup (without batch scripts)</summary>
+<summary>Manual setup (without install script)</summary>
 
 ```
 python -m venv venv

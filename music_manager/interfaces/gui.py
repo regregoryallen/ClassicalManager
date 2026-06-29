@@ -139,7 +139,7 @@ class App:
     def __init__(self, ctk, log_handler=None):
         self.ctk = ctk
         self._log_handler = log_handler
-        self.root = ctk.CTk(className="ClassicalManager")
+        self.root = ctk.CTk(className="classical-manager")
         self.root.title("Classical Music Playlist Manager")
 
         # Set window / taskbar icon (platform-specific)
@@ -220,8 +220,8 @@ class App:
             f"Exec={venv_python} {main_py}\n"
             f"Icon={icon_path}\n"
             "Terminal=false\n"
-            "Categories=Audio;Music;\n"
-            "StartupWMClass=classicalManager\n"
+            "Categories=AudioVideo;Audio;Music;\n"
+            "StartupWMClass=classical-manager\n"
         )
 
         try:

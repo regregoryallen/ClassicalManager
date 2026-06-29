@@ -776,7 +776,7 @@ Exec=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/main.py
 Icon=$INSTALL_DIR/app_icon.png
 Terminal=false
 Categories=AudioVideo;Audio;Music;
-StartupWMClass=classicalManager
+StartupWMClass=classical-manager
 DESKTOP_EOF
 
     maybe_sudo chmod 755 "$desktop_file"

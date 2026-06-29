@@ -66,6 +66,7 @@ def scan(
     library: str = typer.Option(..., help="Library name to scan"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Rescan a library's source folders."""
     _setup_logging(verbose)
@@ -86,6 +87,12 @@ def scan(
         if len(check["missing"]) == check["total"]:
             typer.echo("Error: all source folders are missing.", err=True)
             raise typer.Exit(1)
+
+    if not quiet and not yes:
+        typer.echo(f"Full scan of '{lib.name}' ({check['total']} source folder(s)).")
+        typer.echo("This may take a while for large libraries.")
+        if not typer.confirm("Proceed?", default=True):
+            raise typer.Exit(0)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
@@ -125,6 +132,7 @@ def scan_changes(
     library: str = typer.Option(..., help="Library name to scan"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Incremental scan: only process new, changed, or deleted files."""
     _setup_logging(verbose)
@@ -145,6 +153,11 @@ def scan_changes(
         if len(check["missing"]) == check["total"]:
             typer.echo("Error: all source folders are missing.", err=True)
             raise typer.Exit(1)
+
+    if not quiet and not yes:
+        typer.echo(f"Incremental scan of '{lib.name}' ({check['total']} source folder(s)).")
+        if not typer.confirm("Proceed?", default=True):
+            raise typer.Exit(0)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
@@ -176,12 +189,18 @@ def redetect(
     library: str = typer.Option(..., help="Library name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Re-run all work detection steps using tag data in the database."""
     _setup_logging(verbose)
 
     from music_manager.core.scanner import redetect_works
     lib = _get_library(library)
+
+    if not quiet and not yes:
+        typer.echo(f"Re-detect works for '{lib.name}'.")
+        if not typer.confirm("Proceed?", default=True):
+            raise typer.Exit(0)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)

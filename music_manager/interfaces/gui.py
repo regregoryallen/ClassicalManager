@@ -1173,6 +1173,13 @@ class App:
         if not self._check_folders_before_scan():
             return
 
+        if not messagebox.askyesno(
+                "Full Scan",
+                f"Run a full scan of '{self.active_library.name}'?\n\n"
+                "This re-reads all audio files and may take a while\n"
+                "for large libraries."):
+            return
+
         self._scan_cancel = threading.Event()
         self.scan_btn.configure(state="normal", text="Cancel Scan",
                                 command=self._cancel_scan)
@@ -1237,6 +1244,12 @@ class App:
         if not self._check_folders_before_scan():
             return
 
+        if not messagebox.askyesno(
+                "Incremental Scan",
+                f"Scan '{self.active_library.name}' for new, changed,\n"
+                "or deleted files?"):
+            return
+
         self._scan_cancel = threading.Event()
         self.scan_btn.configure(state="normal", text="Cancel Scan",
                                 command=self._cancel_scan)
@@ -1293,6 +1306,13 @@ class App:
         """Re-run all work detection steps using tag data in the database."""
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        if not messagebox.askyesno(
+                "Re-detect Works",
+                f"Re-run work detection for '{self.active_library.name}'?\n\n"
+                "This will regroup tracks into works based on\n"
+                "current tag data and detection rules."):
             return
 
         from music_manager.core.scanner import redetect_works

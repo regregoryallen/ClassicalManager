@@ -227,6 +227,8 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Export M3U \u2014 save as an M3U playlist file")
     bullet("Export JSON \u2014 save as a JSON file with full metadata")
     bullet("Push to Plex \u2014 create or update a playlist on your Plex server")
+    bullet("Find Unused \u2014 populate the builder with all tracks not included "
+           "in any saved profile, so you can browse and assign them")
 
     # ── Cleanup / Overlay ──
     heading("cleanup", "Cleanup / Overlay")

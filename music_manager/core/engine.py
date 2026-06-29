@@ -186,6 +186,71 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
     )
 
 
+def find_unused_tracks(
+    library: Library,
+) -> tuple[list[tuple[int, str]], list[tuple[int, str]], list[tuple[int, str]]]:
+    """Find all tracks not selected by any saved playlist profile.
+
+    A track is "unused" if it does not appear in the net selected set
+    (after include/exclude processing) of ANY non-internal profile in
+    the given library.
+
+    Returns three lists of (id, display_name) tuples, grouped by
+    granularity for efficient rule creation:
+        - fully unused albums (all tracks unused)
+        - fully unused works in partially-used albums
+        - individual unused tracks in partially-used works
+    """
+    profiles = list(
+        PlaylistProfile.select().where(
+            (PlaylistProfile.library == library)
+            & (~PlaylistProfile.name.startswith("__"))
+        )
+    )
+
+    used_ids: set[int] = set()
+    for profile in profiles:
+        selected, _ = _select_tracks(profile)
+        used_ids |= selected
+
+    unused_albums: list[tuple[int, str]] = []
+    unused_works: list[tuple[int, str]] = []
+    unused_tracks: list[tuple[int, str]] = []
+
+    for album in Album.select().where(Album.library == library):
+        album_track_ids = set(
+            t.id for t in
+            Track.select(Track.id).where(Track.album == album)
+        )
+        album_unused = album_track_ids - used_ids
+        if not album_unused:
+            continue
+
+        if album_unused == album_track_ids:
+            unused_albums.append((album.id, album.title))
+            continue
+
+        # Partially used album — check work by work
+        for work in Work.select().where(Work.album == album):
+            work_track_ids = set(
+                t.id for t in
+                Track.select(Track.id).where(Track.work == work)
+            )
+            work_unused = work_track_ids - used_ids
+            if not work_unused:
+                continue
+
+            if work_unused == work_track_ids:
+                unused_works.append((work.id, work.work_name))
+            else:
+                for t in Track.select(Track.id, Track.title).where(
+                    Track.id.in_(list(work_unused))
+                ):
+                    unused_tracks.append((t.id, t.title))
+
+    return unused_albums, unused_works, unused_tracks
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Selection (§7.1)
 # ---------------------------------------------------------------------------

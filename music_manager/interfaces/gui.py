@@ -614,6 +614,7 @@ class App:
         self.plex_section_entry.delete(0, "end")
         if self.active_library.plex_section:
             self.plex_section_entry.insert(0, self.active_library.plex_section)
+        self._new_profile()
         with self._busy():
             self._refresh_metrics()
             self._refresh_source_folders()
@@ -2326,6 +2327,8 @@ class App:
                       command=self._export_json).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Push to Plex", width=110,
                       command=self._push_plex).pack(side="left", padx=4)
+        ctk.CTkButton(bot, text="Find Unused", width=110,
+                      command=self._find_unused).pack(side="left", padx=4)
 
         info = ctk.CTkLabel(bot, text="(empty = all tracks)",
                             text_color="gray")
@@ -3227,6 +3230,38 @@ class App:
                     dur_str,
                 ))
 
+    def _find_unused(self):
+        """Populate the builder with tracks not included in any saved profile."""
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+
+        self._save_before_export()
+
+        with self._busy():
+            try:
+                from music_manager.core.engine import find_unused_tracks
+                albums, works, tracks = find_unused_tracks(self.active_library)
+            except Exception as exc:
+                messagebox.showerror("Find Unused Error", str(exc))
+                return
+
+        if not albums and not works and not tracks:
+            messagebox.showinfo(
+                "Find Unused",
+                "All tracks are used by at least one profile.")
+            return
+
+        # Clear builder and populate with unused items
+        self._new_profile()
+        for target_id, name in albums:
+            self._add_rule("include", "album", target_id, refresh=False)
+        for target_id, name in works:
+            self._add_rule("include", "work", target_id, refresh=False)
+        for target_id, name in tracks:
+            self._add_rule("include", "track", target_id, refresh=False)
+        self._refresh_rules_display()
+
     def _save_before_export(self):
         """Silently save profile settings before an export operation.
 
@@ -3257,7 +3292,6 @@ class App:
             ).first()
 
             if existing:
-                # Update settings only — never touch rules silently
                 existing.shuffle_mode = self.shuffle_mode.get()
                 existing.work_integrity = self.work_integrity.get()
                 existing.length_mode = self.length_mode.get()
@@ -3268,6 +3302,16 @@ class App:
                 existing.separate_albums = self.sep_album_var.get() == 1
                 existing.separate_forms = self.sep_form_var.get() == 1
                 existing.save()
+                # Sync rules from current UI state
+                ProfileRule.delete().where(
+                    ProfileRule.profile == existing).execute()
+                for rule in self._current_profile_rules:
+                    ProfileRule.create(
+                        profile=existing,
+                        rule_type=rule["rule_type"],
+                        target_level=rule["target_level"],
+                        target_id=rule["target_id"],
+                    )
             else:
                 # New profile — safe to write current rules
                 profile = PlaylistProfile.create(

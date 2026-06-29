@@ -421,6 +421,7 @@ and scroll position are preserved when items are added or removed.
 | **Export M3U** | Save as an M3U playlist file |
 | **Export JSON** | Save as a JSON file with full metadata |
 | **Push to Plex** | Create or update a playlist on your Plex server |
+| **Find Unused** | Populate the builder with all tracks not included in any saved profile. Creates an unnamed profile so you can browse, preview, and decide where items belong. |
 
 ---
 

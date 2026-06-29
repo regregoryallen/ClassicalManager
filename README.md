@@ -14,6 +14,7 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 - **Work-aware shuffling** that keeps movements together in correct order while randomizing the sequence of complete works
 - **Avoid adjacent** option to prevent consecutive works by the same composer, from the same album, or of the same musical form
 - **Include/exclude rules** at the composer, album, work, or track level for precise playlist curation
+- **Find Unused** to discover tracks not covered by any profile — useful for triaging new additions
 - **Non-destructive metadata overrides** to correct grouping errors without modifying audio files
 - **Incremental scanning** that detects only new, changed, or deleted files for fast library updates
 - **Multiple export targets**: M3U files, JSON, or direct push to Plex servers

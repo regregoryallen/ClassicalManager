@@ -226,7 +226,7 @@ def _get_profile(name: str):
     _init_database()
     matches = list(PlaylistProfile.select().where(
         (PlaylistProfile.name == name) &
-        (~PlaylistProfile.name.startswith("__temp_"))))
+        (~PlaylistProfile.name.startswith("__"))))
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
@@ -235,7 +235,7 @@ def _get_profile(name: str):
                    f"{', '.join(libs)}. Profile names must be unique.", err=True)
         raise typer.Exit(1)
     profiles = [p.name for p in PlaylistProfile.select().where(
-        ~PlaylistProfile.name.startswith("__temp_"))]
+        ~PlaylistProfile.name.startswith("__"))]
     typer.echo(f"Error: profile '{name}' not found.", err=True)
     if profiles:
         typer.echo(f"Available profiles: {', '.join(profiles)}", err=True)
@@ -352,7 +352,7 @@ def generate_all(
     lib = _get_library(library)
     profiles = list(PlaylistProfile.select().where(
         (PlaylistProfile.library == lib) &
-        (~PlaylistProfile.name.startswith("__temp_"))))
+        (~PlaylistProfile.name.startswith("__"))))
 
     if not profiles:
         typer.echo("No profiles found for this library.", err=True)

@@ -8,8 +8,10 @@ Fallback strategy — item match:
   Build a realized_path → Plex Track index by walking the music section,
   match each engine track to a ratingKey, then create the playlist from items.
 
-Regeneration overwrites by title:
-  Locate the existing playlist of the same name and delete-and-recreate.
+Regeneration updates in place:
+  Locate the existing playlist by name and replace its items without
+  deleting the playlist itself, preserving the Plex playlist ID for
+  external integrations (e.g. Music Assistant).
 
 Connection:
   base_url + token; token from environment variable (never stored in plaintext).
@@ -57,16 +59,18 @@ class PlexSerializer(Serializer):
         playlist_name = target_config["playlist_name"]
         strategy = target_config.get("strategy", "item_match")
 
-        # Delete existing playlist with the same name
-        _delete_existing_playlist(server, playlist_name)
+        # Find existing playlist to update in place (preserves playlist ID)
+        existing = _find_existing_playlist(server, playlist_name)
 
         if strategy == "item_match":
             return _push_item_match(
-                server, section, playlist, playlist_name, target_config
+                server, section, playlist, playlist_name, target_config,
+                existing,
             )
         else:
             return _push_m3u_handoff(
-                server, section, playlist, playlist_name, target_config
+                server, section, playlist, playlist_name, target_config,
+                existing,
             )
 
 
@@ -177,16 +181,27 @@ def _get_music_section(server, target_config: dict[str, Any]):
         ) from exc
 
 
-def _delete_existing_playlist(server, name: str) -> None:
-    """Delete an existing Plex playlist by name if it exists."""
+def _find_existing_playlist(server, name: str):
+    """Find an existing Plex playlist by name, or return None."""
     try:
         for pl in server.playlists():
             if pl.title == name:
-                pl.delete()
-                logger.info("Deleted existing Plex playlist: %s", name)
-                return
+                return pl
     except Exception as exc:
-        logger.warning("Error checking existing playlists: %s", exc)
+        logger.warning("Error searching existing playlists: %s", exc)
+    return None
+
+
+def _update_playlist_items(plex_playlist, new_tracks: list) -> None:
+    """Replace a playlist's items in place, preserving its ID."""
+    current_items = plex_playlist.items()
+    if current_items:
+        plex_playlist.removeItems(current_items)
+    plex_playlist.addItems(new_tracks)
+    logger.info(
+        "Updated Plex playlist '%s' in place (%d tracks)",
+        plex_playlist.title, len(new_tracks),
+    )
 
 
 def _push_m3u_handoff(
@@ -194,9 +209,16 @@ def _push_m3u_handoff(
     playlist: list[ResolvedTrack],
     name: str,
     target_config: dict[str, Any],
+    existing=None,
 ) -> Any:
     """Push via temporary M3U file handoff."""
     path_rules = target_config.get("path_rules", [])
+
+    # If playlist already exists, fall back to item-match update to preserve ID
+    if existing is not None:
+        return _push_item_match(
+            server, section, playlist, name, target_config, existing
+        )
 
     # Write a temporary M3U with Plex-matched paths
     m3u_serializer = M3USerializer()
@@ -234,6 +256,7 @@ def _push_item_match(
     playlist: list[ResolvedTrack],
     name: str,
     target_config: dict[str, Any],
+    existing=None,
 ) -> Any:
     """Push by matching tracks to Plex items via file paths."""
     path_rules = target_config.get("path_rules", [])
@@ -273,18 +296,22 @@ def _push_item_match(
             logger.warning("Failed to fetch Plex item %s: %s", key, exc)
 
     try:
-        plex_playlist = server.createPlaylist(
-            title=name,
-            items=plex_tracks,
-        )
-        logger.info(
-            "Created Plex playlist '%s' via item match (%d/%d tracks)",
-            name, len(plex_tracks), len(playlist),
-        )
-        return plex_playlist
+        if existing is not None:
+            _update_playlist_items(existing, plex_tracks)
+            return existing
+        else:
+            plex_playlist = server.createPlaylist(
+                title=name,
+                items=plex_tracks,
+            )
+            logger.info(
+                "Created Plex playlist '%s' via item match (%d/%d tracks)",
+                name, len(plex_tracks), len(playlist),
+            )
+            return plex_playlist
     except Exception as exc:
         raise PlexPushError(
-            f"Failed to create Plex playlist via item match: {exc}"
+            f"Failed to push Plex playlist via item match: {exc}"
         ) from exc
 
 

@@ -125,6 +125,16 @@ def launch_gui():
     log_handler.setLevel(logging.DEBUG)
     root_logger.addHandler(log_handler)
 
+    # DEBUG: also log to file for double-click diagnostics
+    _debug_log_path = Path.home() / ".local" / "share" / "classical-manager" / "gui_debug.log"
+    _debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+    _file_handler = logging.FileHandler(str(_debug_log_path), mode="w")
+    _file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S.%f"))
+    _file_handler.setLevel(logging.DEBUG)
+    root_logger.addHandler(_file_handler)
+
     app = App(ctk, log_handler=log_handler)
     app.mainloop()
 
@@ -2396,15 +2406,24 @@ class App:
                 self._sort_treeview_column(tree, col)
                 return "break"
             if row_dbl_click:
+                iid = tree.identify_row(event.y)
+                element = tree.identify_element(event.x, event.y)
+                has_children = bool(iid and tree.get_children(iid))
+                item_text = tree.item(iid, "text") if iid else "?"
+                logger.debug(
+                    "on_dbl: x=%d y=%d region=%s element=%s iid=%s "
+                    "text=%r has_children=%s row_dbl_click=%s",
+                    event.x, event.y, region, element, iid,
+                    item_text, has_children, row_dbl_click.__name__,
+                )
                 # Ignore double-clicks on the disclosure arrow so fast
                 # expand/collapse clicks don't trigger add/remove — but
                 # only for nodes that actually have children (the indicator
                 # element exists at every indent level, even for leaves).
-                element = tree.identify_element(event.x, event.y)
-                if element == "Treeitem.indicator":
-                    iid = tree.identify_row(event.y)
-                    if iid and tree.get_children(iid):
-                        return
+                if element == "Treeitem.indicator" and has_children:
+                    logger.debug("on_dbl: BLOCKED — indicator on parent node")
+                    return
+                logger.debug("on_dbl: CALLING %s", row_dbl_click.__name__)
                 return row_dbl_click(event)
 
         tree.bind("<Double-1>", on_dbl)
@@ -3192,6 +3211,7 @@ class App:
           - Looks excluded/unstyled → include it (or remove child excludes)
         """
         sel = self.builder_lib_tree.selection()
+        logger.debug("toggle_include: sel=%s", sel)
         if not sel:
             return "break"
 
@@ -3200,6 +3220,11 @@ class App:
             entry = self._builder_lib_iid_map.get(iid)
             if entry:
                 entries.append((iid, entry))
+            else:
+                logger.debug("toggle_include: iid %s NOT in iid_map", iid)
+
+        if not entries:
+            logger.debug("toggle_include: no entries found for sel=%s", sel)
 
         for iid, (level, entity_id) in entries:
             has_direct_include = any(
@@ -3216,8 +3241,22 @@ class App:
             # Use the tree's visual tag to determine current appearance
             tags = self.builder_lib_tree.item(iid, "tags")
             visually_included = "included" in tags
+            eff_included = self._is_effectively_included(level, entity_id)
+            item_text = self.builder_lib_tree.item(iid, "text")
+
+            logger.debug(
+                "toggle_include: %s id=%s text=%r tags=%s "
+                "direct_inc=%s direct_exc=%s vis_inc=%s eff_inc=%s "
+                "rules=%s",
+                level, entity_id, item_text, tags,
+                has_direct_include, has_direct_exclude,
+                visually_included, eff_included,
+                [(r["rule_type"], r["target_level"], r["target_id"])
+                 for r in self._current_profile_rules],
+            )
 
             if has_direct_include:
+                logger.debug("toggle_include: ACTION=remove direct include + cascade")
                 self._current_profile_rules = [
                     r for r in self._current_profile_rules
                     if not (r["rule_type"] == "include" and r["target_level"] == level
@@ -3225,20 +3264,27 @@ class App:
                 ]
                 self._cascade_remove_children(level, entity_id)
             elif has_direct_exclude:
+                logger.debug("toggle_include: ACTION=remove direct exclude")
                 self._current_profile_rules = [
                     r for r in self._current_profile_rules
                     if not (r["rule_type"] == "exclude" and r["target_level"] == level
                             and r["target_id"] == entity_id)
                 ]
             elif visually_included:
-                # Item appears included (via parent) — add exclude to remove it
+                logger.debug("toggle_include: ACTION=add exclude (visually included)")
                 self._add_rule("exclude", level, entity_id, refresh=False)
-            elif self._is_effectively_included(level, entity_id):
-                # Effectively included via parent but visually excluded
-                # (e.g. all child tracks have excludes) — remove child excludes
+            elif eff_included:
+                logger.debug("toggle_include: ACTION=cascade remove children (eff included but not visual)")
                 self._cascade_remove_children(level, entity_id)
             else:
+                logger.debug("toggle_include: ACTION=add include")
                 self._add_rule("include", level, entity_id, refresh=False)
+
+            logger.debug(
+                "toggle_include: rules after=%s",
+                [(r["rule_type"], r["target_level"], r["target_id"])
+                 for r in self._current_profile_rules],
+            )
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -3283,6 +3329,7 @@ class App:
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""
         sel = self.builder_lib_tree.selection()
+        logger.debug("include_selected: sel=%s", sel)
         if not sel:
             if event is None:
                 messagebox.showinfo("Select", "Select items in the Library pane first.")
@@ -3294,15 +3341,24 @@ class App:
             entry = self._builder_lib_iid_map.get(iid)
             if entry:
                 entries.append(entry)
+            else:
+                logger.debug("include_selected: iid %s NOT in iid_map", iid)
 
         if not entries:
-            logger.debug("include_selected: selection %s not in iid_map", sel)
+            logger.debug("include_selected: no entries resolved from sel=%s", sel)
 
         for level, entity_id in entries:
+            logger.debug(
+                "include_selected: processing %s id=%s rules=%s",
+                level, entity_id,
+                [(r["rule_type"], r["target_level"], r["target_id"])
+                 for r in self._current_profile_rules],
+            )
             # Don't duplicate an existing include rule
             if any(r["rule_type"] == "include" and r["target_level"] == level
                    and r["target_id"] == entity_id
                    for r in self._current_profile_rules):
+                logger.debug("include_selected: skip duplicate include")
                 continue
             # If there's an exclude rule for this, remove it instead of adding include
             removed = False
@@ -3311,16 +3367,24 @@ class App:
                         and r["target_id"] == entity_id):
                     self._current_profile_rules.pop(i)
                     removed = True
+                    logger.debug("include_selected: removed direct exclude")
                     break
             if not removed:
+                eff = self._is_effectively_included(level, entity_id)
+                logger.debug("include_selected: no exclude to remove, eff_included=%s", eff)
                 # If already effectively included via parent, just remove
                 # child excludes rather than adding a redundant include rule
-                if self._is_effectively_included(level, entity_id):
+                if eff:
                     self._cascade_remove_children(level, entity_id)
                 else:
                     self._add_rule("include", level, entity_id, refresh=False)
             # Always clean up child excludes when explicitly including a parent
             self._cascade_remove_children(level, entity_id)
+            logger.debug(
+                "include_selected: rules after=%s",
+                [(r["rule_type"], r["target_level"], r["target_id"])
+                 for r in self._current_profile_rules],
+            )
 
         with self._busy():
             view_state = self._save_builder_view_state()

@@ -624,8 +624,8 @@ class App:
         self.plex_section_entry.delete(0, "end")
         if self.active_library.plex_section:
             self.plex_section_entry.insert(0, self.active_library.plex_section)
-        self._new_profile()
         with self._busy():
+            self._new_profile()
             self._refresh_metrics()
             self._refresh_source_folders()
             self._refresh_explorer()

@@ -3185,7 +3185,12 @@ class App:
                       command=popup.destroy).pack(pady=(0, 10))
 
     def _builder_toggle_include(self, event=None):
-        """Toggle include state of selected library items on double-click."""
+        """Toggle include state of selected library items on double-click.
+
+        The toggle matches the *visual* state in the library tree:
+          - Looks included (blue) → exclude it
+          - Looks excluded/unstyled → include it (or remove child excludes)
+        """
         sel = self.builder_lib_tree.selection()
         if not sel:
             return "break"
@@ -3194,9 +3199,9 @@ class App:
         for iid in sel:
             entry = self._builder_lib_iid_map.get(iid)
             if entry:
-                entries.append(entry)
+                entries.append((iid, entry))
 
-        for level, entity_id in entries:
+        for iid, (level, entity_id) in entries:
             has_direct_include = any(
                 r["rule_type"] == "include" and r["target_level"] == level
                 and r["target_id"] == entity_id
@@ -3207,6 +3212,10 @@ class App:
                 and r["target_id"] == entity_id
                 for r in self._current_profile_rules
             )
+
+            # Use the tree's visual tag to determine current appearance
+            tags = self.builder_lib_tree.item(iid, "tags")
+            visually_included = "included" in tags
 
             if has_direct_include:
                 self._current_profile_rules = [
@@ -3221,8 +3230,13 @@ class App:
                     if not (r["rule_type"] == "exclude" and r["target_level"] == level
                             and r["target_id"] == entity_id)
                 ]
-            elif self._is_effectively_included(level, entity_id):
+            elif visually_included:
+                # Item appears included (via parent) — add exclude to remove it
                 self._add_rule("exclude", level, entity_id, refresh=False)
+            elif self._is_effectively_included(level, entity_id):
+                # Effectively included via parent but visually excluded
+                # (e.g. all child tracks have excludes) — remove child excludes
+                self._cascade_remove_children(level, entity_id)
             else:
                 self._add_rule("include", level, entity_id, refresh=False)
 
@@ -3289,7 +3303,6 @@ class App:
             if any(r["rule_type"] == "include" and r["target_level"] == level
                    and r["target_id"] == entity_id
                    for r in self._current_profile_rules):
-                logger.debug("include_selected: skip duplicate %s %s", level, entity_id)
                 continue
             # If there's an exclude rule for this, remove it instead of adding include
             removed = False
@@ -3298,11 +3311,16 @@ class App:
                         and r["target_id"] == entity_id):
                     self._current_profile_rules.pop(i)
                     removed = True
-                    logger.debug("include_selected: removed exclude for %s %s", level, entity_id)
                     break
             if not removed:
-                logger.debug("include_selected: adding include %s %s", level, entity_id)
-                self._add_rule("include", level, entity_id, refresh=False)
+                # If already effectively included via parent, just remove
+                # child excludes rather than adding a redundant include rule
+                if self._is_effectively_included(level, entity_id):
+                    self._cascade_remove_children(level, entity_id)
+                else:
+                    self._add_rule("include", level, entity_id, refresh=False)
+            # Always clean up child excludes when explicitly including a parent
+            self._cascade_remove_children(level, entity_id)
 
         with self._busy():
             view_state = self._save_builder_view_state()

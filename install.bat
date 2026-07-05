@@ -149,8 +149,8 @@ echo   Source files validated.
 REM Offer git pull
 if exist "!SCRIPT_DIR!\.git\" (
     echo.
-    set "GIT_PULL=Y"
-    set /p "GIT_PULL=  Git repository detected. Pull latest changes? (Y/N) [Y]: "
+    set "GIT_PULL=N"
+    set /p "GIT_PULL=  Git repository detected. Pull latest changes? (Y/N) [N]: "
     if /i "!GIT_PULL!"=="Y" (
         echo  Running git pull...
         pushd "!SCRIPT_DIR!"

@@ -386,7 +386,7 @@ validate_source() {
 offer_git_pull() {
     if [ -d "$SCRIPT_DIR/.git" ]; then
         echo ""
-        if ask_yn "Git repository detected. Pull latest changes before installing?" "y"; then
+        if ask_yn "Git repository detected. Pull latest changes before installing?" "n"; then
             info "Running git pull..."
             (cd "$SCRIPT_DIR" && git pull)
             success "Repository updated"

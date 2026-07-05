@@ -2251,7 +2251,7 @@ class App:
                          in_=self.builder_lib_tree)
 
         self._setup_tree_sort(self.builder_lib_tree,
-                              row_dbl_click=self._builder_include_selected)
+                              row_dbl_click=self._builder_toggle_include)
         self.builder_lib_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "lib"))
         self._builder_lib_iid_map = {}  # iid → (level, entity_id)
 
@@ -3044,6 +3044,50 @@ class App:
             p for p in self._current_profile_pins if p["work_id"] != work_id
         ]
         self._rebuild_playlist_tree()
+
+    def _builder_toggle_include(self, event=None):
+        """Toggle include state of selected library items on double-click."""
+        sel = self.builder_lib_tree.selection()
+        if not sel:
+            return "break"
+
+        entries = []
+        for iid in sel:
+            entry = self._builder_lib_iid_map.get(iid)
+            if entry:
+                entries.append(entry)
+
+        for level, entity_id in entries:
+            # If already included, remove it
+            has_include = any(
+                r["rule_type"] == "include" and r["target_level"] == level
+                and r["target_id"] == entity_id
+                for r in self._current_profile_rules
+            )
+            if has_include:
+                self._current_profile_rules = [
+                    r for r in self._current_profile_rules
+                    if not (r["rule_type"] == "include" and r["target_level"] == level
+                            and r["target_id"] == entity_id)
+                ]
+                self._cascade_remove_children(level, entity_id)
+            else:
+                # Remove exclude if present, otherwise add include
+                removed = False
+                for i, r in enumerate(self._current_profile_rules):
+                    if (r["rule_type"] == "exclude" and r["target_level"] == level
+                            and r["target_id"] == entity_id):
+                        self._current_profile_rules.pop(i)
+                        removed = True
+                        break
+                if not removed:
+                    self._add_rule("include", level, entity_id, refresh=False)
+
+        with self._busy():
+            view_state = self._save_builder_view_state()
+            self._refresh_rules_display()
+            self._restore_builder_view_state(view_state)
+        return "break"
 
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""

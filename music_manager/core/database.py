@@ -53,6 +53,7 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         Track,
         PlaylistProfile,
         ProfileRule,
+        ProfilePin,
         Override,
     ])
 
@@ -280,6 +281,20 @@ class ProfileRule(BaseModel):
 
     class Meta:
         table_name = "profile_rules"
+
+
+class ProfilePin(BaseModel):
+    """A work pinned to a specific position in the playlist output."""
+
+    profile = pw.ForeignKeyField(PlaylistProfile, backref="pins", on_delete="CASCADE")
+    work_id = pw.IntegerField()
+    position = pw.IntegerField()  # 1-5
+
+    class Meta:
+        table_name = "profile_pins"
+        indexes = (
+            (("profile", "position"), True),  # one work per position per profile
+        )
 
 
 # ---------------------------------------------------------------------------

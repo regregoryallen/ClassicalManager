@@ -150,6 +150,7 @@ class App:
 
         self.active_library = None
         self._current_profile_rules = []  # in-memory include/exclude rules
+        self._current_profile_pins = []   # in-memory pins: [{work_id, position, display}]
         self._profile_picker_open = False
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
@@ -266,7 +267,7 @@ class App:
         """Silently save current builder state as an __autosave__ profile."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
 
         # Delete existing autosave for this library
         for existing in PlaylistProfile.select().where(
@@ -274,6 +275,7 @@ class App:
             (PlaylistProfile.name == "__autosave__")
         ):
             ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
             existing.delete_instance()
 
         # Capture current UI state
@@ -301,6 +303,13 @@ class App:
                 rule_type=rule["rule_type"],
                 target_level=rule["target_level"],
                 target_id=rule["target_id"],
+            )
+
+        for pin in self._current_profile_pins:
+            ProfilePin.create(
+                profile=profile,
+                work_id=pin["work_id"],
+                position=pin["position"],
             )
 
         # Remember the profile name entry text separately
@@ -333,12 +342,13 @@ class App:
         """Delete the autosave profile for the active library."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
         for existing in PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
             (PlaylistProfile.name == "__autosave__")
         ):
             ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
             existing.delete_instance()
 
     def mainloop(self):
@@ -2088,6 +2098,8 @@ class App:
         self.rules_listbox.delete(0, "end")
         for rule in self._current_profile_rules:
             self.rules_listbox.insert("end", rule["display"])
+        for pin in self._current_profile_pins:
+            self.rules_listbox.insert("end", pin["display"])
         # Refresh builder panes if they exist
         if hasattr(self, "builder_lib_tree"):
             self._rebuild_library_tree()
@@ -2313,6 +2325,7 @@ class App:
         self._setup_tree_sort(self.builder_pl_tree,
                               row_dbl_click=self._builder_exclude_selected)
         self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
+        self.builder_pl_tree.tag_configure("pinned", foreground="#e680ff")  # orchid
         self._builder_pl_iid_map = {}  # iid → (level, entity_id)
 
         # -- Bottom: action buttons --
@@ -2894,9 +2907,15 @@ class App:
             for work, vis_tracks in work_entries:
                 work_composer = work.composer.name if work.composer_id else ""
                 work_genre = vis_tracks[0].genre if vis_tracks and vis_tracks[0].genre else ""
+                # Check if this work is pinned
+                pin = next((p for p in self._current_profile_pins
+                            if p["work_id"] == work.id), None)
+                work_text = (f"[#{pin['position']}] {work.work_name}"
+                             if pin else work.work_name)
                 work_iid = self.builder_pl_tree.insert(
-                    album_iid, "end", text=work.work_name,
-                    values=(work_composer, work_genre, f"{len(vis_tracks)} trk"))
+                    album_iid, "end", text=work_text,
+                    values=(work_composer, work_genre, f"{len(vis_tracks)} trk"),
+                    tags=("pinned",) if pin else ())
                 self._builder_pl_iid_map[work_iid] = ("work", work.id)
                 self._pl_search_meta[work_iid] = " ".join(filter(None, [
                     work.work_name, work_composer, work_genre]))
@@ -2975,8 +2994,50 @@ class App:
         else:
             menu.add_command(label="<< Remove",
                              command=self._builder_exclude_selected)
+            if level == "work":
+                pin_menu = tk.Menu(menu, tearoff=0)
+                for pos in range(1, 6):
+                    pin_menu.add_command(
+                        label=f"Position {pos}",
+                        command=lambda p=pos, wid=entity_id: self._pin_work(wid, p),
+                    )
+                pin_menu.add_separator()
+                pin_menu.add_command(
+                    label="Remove pin",
+                    command=lambda wid=entity_id: self._unpin_work(wid),
+                )
+                menu.add_cascade(label="Pin to position...", menu=pin_menu)
 
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _pin_work(self, work_id, position):
+        """Pin a work to a position (1-5). Replaces any existing pin at that position."""
+        from music_manager.core.database import Work
+        try:
+            work = Work.get_by_id(work_id)
+            display = f"PIN #{position}: {work.work_name}"
+        except Work.DoesNotExist:
+            return
+
+        # Remove any existing pin at this position or for this work
+        self._current_profile_pins = [
+            p for p in self._current_profile_pins
+            if p["position"] != position and p["work_id"] != work_id
+        ]
+        self._current_profile_pins.append({
+            "work_id": work_id,
+            "position": position,
+            "display": display,
+        })
+        self._current_profile_pins.sort(key=lambda p: p["position"])
+        self._rebuild_playlist_tree()
+
+    def _unpin_work(self, work_id):
+        """Remove a pin for a work."""
+        self._current_profile_pins = [
+            p for p in self._current_profile_pins if p["work_id"] != work_id
+        ]
+        self._rebuild_playlist_tree()
 
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""
@@ -3089,13 +3150,14 @@ class App:
             messagebox.showwarning("No Library", "Select a library first.")
             return None
 
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
 
         # Use a temp name that won't collide with user-saved profiles
         name = "__temp_preview__"
         # Clean up any leftover temp profiles
         for old in PlaylistProfile.select().where(PlaylistProfile.name == name):
             ProfileRule.delete().where(ProfileRule.profile == old).execute()
+            ProfilePin.delete().where(ProfilePin.profile == old).execute()
             old.delete_instance()
 
         length_val = self.length_value.get().strip()
@@ -3121,6 +3183,13 @@ class App:
                 rule_type=rule["rule_type"],
                 target_level=rule["target_level"],
                 target_id=rule["target_id"],
+            )
+
+        for pin in self._current_profile_pins:
+            ProfilePin.create(
+                profile=profile,
+                work_id=pin["work_id"],
+                position=pin["position"],
             )
 
         return profile
@@ -3149,8 +3218,9 @@ class App:
     def _delete_temp_profile(self, profile):
         """Delete a temporarily-created profile."""
         if profile:
-            from music_manager.core.database import ProfileRule
+            from music_manager.core.database import ProfileRule, ProfilePin
             ProfileRule.delete().where(ProfileRule.profile == profile).execute()
+            ProfilePin.delete().where(ProfilePin.profile == profile).execute()
             profile.delete_instance()
 
     def _preview_playlist(self):
@@ -3464,6 +3534,7 @@ class App:
         self.sep_album_var.deselect()
         self.sep_form_var.deselect()
         self._current_profile_rules.clear()
+        self._current_profile_pins.clear()
         self._refresh_rules_display()
         self._refresh_builder_tree()
 
@@ -3478,7 +3549,7 @@ class App:
             messagebox.showwarning("No Name", "Enter a profile name.")
             return
 
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
 
         # Enforce unique profile names across all libraries
         conflict = PlaylistProfile.select().where(
@@ -3500,6 +3571,7 @@ class App:
             (PlaylistProfile.name == name)
         ):
             ProfileRule.delete().where(ProfileRule.profile == existing).execute()
+            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
             existing.delete_instance()
 
         length_val = self.length_value.get().strip()
@@ -3525,6 +3597,13 @@ class App:
                 rule_type=rule["rule_type"],
                 target_level=rule["target_level"],
                 target_id=rule["target_id"],
+            )
+
+        for pin in self._current_profile_pins:
+            ProfilePin.create(
+                profile=profile,
+                work_id=pin["work_id"],
+                position=pin["position"],
             )
 
         self._clear_autosave()
@@ -3597,6 +3676,7 @@ class App:
             if current_name in selected_names:
                 self.profile_name_entry.delete(0, "end")
                 self._current_profile_rules.clear()
+                self._current_profile_pins.clear()
                 self._refresh_rules_display()
             messagebox.showinfo("Deleted", f"Deleted {label}.")
 
@@ -3735,6 +3815,23 @@ class App:
                 "target_id": rule.target_id,
                 "display": f"{rule.rule_type.upper()}: {rule.target_level} — {display_name}",
             })
+
+        # Load pins
+        from music_manager.core.database import ProfilePin
+        self._current_profile_pins.clear()
+        for pin in ProfilePin.select().where(ProfilePin.profile == profile):
+            try:
+                work = Work.get_by_id(pin.work_id)
+                display = f"PIN #{pin.position}: {work.work_name}"
+            except Work.DoesNotExist:
+                display = f"PIN #{pin.position}: (deleted id={pin.work_id})"
+            self._current_profile_pins.append({
+                "work_id": pin.work_id,
+                "position": pin.position,
+                "display": display,
+            })
+        self._current_profile_pins.sort(key=lambda p: p["position"])
+
         self._refresh_rules_display()
         self.root.config(cursor="")
 

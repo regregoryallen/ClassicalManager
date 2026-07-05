@@ -14,7 +14,7 @@ import peewee as pw
 
 from music_manager.core.database import (
     Library, Album, Work, Track, Composer,
-    PlaylistProfile, ProfileRule,
+    PlaylistProfile, ProfileRule, ProfilePin,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,9 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
                        separate_composers=profile.separate_composers,
                        separate_albums=profile.separate_albums,
                        separate_forms=profile.separate_forms)
+
+    # Step 4b: Apply pins (insert pinned works at fixed positions)
+    ordered = _apply_pins(ordered, profile)
 
     # Step 5: Apply stop conditions
     final = _apply_stop_conditions(ordered, profile)
@@ -299,6 +302,20 @@ def _select_tracks(
         for tid in excluded:
             selected.discard(tid)
             admission_map.pop(tid, None)
+
+    # Auto-include tracks from pinned works
+    pins = list(ProfilePin.select().where(ProfilePin.profile == profile))
+    for pin in pins:
+        pin_track_ids = set(
+            t.id for t in
+            Track.select(Track.id).where(
+                (Track.library == library) & (Track.work == pin.work_id)
+            )
+        )
+        for tid in pin_track_ids:
+            if tid in all_track_ids and tid not in selected:
+                selected.add(tid)
+                admission_map[tid] = f"pin:position:{pin.position}"
 
     return selected, admission_map
 
@@ -675,6 +692,73 @@ def _apply_separation(
         remaining.remove(chosen)
 
     return [groups[i] for i in result_indices]
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: Pin application
+# ---------------------------------------------------------------------------
+
+def _apply_pins(
+    tracks: list[ResolvedTrack],
+    profile: PlaylistProfile,
+) -> list[ResolvedTrack]:
+    """Insert pinned works at their designated positions.
+
+    Pinned works are pulled out of the shuffled list (or built fresh if
+    not already selected) and re-inserted at the correct work-boundary
+    position. Position 1 = beginning, position 2 = after the first work, etc.
+    """
+    pins = list(
+        ProfilePin.select()
+        .where(ProfilePin.profile == profile)
+        .order_by(ProfilePin.position)
+    )
+    if not pins:
+        return tracks
+
+    for pin in pins:
+        # Separate pinned tracks from the main list
+        pinned_rts = [rt for rt in tracks if rt.work_id == pin.work_id]
+        remaining = [rt for rt in tracks if rt.work_id != pin.work_id]
+
+        if not pinned_rts:
+            # Work not in selection (shouldn't happen with auto-include, but guard)
+            logger.warning("Pinned work %d has no resolved tracks, skipping", pin.work_id)
+            continue
+
+        # Sort pinned tracks in natural order
+        pinned_rts.sort(key=lambda rt: (
+            rt.disc_number,
+            rt.movement_number if rt.movement_number is not None else rt.track_number,
+        ))
+
+        # Insert at the correct work-boundary position
+        insert_idx = _find_work_boundary_index(remaining, pin.position - 1)
+        tracks = remaining[:insert_idx] + pinned_rts + remaining[insert_idx:]
+
+    return tracks
+
+
+def _find_work_boundary_index(tracks: list[ResolvedTrack], work_count: int) -> int:
+    """Find the track index after `work_count` complete works.
+
+    A work boundary is where work_id changes. Returns 0 for work_count=0,
+    the index after the Nth work ends for work_count=N, or len(tracks) if
+    fewer works exist than requested.
+    """
+    if work_count <= 0:
+        return 0
+    boundaries_seen = 0
+    prev_work_id = None
+    for i, rt in enumerate(tracks):
+        current_wid = rt.work_id if rt.work_id is not None else -(i + 1)
+        if current_wid != prev_work_id:
+            if prev_work_id is not None:
+                boundaries_seen += 1
+            if boundaries_seen >= work_count:
+                return i
+            prev_work_id = current_wid
+    return len(tracks)
 
 
 # ---------------------------------------------------------------------------

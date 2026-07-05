@@ -854,7 +854,8 @@ def redetect_works(library: Library,
                 Work.delete().where(Work.id.in_(old_ids)).execute()
 
             # Build PendingTrack list with tags reconstructed from DB
-            all_tracks = list(Track.select().where(Track.album == album))
+            all_tracks = list(Track.select().where(Track.album == album)
+                              .order_by(Track.disc_number, Track.track_number))
             assigned: set[int] = set()
             pending: list[PendingTrack] = []
             for t in all_tracks:
@@ -1236,7 +1237,8 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
                     Work.delete().where(Work.id.in_(old_ids)).execute()
 
                 # Rebuild works
-                tracks = list(Track.select().where(Track.album == album))
+                tracks = list(Track.select().where(Track.album == album)
+                              .order_by(Track.disc_number, Track.track_number))
                 pending: list[PendingTrack] = []
                 for t in tracks:
                     tags = RawTags(
@@ -1352,6 +1354,10 @@ def _process_album_group(
         if rel_path in work_overrides:
             pt.override_work_key = work_overrides[rel_path]
         pending_tracks.append(pt)
+
+    # Sort by (disc_number, track_number) so work_sequence is assigned in
+    # natural album order, not filesystem discovery order.
+    pending_tracks.sort(key=lambda pt: (pt.db_track.disc_number, pt.db_track.track_number))
 
     # Detect and create works
     works_before = Work.select().where(Work.album == album).count()

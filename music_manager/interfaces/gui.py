@@ -3193,13 +3193,16 @@ class App:
                 entries.append(entry)
 
         for level, entity_id in entries:
-            # Check if item is effectively included (direct or via parent)
             has_direct_include = any(
                 r["rule_type"] == "include" and r["target_level"] == level
                 and r["target_id"] == entity_id
                 for r in self._current_profile_rules
             )
-            included_via_parent = self._is_included_via_parent(level, entity_id)
+            has_direct_exclude = any(
+                r["rule_type"] == "exclude" and r["target_level"] == level
+                and r["target_id"] == entity_id
+                for r in self._current_profile_rules
+            )
 
             if has_direct_include:
                 # Remove the direct include rule and cascade children
@@ -3209,20 +3212,19 @@ class App:
                             and r["target_id"] == entity_id)
                 ]
                 self._cascade_remove_children(level, entity_id)
-            elif included_via_parent:
-                # Included via parent — add explicit exclude to remove it
+            elif has_direct_exclude:
+                # Has an exclude — remove it to re-include via parent
+                self._current_profile_rules = [
+                    r for r in self._current_profile_rules
+                    if not (r["rule_type"] == "exclude" and r["target_level"] == level
+                            and r["target_id"] == entity_id)
+                ]
+            elif self._is_effectively_included(level, entity_id):
+                # Effectively included via parent — add exclude to remove it
                 self._add_rule("exclude", level, entity_id, refresh=False)
             else:
-                # Not included — remove exclude if present, otherwise add include
-                removed = False
-                for i, r in enumerate(self._current_profile_rules):
-                    if (r["rule_type"] == "exclude" and r["target_level"] == level
-                            and r["target_id"] == entity_id):
-                        self._current_profile_rules.pop(i)
-                        removed = True
-                        break
-                if not removed:
-                    self._add_rule("include", level, entity_id, refresh=False)
+                # Not included at all — add include
+                self._add_rule("include", level, entity_id, refresh=False)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -3230,8 +3232,8 @@ class App:
             self._restore_builder_view_state(view_state)
         return "break"
 
-    def _is_included_via_parent(self, level, entity_id):
-        """Check if an item is included through a parent-level include rule."""
+    def _is_effectively_included(self, level, entity_id):
+        """Check if an item is effectively included (via parent, not blocked by exclude)."""
         from music_manager.core.database import Work, Track
         if level == "work":
             work = Work.get_by_id(entity_id)
@@ -3242,10 +3244,20 @@ class App:
             )
         elif level == "track":
             track = Track.get_by_id(entity_id)
+            # Check if work is excluded (blocks album-level include)
+            work_excluded = track.work_id and any(
+                r["rule_type"] == "exclude" and r["target_level"] == "work"
+                and r["target_id"] == track.work_id
+                for r in self._current_profile_rules
+            )
+            if work_excluded:
+                return False
+            # Check album-level include
             if any(r["rule_type"] == "include" and r["target_level"] == "album"
                    and r["target_id"] == track.album_id
                    for r in self._current_profile_rules):
                 return True
+            # Check work-level include
             if track.work_id and any(
                 r["rule_type"] == "include" and r["target_level"] == "work"
                 and r["target_id"] == track.work_id

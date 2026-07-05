@@ -2997,6 +2997,10 @@ class App:
                              command=self._builder_include_selected)
             menu.add_command(label="<< Remove",
                              command=self._builder_exclude_selected)
+            menu.add_separator()
+            menu.add_command(
+                label="Show in profiles...",
+                command=lambda lv=level, eid=entity_id: self._show_in_profiles(lv, eid))
         else:
             menu.add_command(label="<< Remove",
                              command=self._builder_exclude_selected)
@@ -3044,6 +3048,132 @@ class App:
             p for p in self._current_profile_pins if p["work_id"] != work_id
         ]
         self._rebuild_playlist_tree()
+
+    def _show_in_profiles(self, level, entity_id):
+        """Show a popup listing all profiles that include this item."""
+        from music_manager.core.database import (
+            PlaylistProfile, ProfileRule, Album, Work, Track,
+        )
+
+        # Get display name for the item
+        if level == "album":
+            name = Album.get_by_id(entity_id).title
+        elif level == "work":
+            name = Work.get_by_id(entity_id).work_name
+        elif level == "track":
+            name = Track.get_by_id(entity_id).title
+        else:
+            name = str(entity_id)
+
+        # Find all profiles (non-internal) that have a matching include rule
+        # Direct match at this level
+        direct_rules = list(ProfileRule.select().where(
+            (ProfileRule.rule_type == "include") &
+            (ProfileRule.target_level == level) &
+            (ProfileRule.target_id == entity_id)
+        ))
+        profile_ids = {r.profile_id for r in direct_rules}
+
+        # Also check parent-level includes (album includes work/track, work includes track)
+        if level == "work":
+            work = Work.get_by_id(entity_id)
+            album_rules = list(ProfileRule.select().where(
+                (ProfileRule.rule_type == "include") &
+                (ProfileRule.target_level == "album") &
+                (ProfileRule.target_id == work.album_id)
+            ))
+            profile_ids.update(r.profile_id for r in album_rules)
+            if work.composer_id:
+                composer_rules = list(ProfileRule.select().where(
+                    (ProfileRule.rule_type == "include") &
+                    (ProfileRule.target_level == "composer") &
+                    (ProfileRule.target_id == work.composer_id)
+                ))
+                profile_ids.update(r.profile_id for r in composer_rules)
+        elif level == "track":
+            track = Track.get_by_id(entity_id)
+            if track.work_id:
+                work_rules = list(ProfileRule.select().where(
+                    (ProfileRule.rule_type == "include") &
+                    (ProfileRule.target_level == "work") &
+                    (ProfileRule.target_id == track.work_id)
+                ))
+                profile_ids.update(r.profile_id for r in work_rules)
+            album_rules = list(ProfileRule.select().where(
+                (ProfileRule.rule_type == "include") &
+                (ProfileRule.target_level == "album") &
+                (ProfileRule.target_id == track.album_id)
+            ))
+            profile_ids.update(r.profile_id for r in album_rules)
+            if track.composer_id:
+                composer_rules = list(ProfileRule.select().where(
+                    (ProfileRule.rule_type == "include") &
+                    (ProfileRule.target_level == "composer") &
+                    (ProfileRule.target_id == track.composer_id)
+                ))
+                profile_ids.update(r.profile_id for r in composer_rules)
+        elif level == "album":
+            # Check composer-level includes for the album's artists
+            tracks = Track.select(Track.composer).where(
+                Track.album == entity_id).distinct()
+            composer_ids = {t.composer_id for t in tracks if t.composer_id}
+            for cid in composer_ids:
+                composer_rules = list(ProfileRule.select().where(
+                    (ProfileRule.rule_type == "include") &
+                    (ProfileRule.target_level == "composer") &
+                    (ProfileRule.target_id == cid)
+                ))
+                profile_ids.update(r.profile_id for r in composer_rules)
+
+        # Also include profiles with NO include rules (they include everything)
+        all_profiles = list(PlaylistProfile.select().where(
+            ~PlaylistProfile.name.startswith("__")))
+        profiles_with_no_includes = []
+        for prof in all_profiles:
+            if prof.id in profile_ids:
+                continue
+            has_includes = ProfileRule.select().where(
+                (ProfileRule.profile == prof) &
+                (ProfileRule.rule_type == "include")
+            ).exists()
+            if not has_includes:
+                profiles_with_no_includes.append(prof)
+
+        # Gather matching profile objects
+        matching = [p for p in all_profiles if p.id in profile_ids]
+        matching.sort(key=lambda p: p.name)
+
+        # Build popup
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Profiles including: {name}")
+        popup.transient(self.root)
+        self._center_on_main(popup, 450, 300)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        ctk = self.ctk
+        frame = ctk.CTkFrame(popup)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        lb = tk.Listbox(frame, bg="#2b2b2b", fg="white",
+                        selectbackground="#1f6aa5",
+                        font=("Segoe UI", 10))
+        lb.pack(fill="both", expand=True)
+
+        if matching:
+            for p in matching:
+                lb.insert("end", f"{p.name}  ({p.library.name})")
+        if profiles_with_no_includes:
+            lb.insert("end", "")
+            lb.insert("end", "— Profiles with no include rules (all tracks) —")
+            for p in sorted(profiles_with_no_includes, key=lambda p: p.name):
+                lb.insert("end", f"{p.name}  ({p.library.name})")
+
+        if not matching and not profiles_with_no_includes:
+            lb.insert("end", "(not included in any profile)")
+
+        ctk.CTkButton(popup, text="Close", width=80,
+                      command=popup.destroy).pack(pady=(0, 10))
 
     def _builder_toggle_include(self, event=None):
         """Toggle include state of selected library items on double-click."""

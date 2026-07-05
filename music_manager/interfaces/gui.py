@@ -2059,6 +2059,12 @@ class App:
 
     def _add_rule(self, rule_type, target_level, target_id, refresh=True):
         """Add an include/exclude rule to the in-memory list."""
+        # Skip if this exact rule already exists
+        if any(r["rule_type"] == rule_type and r["target_level"] == target_level
+               and r["target_id"] == target_id
+               for r in self._current_profile_rules):
+            return
+
         # Get a display label
         from music_manager.core.database import Album, Work, Track
         if target_level == "album":

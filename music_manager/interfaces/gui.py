@@ -2764,7 +2764,12 @@ class App:
                     ("track", t.id) in included for t in tracks
                 )
 
-                if work_key in excluded:
+                # Check if all tracks are excluded
+                all_tracks_excluded = (
+                    tracks and all(("track", t.id) in excluded for t in tracks)
+                )
+
+                if work_key in excluded or all_tracks_excluded:
                     work_tag = "excluded"
                 elif work_effectively_included and work_has_excluded_track:
                     work_tag = "partial"
@@ -3188,21 +3193,27 @@ class App:
                 entries.append(entry)
 
         for level, entity_id in entries:
-            # If already included, remove it
-            has_include = any(
+            # Check if item is effectively included (direct or via parent)
+            has_direct_include = any(
                 r["rule_type"] == "include" and r["target_level"] == level
                 and r["target_id"] == entity_id
                 for r in self._current_profile_rules
             )
-            if has_include:
+            included_via_parent = self._is_included_via_parent(level, entity_id)
+
+            if has_direct_include:
+                # Remove the direct include rule and cascade children
                 self._current_profile_rules = [
                     r for r in self._current_profile_rules
                     if not (r["rule_type"] == "include" and r["target_level"] == level
                             and r["target_id"] == entity_id)
                 ]
                 self._cascade_remove_children(level, entity_id)
+            elif included_via_parent:
+                # Included via parent — add explicit exclude to remove it
+                self._add_rule("exclude", level, entity_id, refresh=False)
             else:
-                # Remove exclude if present, otherwise add include
+                # Not included — remove exclude if present, otherwise add include
                 removed = False
                 for i, r in enumerate(self._current_profile_rules):
                     if (r["rule_type"] == "exclude" and r["target_level"] == level
@@ -3218,6 +3229,30 @@ class App:
             self._refresh_rules_display()
             self._restore_builder_view_state(view_state)
         return "break"
+
+    def _is_included_via_parent(self, level, entity_id):
+        """Check if an item is included through a parent-level include rule."""
+        from music_manager.core.database import Work, Track
+        if level == "work":
+            work = Work.get_by_id(entity_id)
+            return any(
+                r["rule_type"] == "include" and r["target_level"] == "album"
+                and r["target_id"] == work.album_id
+                for r in self._current_profile_rules
+            )
+        elif level == "track":
+            track = Track.get_by_id(entity_id)
+            if any(r["rule_type"] == "include" and r["target_level"] == "album"
+                   and r["target_id"] == track.album_id
+                   for r in self._current_profile_rules):
+                return True
+            if track.work_id and any(
+                r["rule_type"] == "include" and r["target_level"] == "work"
+                and r["target_id"] == track.work_id
+                for r in self._current_profile_rules
+            ):
+                return True
+        return False
 
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""

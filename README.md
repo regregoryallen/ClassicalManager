@@ -14,10 +14,13 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 - **Work-aware shuffling** that keeps movements together in correct order while randomizing the sequence of complete works
 - **Avoid adjacent** option to prevent consecutive works by the same composer, from the same album, or of the same musical form
 - **Include/exclude rules** at the composer, album, work, or track level for precise playlist curation
+- **Pin to position** — pin specific works to fixed positions (1–5) at the start of a generated playlist, ensuring a curated opening sequence
+- **Show in profiles** — right-click any album, work, or track to see which saved profiles include it
+- **Double-click toggle** — double-click items in the Playlist Builder's library pane to toggle their include/exclude state
 - **Find Unused** to discover tracks not covered by any profile — useful for triaging new additions
 - **Non-destructive metadata overrides** to correct grouping errors without modifying audio files
 - **Incremental scanning** that detects only new, changed, or deleted files for fast library updates
-- **Multiple export targets**: M3U files, JSON, or direct push to Plex servers
+- **Multiple export targets**: M3U files, JSON, or direct push to Plex servers — Plex playlists are updated in place, preserving playlist IDs across regenerations
 - **Multiple libraries** to organize distinct collections (e.g., classical, holiday music)
 - **Track preview** — right-click any track to play it in your system's default audio player
 - **Column sorting** with numeric-aware ordering across all tree views

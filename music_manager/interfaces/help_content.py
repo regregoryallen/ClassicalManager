@@ -211,8 +211,10 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Hide 1-track: hides standalone works")
     bullet("+/\u2212: expand/collapse all (to work level)")
     bullet("Double-click column headers to sort (numeric-aware)")
-    bullet("Select items and click Add >> or double-click to include")
+    bullet("Select items and click Add >> or double-click to include "
+           "(double-click toggles: included items are removed, unselected items are included)")
     bullet("Right-click: Play, Details, Show Album")
+    bullet("Show in profiles\u2026 \u2014 right-click to see which saved profiles include this item")
 
     subheading("Playlist Pane (right)")
     body(
@@ -226,9 +228,21 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Preview \u2014 dry-run showing resolved playlist with track details")
     bullet("Export M3U \u2014 save as an M3U playlist file")
     bullet("Export JSON \u2014 save as a JSON file with full metadata")
-    bullet("Push to Plex \u2014 create or update a playlist on your Plex server")
+    bullet("Push to Plex \u2014 create or update a playlist on your Plex server "
+           "(preserves playlist ID across regenerations)")
     bullet("Find Unused \u2014 populate the builder with all tracks not included "
            "in any saved profile, so you can browse and assign them")
+
+    subheading("Pin to Position")
+    body(
+        "Pin specific works to fixed positions (1\u20135) at the start of a "
+        "generated playlist for a curated opening sequence.\n"
+    )
+    bullet("Right-click a work in the Playlist pane \u2192 Pin to position... \u2192 choose 1\u20135")
+    bullet("Pinned works show [#N] prefix in orchid color")
+    bullet("Pinned works are auto-included \u2014 no separate include rule needed")
+    bullet("Right-click \u2192 Remove pin to unpin")
+    bullet("Pins are saved with the profile")
 
     # ── Cleanup / Overlay ──
     heading("cleanup", "Cleanup / Overlay")

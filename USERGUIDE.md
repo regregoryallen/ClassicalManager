@@ -33,6 +33,7 @@ Key capabilities:
 - **Export to M3U, JSON, or Plex** with configurable path rewriting
 - **Non-destructive metadata overrides** to correct grouping without modifying audio files
 - **Multiple libraries** for distinct collections (e.g., classical, holiday music)
+- **Pin to position** to fix specific works at positions 1–5 at the start of a playlist
 - **GUI and CLI** — the GUI for interactive work, the CLI for scripting and cron jobs
 
 The application works with locally stored audio files — ripped CDs, purchased downloads, or any music collection on disk. It is not a streaming service client and does not connect to Spotify, Apple Music, or similar platforms. Files downloaded from those services are supported like any other audio files.
@@ -398,10 +399,12 @@ Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 - **Column sorting**: Double-click any column header to sort; click again to reverse.
   An arrow indicator (▲/▼) appears next to the sorted column. Numeric values are
   sorted numerically.
-- **Adding items**: Select one or more items and click **Add >>**, or double-click.
-  Double-clicking the expand/collapse arrow does not trigger an add.
+- **Adding items**: Select one or more items and click **Add >>**, or double-click
+  to toggle include/exclude state. Double-clicking an included item removes it;
+  double-clicking an excluded or unselected item includes it.
 - **Right-click**: Context menu with **Play** (tracks), **Details** (metadata popup),
-  and **Show Album** (full album view with editing)
+  **Show Album** (full album view with editing), and **Show in profiles...** (list
+  all saved profiles that include the selected item)
 
 ### Playlist Pane (right)
 
@@ -420,8 +423,24 @@ and scroll position are preserved when items are added or removed.
 | **Preview** | Dry-run showing the resolved playlist with track details and total duration |
 | **Export M3U** | Save as an M3U playlist file |
 | **Export JSON** | Save as a JSON file with full metadata |
-| **Push to Plex** | Create or update a playlist on your Plex server |
+| **Push to Plex** | Create or update a playlist on your Plex server (updates in place, preserving the playlist ID) |
 | **Find Unused** | Populate the builder with all tracks not included in any saved profile. Creates an unnamed profile so you can browse, preview, and decide where items belong. |
+
+### Pin to Position
+
+You can pin specific works to fixed positions (1–5) at the start of a generated
+playlist. This ensures a curated opening sequence regardless of shuffle settings.
+
+1. In the **Playlist pane**, right-click a work
+2. Select **Pin to position...** and choose a position (1–5)
+3. The work is prefixed with **[#N]** and shown in orchid color
+
+Pinned works are automatically included — no separate include rule is needed. If a
+pinned work isn't otherwise selected by include rules, it is added automatically.
+
+To remove a pin, right-click the work and select **Remove pin**.
+
+Pins are saved with the profile and persist across sessions.
 
 ---
 

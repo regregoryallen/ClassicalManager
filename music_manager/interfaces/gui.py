@@ -3277,8 +3277,13 @@ class App:
                 logger.debug("toggle_include: ACTION=cascade remove children (eff included but not visual)")
                 self._cascade_remove_children(level, entity_id)
             else:
-                logger.debug("toggle_include: ACTION=add include")
-                self._add_rule("include", level, entity_id, refresh=False)
+                # Before adding include, remove any parent excludes that
+                # would override it in the engine (excludes apply after includes)
+                if self._remove_blocking_parent_excludes(level, entity_id):
+                    logger.debug("toggle_include: ACTION=removed blocking parent excludes")
+                else:
+                    logger.debug("toggle_include: ACTION=add include")
+                    self._add_rule("include", level, entity_id, refresh=False)
 
             logger.debug(
                 "toggle_include: rules after=%s",
@@ -3325,6 +3330,58 @@ class App:
             ):
                 return True
         return False
+
+    def _remove_blocking_parent_excludes(self, level, entity_id):
+        """Remove ancestor exclude rules that would override a child include.
+
+        In the engine, excludes apply after includes with no specificity —
+        a work exclude blocks all its tracks even if they have direct includes.
+        This removes those blocking excludes so the user's include takes effect.
+
+        Returns True if any blocking excludes were removed.
+        """
+        from music_manager.core.database import Track
+        removed = False
+        if level == "track":
+            track = Track.get_by_id(entity_id)
+            # Remove work-level exclude that blocks this track
+            if track.work_id:
+                before = len(self._current_profile_rules)
+                self._current_profile_rules = [
+                    r for r in self._current_profile_rules
+                    if not (r["rule_type"] == "exclude" and r["target_level"] == "work"
+                            and r["target_id"] == track.work_id)
+                ]
+                if len(self._current_profile_rules) < before:
+                    logger.debug("removed blocking work exclude for work %s", track.work_id)
+                    self._cascade_remove_children("work", track.work_id)
+                    removed = True
+            # Remove album-level exclude that blocks this track
+            before = len(self._current_profile_rules)
+            self._current_profile_rules = [
+                r for r in self._current_profile_rules
+                if not (r["rule_type"] == "exclude" and r["target_level"] == "album"
+                        and r["target_id"] == track.album_id)
+            ]
+            if len(self._current_profile_rules) < before:
+                logger.debug("removed blocking album exclude for album %s", track.album_id)
+                self._cascade_remove_children("album", track.album_id)
+                removed = True
+        elif level == "work":
+            from music_manager.core.database import Work
+            work = Work.get_by_id(entity_id)
+            # Remove album-level exclude that blocks this work
+            before = len(self._current_profile_rules)
+            self._current_profile_rules = [
+                r for r in self._current_profile_rules
+                if not (r["rule_type"] == "exclude" and r["target_level"] == "album"
+                        and r["target_id"] == work.album_id)
+            ]
+            if len(self._current_profile_rules) < before:
+                logger.debug("removed blocking album exclude for album %s", work.album_id)
+                self._cascade_remove_children("album", work.album_id)
+                removed = True
+        return removed
 
     def _builder_include_selected(self, event=None):
         """Add selected library items as include rules."""
@@ -3376,6 +3433,8 @@ class App:
                 # child excludes rather than adding a redundant include rule
                 if eff:
                     self._cascade_remove_children(level, entity_id)
+                elif self._remove_blocking_parent_excludes(level, entity_id):
+                    logger.debug("include_selected: removed blocking parent excludes")
                 else:
                     self._add_rule("include", level, entity_id, refresh=False)
             # Always clean up child excludes when explicitly including a parent

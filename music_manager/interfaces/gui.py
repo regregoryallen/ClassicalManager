@@ -2397,10 +2397,14 @@ class App:
                 return "break"
             if row_dbl_click:
                 # Ignore double-clicks on the disclosure arrow so fast
-                # expand/collapse clicks don't trigger add/remove
+                # expand/collapse clicks don't trigger add/remove — but
+                # only for nodes that actually have children (the indicator
+                # element exists at every indent level, even for leaves).
                 element = tree.identify_element(event.x, event.y)
                 if element == "Treeitem.indicator":
-                    return
+                    iid = tree.identify_row(event.y)
+                    if iid and tree.get_children(iid):
+                        return
                 return row_dbl_click(event)
 
         tree.bind("<Double-1>", on_dbl)
@@ -3205,7 +3209,6 @@ class App:
             )
 
             if has_direct_include:
-                # Remove the direct include rule and cascade children
                 self._current_profile_rules = [
                     r for r in self._current_profile_rules
                     if not (r["rule_type"] == "include" and r["target_level"] == level
@@ -3213,17 +3216,14 @@ class App:
                 ]
                 self._cascade_remove_children(level, entity_id)
             elif has_direct_exclude:
-                # Has an exclude — remove it to re-include via parent
                 self._current_profile_rules = [
                     r for r in self._current_profile_rules
                     if not (r["rule_type"] == "exclude" and r["target_level"] == level
                             and r["target_id"] == entity_id)
                 ]
             elif self._is_effectively_included(level, entity_id):
-                # Effectively included via parent — add exclude to remove it
                 self._add_rule("exclude", level, entity_id, refresh=False)
             else:
-                # Not included at all — add include
                 self._add_rule("include", level, entity_id, refresh=False)
 
         with self._busy():
@@ -3281,11 +3281,15 @@ class App:
             if entry:
                 entries.append(entry)
 
+        if not entries:
+            logger.debug("include_selected: selection %s not in iid_map", sel)
+
         for level, entity_id in entries:
             # Don't duplicate an existing include rule
             if any(r["rule_type"] == "include" and r["target_level"] == level
                    and r["target_id"] == entity_id
                    for r in self._current_profile_rules):
+                logger.debug("include_selected: skip duplicate %s %s", level, entity_id)
                 continue
             # If there's an exclude rule for this, remove it instead of adding include
             removed = False
@@ -3294,8 +3298,10 @@ class App:
                         and r["target_id"] == entity_id):
                     self._current_profile_rules.pop(i)
                     removed = True
+                    logger.debug("include_selected: removed exclude for %s %s", level, entity_id)
                     break
             if not removed:
+                logger.debug("include_selected: adding include %s %s", level, entity_id)
                 self._add_rule("include", level, entity_id, refresh=False)
 
         with self._busy():

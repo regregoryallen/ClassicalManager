@@ -359,6 +359,13 @@ def build_help_content(text: tk.Text) -> None:
     body(" \u2014 export or import metadata overrides\n")
     code("  python main.py --cli overrides export --library \"My Collection\" --output overrides.json\n")
     code("  python main.py --cli overrides import --library \"My Collection\" --input overrides.json\n")
+    bold("webhook")
+    body(" \u2014 start the webhook HTTP service for remote job submission\n")
+    code("  python main.py --cli webhook [--library \"My Collection\"] [--port 5588] [-v]\n")
+
+    subheading("Global Options")
+    bullet("--config PATH \u2014 use a custom config.json file")
+    code("  python main.py --config /path/to/config.json --cli generate-all --library \"My Collection\" --target plex\n")
 
     subheading("Common Flags")
     bullet("-v / --verbose \u2014 debug-level logging")

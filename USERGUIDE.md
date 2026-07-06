@@ -641,6 +641,26 @@ python main.py --cli overrides export --library "My Collection" --output overrid
 python main.py --cli overrides import --library "My Collection" --input overrides.json
 ```
 
+#### webhook
+Start the webhook HTTP service for remote job submission (e.g., from Home
+Assistant). See [Webhook Service](#webhook-service) below for full details.
+```
+python main.py --cli webhook [--library "My Collection"] [--host 0.0.0.0] [--port 5588] [-v]
+```
+
+### Global Options
+
+| Flag | Description |
+|------|-------------|
+| `--config PATH` | Use a custom config.json file (default: `<install_dir>/config.json`) |
+
+The `--config` flag works with any command (including the GUI). It must appear
+before `--cli`:
+
+```bash
+python main.py --config /path/to/alt-config.json --cli generate-all --library "My Collection" --target plex
+```
+
 ### Common Flags
 
 | Flag | Description |
@@ -756,6 +776,19 @@ can generate playlists using path rules to translate paths for its target.
       "base_path": "",
       "path_rules": []
     }
+  },
+  "cron": {
+    "library": "My Collection",
+    "mode": "plex",
+    "profile": "",
+    "m3u_output_dir": "~/Playlists",
+    "verbosity": "-q"
+  },
+  "webhook": {
+    "host": "0.0.0.0",
+    "port": 5588,
+    "library": "My Collection",
+    "allowed_commands": ["plex", "scan", "scan+plex", "scan+m3u", "m3u"]
   }
 }
 ```
@@ -766,6 +799,17 @@ can generate playlists using path rules to translate paths for its target.
 | `targets.plex` | Omit entirely if you don't use Plex. At least one of `token` or `token_env` is required. |
 | `targets.plex.music_section` | Optional if set per-library in the sidebar. |
 | `targets.m3u` | Controls M3U export path style and rewriting. |
+| `cron` | Optional. Settings for the cron companion script. See [Cron Automation](#cron-automation). |
+| `cron.library` | Library name. Falls back to `active_library` if omitted. |
+| `cron.mode` | One of: `plex`, `m3u`, `scan`, `scan+plex`, `scan+m3u`. Default: `plex`. |
+| `cron.profile` | Single profile name. Empty = all profiles. |
+| `cron.m3u_output_dir` | Output directory for M3U mode. Default: `~/Playlists`. |
+| `cron.verbosity` | `-q` (quiet, default), `` (normal), or `-v` (verbose). |
+| `webhook` | Optional. Settings for the webhook service. See [Webhook Service](#webhook-service). |
+| `webhook.host` | Bind address. Default: `0.0.0.0` (all interfaces). |
+| `webhook.port` | Listen port. Default: `5588`. |
+| `webhook.library` | Library name. Falls back to `active_library` if omitted. |
+| `webhook.allowed_commands` | List of allowed commands. Default: all five modes. |
 
 ### gui_prefs.json (auto-managed)
 
@@ -774,6 +818,239 @@ Stores window geometry and last-used export directory. Do not edit manually.
 ### Supported Audio Formats
 
 MP3, FLAC, OGG, OPUS, M4A, MP4, WAV, WMA, AAC, ALAC, APE, WavPack (.wv)
+
+---
+
+## Cron Automation
+
+The cron companion script (`classical-manager-cron.sh`) runs CLI commands on a
+schedule. It reads its settings from the `cron` section of `config.json`.
+
+### Setup
+
+1. Add a `cron` section to `config.json` (or use the installer):
+
+```json
+"cron": {
+  "library": "My Collection",
+  "mode": "plex"
+}
+```
+
+2. Add to crontab:
+
+```bash
+crontab -e
+# Push all playlists to Plex every night at 2 AM:
+0 2 * * * /home/user/.local/share/classical-manager/classical-manager-cron.sh
+```
+
+### Modes
+
+| Mode | Action |
+|------|--------|
+| `plex` | Push all playlists to Plex (default) |
+| `m3u` | Generate M3U playlist files |
+| `scan` | Incremental scan only |
+| `scan+plex` | Scan, then push to Plex |
+| `scan+m3u` | Scan, then generate M3U files |
+
+### Multiple Configurations
+
+Use `--config` to point at different config files for different schedules:
+
+```bash
+0 2 * * * /path/to/classical-manager-cron.sh --config /path/to/nightly.json
+0 * * * * /path/to/classical-manager-cron.sh --config /path/to/hourly.json
+```
+
+---
+
+## Webhook Service
+
+The webhook service is a lightweight HTTP server that accepts remote commands to
+trigger playlist operations. It is designed for Home Assistant integration but
+works with any HTTP client. No authentication is required (local network use).
+
+### Starting the Service
+
+```bash
+# Start manually:
+python main.py --cli webhook --library "My Collection" -v
+
+# Or use the installed CLI:
+classical-manager --cli webhook
+```
+
+CLI options override config.json values:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--library NAME` | from config | Library to operate on |
+| `--host ADDR` | `0.0.0.0` | Bind address |
+| `--port PORT` | `5588` | Listen port |
+| `-v` | off | Verbose logging |
+
+### Running as a systemd Service
+
+The installer can set this up automatically. To configure manually:
+
+1. Copy the service template:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp classical-manager-webhook.service ~/.config/systemd/user/
+```
+
+2. Edit the file and replace `%INSTALL_DIR%` with your install path
+   (e.g., `/home/user/.local/share/classical-manager`).
+
+3. Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now classical-manager-webhook
+```
+
+4. Check status:
+
+```bash
+systemctl --user status classical-manager-webhook
+journalctl --user -u classical-manager-webhook -f
+```
+
+### API Reference
+
+All responses are JSON. The service runs one job at a time.
+
+#### GET /api/health
+
+Returns service status and configuration.
+
+```bash
+curl http://localhost:5588/api/health
+```
+
+```json
+{
+  "status": "ok",
+  "library": "My Collection",
+  "allowed_commands": ["m3u", "plex", "scan", "scan+m3u", "scan+plex"]
+}
+```
+
+#### POST /api/jobs
+
+Submit a job. The request body must contain a `command` field.
+
+```bash
+curl -X POST http://localhost:5588/api/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "plex"}'
+```
+
+**Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes).
+
+**Responses:**
+
+| Status | Meaning |
+|--------|---------|
+| 202 Accepted | Job started. Body contains job `id`, `command`, `status`, `started_at`. |
+| 400 Bad Request | Missing or invalid `command`. |
+| 409 Conflict | A job is already running. |
+
+```json
+{
+  "id": "a1b2c3d4e5f6",
+  "command": "plex",
+  "status": "running",
+  "started_at": "2026-07-06T02:00:00"
+}
+```
+
+#### GET /api/jobs/current
+
+Returns the currently running job, or 404 if idle.
+
+```bash
+curl http://localhost:5588/api/jobs/current
+```
+
+#### GET /api/jobs/last
+
+Returns the last completed job, including exit code and output.
+
+```bash
+curl http://localhost:5588/api/jobs/last
+```
+
+```json
+{
+  "id": "a1b2c3d4e5f6",
+  "command": "plex",
+  "status": "completed",
+  "started_at": "2026-07-06T02:00:00",
+  "finished_at": "2026-07-06T02:01:23",
+  "exit_code": 0,
+  "output": "Pushed playlist 'Morning Mix' to Plex\n..."
+}
+```
+
+### Home Assistant Integration
+
+Add a `rest_command` to your Home Assistant `configuration.yaml`:
+
+```yaml
+rest_command:
+  classical_manager_plex:
+    url: "http://CM_HOST:5588/api/jobs"
+    method: POST
+    content_type: "application/json"
+    payload: '{"command": "plex"}'
+
+  classical_manager_scan_plex:
+    url: "http://CM_HOST:5588/api/jobs"
+    method: POST
+    content_type: "application/json"
+    payload: '{"command": "scan+plex"}'
+```
+
+Replace `CM_HOST` with the IP or hostname of the machine running Classical Manager.
+
+Use in automations:
+
+```yaml
+automation:
+  - alias: "Rebuild playlists nightly"
+    trigger:
+      - platform: time
+        at: "02:00:00"
+    action:
+      - service: rest_command.classical_manager_plex
+
+  - alias: "Scan and push on button press"
+    trigger:
+      - platform: state
+        entity_id: input_button.rebuild_playlists
+    action:
+      - service: rest_command.classical_manager_scan_plex
+```
+
+To check job status from HA, use a `rest` sensor:
+
+```yaml
+sensor:
+  - platform: rest
+    name: Classical Manager Last Job
+    resource: "http://CM_HOST:5588/api/jobs/last"
+    value_template: "{{ value_json.status }}"
+    json_attributes:
+      - command
+      - exit_code
+      - finished_at
+      - output
+    scan_interval: 60
+```
 
 ---
 

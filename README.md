@@ -63,14 +63,45 @@ After installation:
 
 ### Cron automation
 
-The installer places a companion script at `~/.local/share/classical-manager/classical-manager-cron.sh`. Edit the variables at the top of the script to configure the mode, then add it to your crontab:
+The installer places a companion script at `~/.local/share/classical-manager/classical-manager-cron.sh`. Configure the mode by adding a `cron` section to `config.json`, then add the script to your crontab:
+
+```json
+"cron": {
+  "library": "My Collection",
+  "mode": "plex"
+}
+```
 
 ```bash
 # Push all playlists to Plex every night at 2 AM:
 0 2 * * * /home/user/.local/share/classical-manager/classical-manager-cron.sh
 ```
 
-Modes: `plex` (default), `m3u`, `scan`, `scan+plex`, `scan+m3u`. See the comments inside the script for full usage details.
+Modes: `plex` (default), `m3u`, `scan`, `scan+plex`, `scan+m3u`. See the comments inside the script for full details.
+
+### Webhook / Home Assistant
+
+A built-in webhook service lets Home Assistant (or any HTTP client) trigger playlist operations remotely:
+
+```bash
+# Start the webhook service:
+classical-manager --cli webhook
+
+# Or install as a systemd service (the installer offers this during setup)
+```
+
+Configure Home Assistant with a `rest_command`:
+
+```yaml
+rest_command:
+  classical_manager_plex:
+    url: "http://CM_HOST:5588/api/jobs"
+    method: POST
+    content_type: "application/json"
+    payload: '{"command": "plex"}'
+```
+
+See the [User Guide](USERGUIDE.md#webhook-service) for full API documentation.
 
 <details>
 <summary>Manual setup (without install script)</summary>

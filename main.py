@@ -47,6 +47,10 @@ CLI commands:
   overrides import --library NAME --input FILE [--no-apply] [-v]
       Export or import metadata overrides as JSON.
 
+  webhook [--library NAME] [--host ADDR] [--port PORT] [-v]
+      Start the webhook HTTP service for remote job submission.
+      Used by Home Assistant or other automation tools.
+
 Global options:
   --config PATH   Use a custom config.json (default: <install_dir>/config.json)
 

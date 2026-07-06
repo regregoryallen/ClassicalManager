@@ -1,0 +1,26 @@
+# Classical Manager — Webhook Service (systemd user unit)
+#
+# This template is customized by the installer. To set up manually:
+#   1. Copy to ~/.config/systemd/user/classical-manager-webhook.service
+#   2. Replace %INSTALL_DIR% with your install path
+#      (default: ~/.local/share/classical-manager)
+#   3. Run: systemctl --user daemon-reload
+#   4. Run: systemctl --user enable --now classical-manager-webhook
+#
+# Logs: journalctl --user -u classical-manager-webhook -f
+
+[Unit]
+Description=Classical Manager Webhook Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%INSTALL_DIR%
+ExecStart=%INSTALL_DIR%/venv/bin/python %INSTALL_DIR%/main.py --cli webhook
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%INSTALL_DIR%/webhook.log
+StandardError=append:%INSTALL_DIR%/webhook.log
+
+[Install]
+WantedBy=default.target

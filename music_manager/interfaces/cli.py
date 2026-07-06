@@ -477,3 +477,40 @@ def overrides_import(
         typer.echo(f"Applied: {result['tracks_updated']} tracks, "
                    f"{result['albums_updated']} albums, "
                    f"{result['skipped']} skipped")
+
+
+@app.command()
+def webhook(
+    library: str = typer.Option(None, help="Library name (default: from config)"),
+    host: str = typer.Option(None, help="Bind address (default: 0.0.0.0)"),
+    port: int = typer.Option(None, help="Port (default: 5588)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Start the webhook service for remote job submission."""
+    _setup_logging(verbose)
+    from music_manager.core.config import load_config, _config_path_override
+    config = load_config()
+
+    wh = config.get("webhook", {})
+    lib_name = library or wh.get("library")
+    if not lib_name:
+        _init_database()
+        from music_manager.core.database import Library
+        lib_name = Library.get_by_id(config["active_library"]).name
+    else:
+        _init_database()
+        _get_library(lib_name)  # validate exists
+
+    resolved_host = host or wh.get("host", "0.0.0.0")
+    resolved_port = port or wh.get("port", 5588)
+    allowed = wh.get("allowed_commands",
+                     ["plex", "scan", "scan+plex", "scan+m3u", "m3u"])
+    m3u_dir = config.get("cron", {}).get("m3u_output_dir", "~/Playlists")
+
+    config_arg = []
+    if _config_path_override:
+        config_arg = ["--config", str(_config_path_override)]
+
+    from music_manager.interfaces.webhook import start_server
+    start_server(resolved_host, resolved_port, lib_name, allowed,
+                 config_arg, m3u_dir)

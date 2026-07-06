@@ -857,6 +857,76 @@ DESKTOP_EOF
 
 
 # =============================================================================
+# Webhook Service (optional)
+# =============================================================================
+
+setup_webhook_service() {
+    local service_template="$INSTALL_DIR/classical-manager-webhook.service"
+    [ -f "$service_template" ] || return 0
+
+    echo ""
+    echo -e "${BOLD}━━━ Webhook Service ━━━${RESET}"
+    echo "  Enable remote job submission (e.g., from Home Assistant)."
+    echo "  Runs as a systemd user service listening for HTTP requests."
+    if ! ask_yn "Set up webhook service?" "n"; then
+        return 0
+    fi
+
+    echo ""
+    local wh_port
+    ask "Webhook port" wh_port "5588"
+
+    # Write webhook section to config.json
+    local config_file="$INSTALL_DIR/config.json"
+    local venv_python="$INSTALL_DIR/venv/bin/python"
+
+    WH_PORT="$wh_port" \
+    "$venv_python" -c "
+import json, os
+
+config_file = '$config_file'
+with open(config_file) as f:
+    config = json.load(f)
+
+config['webhook'] = {
+    'host': '0.0.0.0',
+    'port': int(os.environ.get('WH_PORT', '5588')),
+    'allowed_commands': ['plex', 'scan', 'scan+plex', 'scan+m3u', 'm3u']
+}
+
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+" || { warn "Failed to update config.json with webhook settings"; return 1; }
+
+    # Install systemd user service
+    local systemd_dir="$HOME/.config/systemd/user"
+    mkdir -p "$systemd_dir"
+    sed "s|%INSTALL_DIR%|$INSTALL_DIR|g" "$service_template" \
+        > "$systemd_dir/classical-manager-webhook.service"
+
+    systemctl --user daemon-reload 2>/dev/null || true
+    if systemctl --user enable --now classical-manager-webhook 2>/dev/null; then
+        success "Webhook service installed and started on port $wh_port"
+    else
+        warn "Could not start service automatically."
+        echo "  You can start it manually:"
+        echo "    systemctl --user start classical-manager-webhook"
+    fi
+
+    echo ""
+    echo -e "${BOLD}Home Assistant configuration.yaml:${RESET}"
+    echo "  rest_command:"
+    echo "    classical_manager_plex:"
+    echo "      url: \"http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'THIS_HOST'):${wh_port}/api/jobs\""
+    echo "      method: POST"
+    echo "      content_type: \"application/json\""
+    echo "      payload: '{\"command\": \"plex\"}'"
+    echo ""
+}
+
+
+# =============================================================================
 # Summary
 # =============================================================================
 
@@ -904,6 +974,21 @@ print(db if db else '$INSTALL_DIR/music_manager.db')
         echo "  Add to crontab:       crontab -e"
         echo "    Example entry (nightly at 2 AM):"
         echo "      0 2 * * * $cron_script"
+        echo ""
+    fi
+
+    # Webhook status
+    if systemctl --user is-active classical-manager-webhook &>/dev/null; then
+        local wh_port
+        wh_port=$("$INSTALL_DIR/venv/bin/python" -c "
+import json
+with open('$config_file') as f:
+    print(json.load(f).get('webhook', {}).get('port', 5588))
+" 2>/dev/null || echo "5588")
+        echo -e "${BOLD}Webhook service:${RESET}"
+        echo "  Status:   running on port $wh_port"
+        echo "  Logs:     journalctl --user -u classical-manager-webhook -f"
+        echo "  Restart:  systemctl --user restart classical-manager-webhook"
         echo ""
     fi
 
@@ -975,7 +1060,10 @@ main() {
         success "Cron script ready: $cron_script"
     fi
 
-    # Step 8: Summary
+    # Step 8: Optional webhook service
+    setup_webhook_service
+
+    # Step 9: Summary
     print_summary
 }
 

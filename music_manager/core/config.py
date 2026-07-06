@@ -130,6 +130,10 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     if "cron" in config:
         _validate_cron(config["cron"], path)
 
+    # -- webhook (optional) ---------------------------------------------------
+    if "webhook" in config:
+        _validate_webhook(config["webhook"], path)
+
 
 def _validate_plex(plex: dict, path: Path) -> None:
     """Validate the plex target section."""
@@ -214,3 +218,34 @@ def _validate_cron(cron: dict, path: Path) -> None:
             f"{path}: 'cron.verbosity' must be one of {valid_verbosity}, "
             f"got {cron['verbosity']!r}"
         )
+
+
+def _validate_webhook(webhook: dict, path: Path) -> None:
+    """Validate the optional webhook section."""
+    if not isinstance(webhook, dict):
+        raise ConfigError(f"{path}: 'webhook' must be a JSON object")
+
+    if "host" in webhook and not isinstance(webhook["host"], str):
+        raise ConfigError(f"{path}: 'webhook.host' must be a string")
+
+    if "port" in webhook:
+        port = webhook["port"]
+        if not isinstance(port, int) or port < 1 or port > 65535:
+            raise ConfigError(
+                f"{path}: 'webhook.port' must be an integer 1-65535, "
+                f"got {port!r}"
+            )
+
+    if "allowed_commands" in webhook:
+        cmds = webhook["allowed_commands"]
+        if not isinstance(cmds, list):
+            raise ConfigError(
+                f"{path}: 'webhook.allowed_commands' must be a list"
+            )
+        valid_cmds = {"plex", "m3u", "scan", "scan+plex", "scan+m3u"}
+        for cmd in cmds:
+            if cmd not in valid_cmds:
+                raise ConfigError(
+                    f"{path}: 'webhook.allowed_commands' contains invalid "
+                    f"command {cmd!r}, valid: {valid_cmds}"
+                )

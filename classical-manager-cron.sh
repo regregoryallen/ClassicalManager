@@ -4,17 +4,34 @@
 # =============================================================================
 #
 # Companion script for running Classical Manager CLI commands on a schedule.
-# Designed for use with crontab.  All configuration is done via the variables
-# below — no command-line arguments are used.
+# Designed for use with crontab.
+#
+# CONFIGURATION
+# -------------
+#   All settings are read from the "cron" section of config.json:
+#
+#     {
+#       "cron": {
+#         "library": "MainMusic",
+#         "mode": "plex",
+#         "profile": "",
+#         "m3u_output_dir": "~/Playlists",
+#         "verbosity": "-q"
+#       }
+#     }
+#
+#   If "cron.library" is empty or missing, the active library is used.
+#   If the "cron" section is missing entirely, defaults are used:
+#     mode=plex, profile="" (all profiles), verbosity="-q"
+#
+#   Use the installer or edit config.json directly to configure.
 #
 # SETUP
 # -----
-#   1. Copy this script to a convenient location (or use it from the install
-#      directory — the installer places a copy there).
-#   2. Edit the CONFIGURATION section below to match your setup.
-#   3. Make executable:  chmod +x classical-manager-cron.sh
-#   4. Test it manually:  ./classical-manager-cron.sh
-#   5. Add to crontab:   crontab -e
+#   1. Configure the "cron" section in config.json (via installer or manually)
+#   2. Make executable:  chmod +x classical-manager-cron.sh
+#   3. Test it manually:  ./classical-manager-cron.sh
+#   4. Add to crontab:   crontab -e
 #
 # CRONTAB EXAMPLES
 # ----------------
@@ -32,80 +49,31 @@
 #
 # MODES
 # -----
-#   MODE="plex"       Push all playlists to Plex server (default)
-#   MODE="m3u"        Generate M3U playlist files to OUTPUT_DIR
-#   MODE="scan"       Incremental scan only (no playlist generation)
-#   MODE="scan+plex"  Incremental scan, then push all playlists to Plex
-#   MODE="scan+m3u"   Incremental scan, then generate M3U files
-#
-# SINGLE PROFILE vs ALL PROFILES
-# -------------------------------
-#   By default (PROFILE_NAME=""), all profiles in the library are processed.
-#   To generate/push a single profile, set its name:
-#
-#     PROFILE_NAME="Sunday Baroque"
-#
-#   This works with both plex and m3u modes:
-#     MODE="plex"  + PROFILE_NAME="Sunday Baroque"  → pushes one playlist
-#     MODE="m3u"   + PROFILE_NAME="Sunday Baroque"  → writes one .m3u file
-#
-# M3U DESTINATION FOLDER
-# ----------------------
-#   When MODE includes "m3u", playlists are written to OUTPUT_DIR.
-#   You can point this at any writable directory:
-#
-#     OUTPUT_DIR="$HOME/Music/Playlists"        # local folder
-#     OUTPUT_DIR="/mnt/nas/playlists"            # NAS mount
-#     OUTPUT_DIR="/media/usb/playlists"          # USB drive
-#
-#   The directory is created automatically if it does not exist.
+#   mode: "plex"       Push all playlists to Plex server (default)
+#   mode: "m3u"        Generate M3U playlist files
+#   mode: "scan"       Incremental scan only (no playlist generation)
+#   mode: "scan+plex"  Incremental scan, then push all playlists to Plex
+#   mode: "scan+m3u"   Incremental scan, then generate M3U files
 #
 # MULTIPLE CONFIGURATIONS
 # -----------------------
-#   To run different modes on different schedules, copy this script and edit
-#   each copy independently.  For example:
+#   To run different modes on different schedules, use --config to point at
+#   different config files:
 #
-#     classical-manager-scan.sh     → MODE="scan"       (runs hourly)
-#     classical-manager-plex.sh     → MODE="plex"       (runs nightly)
-#     classical-manager-m3u.sh      → MODE="m3u"        (runs weekly)
+#     # In crontab:
+#     0 2 * * * /path/to/classical-manager-cron.sh --config /path/to/nightly.json
+#     0 * * * * /path/to/classical-manager-cron.sh --config /path/to/hourly.json
 #
 # =============================================================================
 
 
 # =============================================================================
-# CONFIGURATION — Edit these variables for your setup
+# ENVIRONMENT — Edit only if your install location differs
 # =============================================================================
 
-# Where Classical Manager is installed
 INSTALL_DIR="$HOME/.local/share/classical-manager"
-
-# Library name (as shown in the GUI sidebar or created via first scan)
-LIBRARY_NAME="My Collection"
-
-# Operation mode:  plex | m3u | scan | scan+plex | scan+m3u
-MODE="plex"
-
-# Single profile name — leave empty to process ALL profiles in the library
-PROFILE_NAME=""
-
-# Plex token — set here OR leave empty to use config.json / environment.
-# If your config.json already has "token" or "token_env", leave this empty.
-# PLEX_TOKEN="your-plex-token-here"
-PLEX_TOKEN=""
-
-# Output directory for M3U files (only used when MODE includes "m3u")
-OUTPUT_DIR="$HOME/Playlists"
-
-# Log file location
 LOG_FILE="$HOME/.local/share/classical-manager/cron.log"
-
-# Maximum log size in bytes before rotation (default: 1 MB)
 MAX_LOG_SIZE=1048576
-
-# Verbosity:  "-q" for quiet (default, best for cron)
-#             ""   for normal output
-#             "-v" for debug/verbose
-VERBOSITY="-q"
 
 
 # =============================================================================
@@ -113,6 +81,15 @@ VERBOSITY="-q"
 # =============================================================================
 
 set -euo pipefail
+
+# Parse optional --config argument
+CONFIG_ARG=""
+if [ "${1:-}" = "--config" ] && [ -n "${2:-}" ]; then
+    CONFIG_ARG="--config $2"
+    CONFIG_FILE="$2"
+else
+    CONFIG_FILE="$INSTALL_DIR/config.json"
+fi
 
 PYTHON="$INSTALL_DIR/venv/bin/python"
 MAIN="$INSTALL_DIR/main.py"
@@ -137,7 +114,41 @@ die() { echo "$(timestamp) ERROR: $*"; exit 1; }
 [ -d "$INSTALL_DIR" ]         || die "Install directory not found: $INSTALL_DIR"
 [ -f "$MAIN" ]                || die "main.py not found in: $INSTALL_DIR"
 [ -x "$PYTHON" ]              || die "Python not found: $PYTHON"
-[ -n "$LIBRARY_NAME" ]        || die "LIBRARY_NAME is empty"
+[ -f "$CONFIG_FILE" ]         || die "Config file not found: $CONFIG_FILE"
+
+# --- Read cron settings from config.json -------------------------------------
+
+eval "$("$PYTHON" -c "
+import json, os
+c = json.load(open('$CONFIG_FILE'))
+cron = c.get('cron', {})
+lib = cron.get('library', '')
+mode = cron.get('mode', 'plex')
+profile = cron.get('profile', '')
+m3u_dir = cron.get('m3u_output_dir', os.path.expanduser('~/Playlists'))
+verbosity = cron.get('verbosity', '-q')
+print(f'LIBRARY_NAME=\"{lib}\"')
+print(f'MODE=\"{mode}\"')
+print(f'PROFILE_NAME=\"{profile}\"')
+print(f'OUTPUT_DIR=\"{m3u_dir}\"')
+print(f'VERBOSITY=\"{verbosity}\"')
+")" || die "Failed to read cron settings from $CONFIG_FILE"
+
+# If no library name in cron config, look up active library from database
+if [ -z "$LIBRARY_NAME" ]; then
+    LIBRARY_NAME="$("$PYTHON" -c "
+import sys, json
+sys.path.insert(0, '$INSTALL_DIR')
+c = json.load(open('$CONFIG_FILE'))
+from music_manager.core.database import initialize_database, Library
+db_path = c.get('db_path', '$INSTALL_DIR/music_manager.db')
+initialize_database(db_path)
+lib = Library.get_by_id(c['active_library'])
+print(lib.name)
+")" || die "Could not determine library name from config"
+fi
+
+[ -n "$LIBRARY_NAME" ]        || die "LIBRARY_NAME is empty — set cron.library in config.json"
 
 case "$MODE" in
     plex|m3u|scan|scan+plex|scan+m3u) ;;
@@ -145,10 +156,6 @@ case "$MODE" in
 esac
 
 # --- Environment setup -------------------------------------------------------
-
-if [ -n "$PLEX_TOKEN" ]; then
-    export PLEX_TOKEN
-fi
 
 cd "$INSTALL_DIR"
 
@@ -168,22 +175,22 @@ rotate_log
 
 run_scan() {
     echo "$(timestamp) Running incremental scan for library '$LIBRARY_NAME'..."
-    "$PYTHON" "$MAIN" --cli scan-changes --library "$LIBRARY_NAME" $VERBOSITY
+    "$PYTHON" "$MAIN" $CONFIG_ARG --cli scan-changes --library "$LIBRARY_NAME" $VERBOSITY
 }
 
 run_plex_all() {
     echo "$(timestamp) Pushing all playlists to Plex for library '$LIBRARY_NAME'..."
-    "$PYTHON" "$MAIN" --cli generate-all --library "$LIBRARY_NAME" --target plex $VERBOSITY
+    "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate-all --library "$LIBRARY_NAME" --target plex $VERBOSITY
 }
 
 run_plex_single() {
     echo "$(timestamp) Pushing playlist '$PROFILE_NAME' to Plex..."
-    "$PYTHON" "$MAIN" --cli generate --profile "$PROFILE_NAME" --target plex $VERBOSITY
+    "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate --profile "$PROFILE_NAME" --target plex $VERBOSITY
 }
 
 run_m3u_all() {
     echo "$(timestamp) Generating all M3U playlists to '$OUTPUT_DIR'..."
-    "$PYTHON" "$MAIN" --cli generate-all --library "$LIBRARY_NAME" --format m3u \
+    "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate-all --library "$LIBRARY_NAME" --format m3u \
         --output-dir "$OUTPUT_DIR" $VERBOSITY
 }
 
@@ -191,7 +198,7 @@ run_m3u_single() {
     local safe_name
     safe_name=$(echo "$PROFILE_NAME" | tr ' /' '__')
     echo "$(timestamp) Generating M3U for profile '$PROFILE_NAME' → '$OUTPUT_DIR/${safe_name}.m3u'..."
-    "$PYTHON" "$MAIN" --cli generate --profile "$PROFILE_NAME" --format m3u \
+    "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate --profile "$PROFILE_NAME" --format m3u \
         --output "$OUTPUT_DIR/${safe_name}.m3u" $VERBOSITY
 }
 

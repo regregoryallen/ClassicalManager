@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 
+_config_path_override: Path | None = None
+
+
+def set_config_path(path: Path) -> None:
+    """Set a global override for the config file path."""
+    global _config_path_override
+    _config_path_override = path
+
 
 class ConfigError(Exception):
     """Raised when config.json is missing, malformed, or invalid."""
@@ -35,7 +43,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     Raises:
         ConfigError: If the file is missing, unparseable, or fails validation.
     """
-    config_path = path or DEFAULT_CONFIG_PATH
+    config_path = path or _config_path_override or DEFAULT_CONFIG_PATH
 
     if not config_path.exists():
         raise ConfigError(f"Configuration file not found: {config_path}")
@@ -60,7 +68,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 
 def save_config(config: dict[str, Any], path: Path | None = None) -> None:
     """Write config back to config.json."""
-    config_path = path or DEFAULT_CONFIG_PATH
+    config_path = path or _config_path_override or DEFAULT_CONFIG_PATH
     config_path.write_text(
         json.dumps(config, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8")
@@ -68,7 +76,11 @@ def save_config(config: dict[str, Any], path: Path | None = None) -> None:
 
 
 def get_db_path() -> Path:
-    """Return the database path from config.json, or the default."""
+    """Return the database path from config.json, or the default.
+
+    If a config path override is set, ConfigError is raised on failure
+    rather than silently falling back to the default.
+    """
     from music_manager.core.database import DATABASE_PATH
     try:
         config = load_config()
@@ -76,7 +88,8 @@ def get_db_path() -> Path:
         if db:
             return Path(db)
     except ConfigError:
-        pass
+        if _config_path_override is not None:
+            raise
     return DATABASE_PATH
 
 
@@ -112,6 +125,10 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     # -- targets.m3u ----------------------------------------------------------
     if "m3u" in targets:
         _validate_m3u(targets["m3u"], path)
+
+    # -- cron (optional) ------------------------------------------------------
+    if "cron" in config:
+        _validate_cron(config["cron"], path)
 
 
 def _validate_plex(plex: dict, path: Path) -> None:
@@ -177,3 +194,23 @@ def _validate_path_rules(rules: list, context: str, path: Path) -> None:
                 raise ConfigError(
                     f"{path}: '{context}[{i}].{key}' must be a string"
                 )
+
+
+def _validate_cron(cron: dict, path: Path) -> None:
+    """Validate the optional cron section."""
+    if not isinstance(cron, dict):
+        raise ConfigError(f"{path}: 'cron' must be a JSON object")
+
+    valid_modes = {"plex", "m3u", "scan", "scan+plex", "scan+m3u"}
+    if "mode" in cron and cron["mode"] not in valid_modes:
+        raise ConfigError(
+            f"{path}: 'cron.mode' must be one of {valid_modes}, "
+            f"got {cron['mode']!r}"
+        )
+
+    valid_verbosity = {"-q", "", "-v"}
+    if "verbosity" in cron and cron["verbosity"] not in valid_verbosity:
+        raise ConfigError(
+            f"{path}: 'cron.verbosity' must be one of {valid_verbosity}, "
+            f"got {cron['verbosity']!r}"
+        )

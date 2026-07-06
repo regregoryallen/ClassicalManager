@@ -17,6 +17,16 @@ overrides_app = typer.Typer(help="Export/import metadata overrides.")
 app.add_typer(overrides_app, name="overrides")
 
 
+@app.callback()
+def main_callback(
+    config: str = typer.Option(None, "--config", help="Path to config.json"),
+):
+    """Classical-aware music playlist manager."""
+    if config:
+        from music_manager.core.config import set_config_path
+        set_config_path(Path(config))
+
+
 def _setup_logging(verbose: bool = False) -> None:
     """Configure logging with the appropriate level."""
     level = logging.DEBUG if verbose else logging.INFO
@@ -30,8 +40,12 @@ def _setup_logging(verbose: bool = False) -> None:
 def _init_database():
     """Initialize the database, with a clear error if it fails."""
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import get_db_path
-    db_path = get_db_path()
+    from music_manager.core.config import get_db_path, ConfigError
+    try:
+        db_path = get_db_path()
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
     try:
         initialize_database(db_path)
     except Exception as exc:

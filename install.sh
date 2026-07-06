@@ -646,6 +646,46 @@ print(json.dumps(cfg, indent=2))
         fi
     fi
 
+    # --- Cron / automation ---
+    local cfg_cron_enabled=0
+    local cfg_cron_library="" cfg_cron_mode="" cfg_cron_profile="" cfg_cron_m3u_dir="" cfg_cron_verbosity=""
+
+    echo ""
+    echo -e "${BOLD}Cron / Automation${RESET}"
+    echo "  Configure scheduled tasks (push to Plex, scan, generate M3U)."
+    echo "  Settings are stored in config.json and used by the cron script."
+    if ask_yn "Configure cron automation?" "n"; then
+        cfg_cron_enabled=1
+        echo ""
+
+        ask "Library name" cfg_cron_library "My Collection"
+
+        echo ""
+        echo "  Operation mode:"
+        echo "    plex       Push all playlists to Plex (default)"
+        echo "    m3u        Generate M3U playlist files"
+        echo "    scan       Incremental scan only"
+        echo "    scan+plex  Scan, then push to Plex"
+        echo "    scan+m3u   Scan, then generate M3U files"
+        ask "Mode" cfg_cron_mode "plex"
+
+        echo ""
+        echo "  Single profile name — leave empty to process ALL profiles."
+        ask "Profile (empty = all)" cfg_cron_profile ""
+
+        case "$cfg_cron_mode" in
+            m3u|scan+m3u)
+                echo ""
+                ask "M3U output directory" cfg_cron_m3u_dir "$HOME/Playlists"
+                ;;
+            *)
+                cfg_cron_m3u_dir=""
+                ;;
+        esac
+
+        cfg_cron_verbosity="-q"
+    fi
+
     # --- Write config.json using Python for reliable JSON generation ---
     info "Writing config.json..."
 
@@ -661,6 +701,12 @@ print(json.dumps(cfg, indent=2))
     CFG_M3U_STYLE="$cfg_m3u_style" \
     CFG_M3U_BASE="$cfg_m3u_base" \
     CFG_M3U_RULES="$cfg_m3u_rules" \
+    CFG_CRON_ENABLED="$cfg_cron_enabled" \
+    CFG_CRON_LIBRARY="$cfg_cron_library" \
+    CFG_CRON_MODE="$cfg_cron_mode" \
+    CFG_CRON_PROFILE="$cfg_cron_profile" \
+    CFG_CRON_M3U_DIR="$cfg_cron_m3u_dir" \
+    CFG_CRON_VERBOSITY="$cfg_cron_verbosity" \
     "$venv_python" -c "
 import json, sys, os
 
@@ -696,6 +742,25 @@ if os.environ.get('CFG_M3U_ENABLED') == '1':
         'path_rules': json.loads(os.environ.get('CFG_M3U_RULES', '[]'))
     }
     config['targets']['m3u'] = m3u
+
+# Cron section
+if os.environ.get('CFG_CRON_ENABLED') == '1':
+    cron = {}
+    lib = os.environ.get('CFG_CRON_LIBRARY', '')
+    if lib:
+        cron['library'] = lib
+    mode = os.environ.get('CFG_CRON_MODE', 'plex')
+    if mode:
+        cron['mode'] = mode
+    profile = os.environ.get('CFG_CRON_PROFILE', '')
+    if profile:
+        cron['profile'] = profile
+    m3u_dir = os.environ.get('CFG_CRON_M3U_DIR', '')
+    if m3u_dir:
+        cron['m3u_output_dir'] = m3u_dir
+    verbosity = os.environ.get('CFG_CRON_VERBOSITY', '-q')
+    cron['verbosity'] = verbosity
+    config['cron'] = cron
 
 with open('$config_file', 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
@@ -834,7 +899,7 @@ print(db if db else '$INSTALL_DIR/music_manager.db')
 
     if [ -f "$cron_script" ]; then
         echo -e "${BOLD}Cron automation:${RESET}"
-        echo "  Edit the cron script: \${EDITOR:-nano} $cron_script"
+        echo "  Cron settings:        edit \"cron\" section in $config_file"
         echo "  Test it manually:     bash $cron_script"
         echo "  Add to crontab:       crontab -e"
         echo "    Example entry (nightly at 2 AM):"

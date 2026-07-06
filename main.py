@@ -47,6 +47,9 @@ CLI commands:
   overrides import --library NAME --input FILE [--no-apply] [-v]
       Export or import metadata overrides as JSON.
 
+Global options:
+  --config PATH   Use a custom config.json (default: <install_dir>/config.json)
+
 Common flags:
   -v, --verbose   Debug-level logging
   -q, --quiet     Suppress progress output (errors only)
@@ -66,11 +69,28 @@ def main():
     if {"-h", "--help", "-?"} & set(sys.argv[1:]):
         print(_HELP)
         return
+
+    # Extract --config before routing so both CLI and GUI can use it
+    config_path = None
+    if "--config" in sys.argv:
+        idx = sys.argv.index("--config")
+        if idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
+            sys.argv.pop(idx)  # remove --config
+            sys.argv.pop(idx)  # remove the path value
+
     if "--cli" in sys.argv:
         sys.argv.remove("--cli")
+        if config_path:
+            # Insert before subcommand so typer's callback sees it
+            sys.argv[1:1] = ["--config", config_path]
         from music_manager.interfaces.cli import app
         app()
     else:
+        if config_path:
+            from pathlib import Path
+            from music_manager.core.config import set_config_path
+            set_config_path(Path(config_path))
         from music_manager.interfaces.gui import launch_gui
         launch_gui()
 

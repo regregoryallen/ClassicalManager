@@ -92,6 +92,8 @@ class JobManager:
                 combined = (result.stdout + result.stderr).strip()
                 if combined:
                     output_parts.append(combined)
+                    for line in combined.splitlines():
+                        logger.info("%s", line)
                 if result.returncode != 0:
                     exit_code = result.returncode
                     break
@@ -221,8 +223,17 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 
 def start_server(host, port, library_name, allowed_commands, config_arg,
-                 m3u_output_dir):
+                 m3u_output_dir, log_file=None):
     """Start the webhook HTTP server."""
+    if log_file:
+        handler = logging.FileHandler(log_file)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
     python_path = sys.executable
     main_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(

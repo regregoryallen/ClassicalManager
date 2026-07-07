@@ -899,9 +899,6 @@ with open(config_file, 'w') as f:
     f.write('\n')
 " || { warn "Failed to update config.json with webhook settings"; return 1; }
 
-    # Create log file (systemd append: won't create it)
-    touch "$INSTALL_DIR/webhook.log"
-
     # Install systemd user service
     local systemd_dir="$HOME/.config/systemd/user"
     mkdir -p "$systemd_dir"
@@ -1066,7 +1063,14 @@ main() {
     # Step 8: Optional webhook service
     setup_webhook_service
 
-    # Step 9: Summary
+    # Step 9: Restart webhook service if already running (picks up new code)
+    if systemctl --user is-active classical-manager-webhook &>/dev/null; then
+        systemctl --user restart classical-manager-webhook 2>/dev/null && \
+            success "Webhook service restarted" || \
+            warn "Could not restart webhook service"
+    fi
+
+    # Step 10: Summary
     print_summary
 }
 

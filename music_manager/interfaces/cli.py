@@ -521,6 +521,11 @@ def webhook(
     if _config_path_override:
         config_arg = ["--config", str(_config_path_override)]
 
+    # Log file lives next to the config file
+    from music_manager.core.config import DEFAULT_CONFIG_PATH
+    config_dir = (_config_path_override or DEFAULT_CONFIG_PATH).parent
+    log_file = config_dir / "webhook.log"
+
     from music_manager.interfaces.webhook import start_server
     start_server(resolved_host, resolved_port, lib_name, allowed,
-                 config_arg, m3u_dir)
+                 config_arg, m3u_dir, log_file=str(log_file))

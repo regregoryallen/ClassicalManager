@@ -360,7 +360,7 @@ def build_help_content(text: tk.Text) -> None:
     code("  python main.py --cli overrides export --library \"My Collection\" --output overrides.json\n")
     code("  python main.py --cli overrides import --library \"My Collection\" --input overrides.json\n")
     bold("webhook")
-    body(" \u2014 start the webhook HTTP service for remote job submission\n")
+    body(" \u2014 start the webhook HTTP service for remote job submission (Linux only)\n")
     code("  python main.py --cli webhook [--library \"My Collection\"] [--port 5588] [-v]\n")
 
     subheading("Global Options")

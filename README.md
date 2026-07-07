@@ -79,7 +79,7 @@ The installer places a companion script at `~/.local/share/classical-manager/cla
 
 Modes: `plex` (default), `m3u`, `scan`, `scan+plex`, `scan+m3u`. See the comments inside the script for full details.
 
-### Webhook / Home Assistant
+### Webhook / Home Assistant (Linux only)
 
 A built-in webhook service lets Home Assistant (or any HTTP client) trigger playlist operations remotely:
 

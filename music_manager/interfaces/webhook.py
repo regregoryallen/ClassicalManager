@@ -44,7 +44,7 @@ class JobManager:
     def allowed_commands(self):
         return sorted(self._allowed)
 
-    def submit(self, command, quiet=False):
+    def submit(self, command, quiet=False, profile=None):
         """Submit a job. Returns job dict on success, None if busy.
 
         Raises ValueError if command is not allowed.
@@ -66,6 +66,8 @@ class JobManager:
                 "status": "running",
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
+            if profile:
+                job["profile"] = profile
             self._current = job
 
         thread = threading.Thread(target=self._run_job, args=(job,),
@@ -80,7 +82,9 @@ class JobManager:
         output_parts = []
 
         try:
-            steps = self._build_steps(command, quiet=job.get("quiet", False))
+            steps = self._build_steps(command,
+                                        quiet=job.get("quiet", False),
+                                        profile=job.get("profile"))
             for args in steps:
                 logger.info("Running: %s", " ".join(args))
                 result = subprocess.run(
@@ -112,17 +116,27 @@ class JobManager:
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
         logger.info("Job %s [%s] %s", job["id"], command, status)
 
-    def _build_steps(self, command, quiet=False):
+    def _build_steps(self, command, quiet=False, profile=None):
         """Return list of argv lists for the given command."""
         base = [self._python, self._main] + self._config_arg + ["--cli"]
         q = ["-q"] if quiet else []
 
         scan_args = base + ["scan-changes", "--library", self._library] + q
-        plex_args = base + ["generate-all", "--library", self._library,
-                            "--target", "plex"] + q
-        m3u_args = base + ["generate-all", "--library", self._library,
-                           "--format", "m3u",
-                           "--output-dir", self._m3u_output_dir] + q
+
+        if profile:
+            plex_args = base + ["generate", "--profile", profile,
+                                "--target", "plex"] + q
+            safe_name = profile.replace(" ", "_").replace("/", "_")
+            m3u_args = base + ["generate", "--profile", profile,
+                               "--format", "m3u", "--output",
+                               os.path.join(self._m3u_output_dir,
+                                            f"{safe_name}.m3u")] + q
+        else:
+            plex_args = base + ["generate-all", "--library", self._library,
+                                "--target", "plex"] + q
+            m3u_args = base + ["generate-all", "--library", self._library,
+                               "--format", "m3u",
+                               "--output-dir", self._m3u_output_dir] + q
 
         steps = {
             "plex": [plex_args],
@@ -192,9 +206,11 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 return
 
             quiet = bool(body.get("quiet", False))
+            profile = body.get("profile")
 
             try:
-                job = self.server.job_manager.submit(command, quiet=quiet)
+                job = self.server.job_manager.submit(command, quiet=quiet,
+                                                     profile=profile)
             except ValueError as exc:
                 self._json_response(HTTPStatus.BAD_REQUEST,
                                     {"error": str(exc)})

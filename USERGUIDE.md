@@ -872,6 +872,9 @@ The webhook service is a lightweight HTTP server that accepts remote commands to
 trigger playlist operations. It is designed for Home Assistant integration but
 works with any HTTP client. No authentication is required (local network use).
 
+> **Linux only.** The webhook service and its systemd integration require Linux.
+> It is not supported on Windows or macOS.
+
 ### Starting the Service
 
 ```bash
@@ -941,8 +944,7 @@ curl http://localhost:5588/api/health
 
 #### POST /api/jobs
 
-Submit a job. The request body must contain a `command` field and may include
-an optional `quiet` field.
+Submit a job. The request body must contain a `command` field.
 
 ```bash
 curl -X POST http://localhost:5588/api/jobs \
@@ -950,12 +952,12 @@ curl -X POST http://localhost:5588/api/jobs \
   -d '{"command": "plex"}'
 ```
 
-To suppress per-playlist progress output, add `"quiet": true`:
+To target a single profile instead of all profiles:
 
 ```bash
 curl -X POST http://localhost:5588/api/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"command": "plex", "quiet": true}'
+  -d '{"command": "plex", "profile": "Morning Mix"}'
 ```
 
 **Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes).
@@ -963,6 +965,7 @@ curl -X POST http://localhost:5588/api/jobs \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `command` | string | yes | One of the commands listed above. |
+| `profile` | string | no | Run for a single profile instead of all profiles. |
 | `quiet` | boolean | no | Suppress progress output (default: `false`). |
 
 **Responses:**

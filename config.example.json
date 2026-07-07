@@ -14,5 +14,18 @@
       "base_path": "",
       "path_rules": []
     }
+  },
+  "cron": {
+    "library": "My Collection",
+    "mode": "plex",
+    "profile": "",
+    "m3u_output_dir": "~/Playlists",
+    "verbosity": "-q"
+  },
+  "webhook": {
+    "host": "0.0.0.0",
+    "port": 5588,
+    "library": "My Collection",
+    "allowed_commands": ["plex", "scan", "scan+plex", "scan+m3u", "m3u"]
   }
 }

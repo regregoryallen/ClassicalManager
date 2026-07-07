@@ -493,12 +493,18 @@ def webhook(
 
     wh = config.get("webhook", {})
     lib_name = library or wh.get("library")
+    _init_database()
     if not lib_name:
-        _init_database()
         from music_manager.core.database import Library
-        lib_name = Library.get_by_id(config["active_library"]).name
+        try:
+            lib_name = Library.get_by_id(config["active_library"]).name
+        except Library.DoesNotExist:
+            typer.echo(
+                f"Error: no library with id {config['active_library']}. "
+                "Set webhook.library in config.json or use --library.",
+                err=True)
+            raise typer.Exit(1)
     else:
-        _init_database()
         _get_library(lib_name)  # validate exists
 
     resolved_host = host or wh.get("host", "0.0.0.0")

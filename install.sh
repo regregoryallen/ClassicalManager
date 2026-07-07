@@ -899,6 +899,9 @@ with open(config_file, 'w') as f:
     f.write('\n')
 " || { warn "Failed to update config.json with webhook settings"; return 1; }
 
+    # Create log file (systemd append: won't create it)
+    touch "$INSTALL_DIR/webhook.log"
+
     # Install systemd user service
     local systemd_dir="$HOME/.config/systemd/user"
     mkdir -p "$systemd_dir"

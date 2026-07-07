@@ -492,7 +492,9 @@ def webhook(
     config = load_config()
 
     wh = config.get("webhook", {})
-    lib_name = library or wh.get("library")
+    lib_name = (library
+                or wh.get("library")
+                or config.get("cron", {}).get("library"))
     _init_database()
     if not lib_name:
         from music_manager.core.database import Library

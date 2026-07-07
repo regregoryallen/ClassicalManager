@@ -529,3 +529,25 @@ def webhook(
     from music_manager.interfaces.webhook import start_server
     start_server(resolved_host, resolved_port, lib_name, allowed,
                  config_arg, m3u_dir, log_file=str(log_file))
+
+
+@app.command("export-library")
+def export_library(
+    library: str = typer.Option(..., help="Library name"),
+    output: str = typer.Option(..., help="Output JSON file path"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Export a library (tracks, profiles, overrides) to a JSON file."""
+    _setup_logging(verbose)
+    _init_database()
+    lib = _get_library(library)
+
+    from music_manager.core.library_io import export_library as do_export
+    from music_manager.core.database import PlaylistProfile
+
+    data = do_export(lib, Path(output))
+    n_profiles = len(data["profiles"])
+    n_albums = len(data["albums"])
+    n_overrides = len(data["overrides"])
+    typer.echo(f"Exported '{lib.name}': {n_albums} albums, "
+               f"{n_profiles} profiles, {n_overrides} overrides → {output}")

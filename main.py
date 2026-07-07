@@ -47,6 +47,9 @@ CLI commands:
   overrides import --library NAME --input FILE [--no-apply] [-v]
       Export or import metadata overrides as JSON.
 
+  export-library --library NAME --output FILE [-v]
+      Export a library (tracks, profiles, overrides) to a JSON backup.
+
   webhook [--library NAME] [--host ADDR] [--port PORT] [-v]
       Start the webhook HTTP service for remote job submission.
       Used by Home Assistant or other automation tools.

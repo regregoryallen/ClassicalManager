@@ -284,6 +284,7 @@ def generate(
     output: str = typer.Option(None, help="Output file path"),
     target: str = typer.Option(None, help="Target: plex"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
     """Generate a playlist and export or push it."""
     _setup_logging(verbose)
@@ -292,7 +293,8 @@ def generate(
     prof = _get_profile(profile)
     result = generate_playlist(prof)
 
-    _output_result(prof, result, format=format, output=output, target=target)
+    _output_result(prof, result, format=format, output=output, target=target,
+                   quiet=quiet)
 
 
 def _output_result(prof, result, *, format="m3u", output=None, target=None, quiet=False):

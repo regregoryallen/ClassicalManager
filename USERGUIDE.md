@@ -941,7 +941,8 @@ curl http://localhost:5588/api/health
 
 #### POST /api/jobs
 
-Submit a job. The request body must contain a `command` field.
+Submit a job. The request body must contain a `command` field and may include
+an optional `quiet` field.
 
 ```bash
 curl -X POST http://localhost:5588/api/jobs \
@@ -949,13 +950,26 @@ curl -X POST http://localhost:5588/api/jobs \
   -d '{"command": "plex"}'
 ```
 
+To suppress per-playlist progress output, add `"quiet": true`:
+
+```bash
+curl -X POST http://localhost:5588/api/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "plex", "quiet": true}'
+```
+
 **Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | yes | One of the commands listed above. |
+| `quiet` | boolean | no | Suppress progress output (default: `false`). |
 
 **Responses:**
 
 | Status | Meaning |
 |--------|---------|
-| 202 Accepted | Job started. Body contains job `id`, `command`, `status`, `started_at`. |
+| 202 Accepted | Job started. Body contains job `id`, `command`, `quiet`, `status`, `started_at`. |
 | 400 Bad Request | Missing or invalid `command`. |
 | 409 Conflict | A job is already running. |
 
@@ -963,6 +977,7 @@ curl -X POST http://localhost:5588/api/jobs \
 {
   "id": "a1b2c3d4e5f6",
   "command": "plex",
+  "quiet": false,
   "status": "running",
   "started_at": "2026-07-06T02:00:00"
 }
@@ -988,6 +1003,7 @@ curl http://localhost:5588/api/jobs/last
 {
   "id": "a1b2c3d4e5f6",
   "command": "plex",
+  "quiet": false,
   "status": "completed",
   "started_at": "2026-07-06T02:00:00",
   "finished_at": "2026-07-06T02:01:23",

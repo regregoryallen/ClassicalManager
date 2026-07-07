@@ -44,7 +44,7 @@ class JobManager:
     def allowed_commands(self):
         return sorted(self._allowed)
 
-    def submit(self, command):
+    def submit(self, command, quiet=False):
         """Submit a job. Returns job dict on success, None if busy.
 
         Raises ValueError if command is not allowed.
@@ -62,6 +62,7 @@ class JobManager:
             job = {
                 "id": uuid.uuid4().hex[:12],
                 "command": command,
+                "quiet": quiet,
                 "status": "running",
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }
@@ -79,7 +80,7 @@ class JobManager:
         output_parts = []
 
         try:
-            steps = self._build_steps(command)
+            steps = self._build_steps(command, quiet=job.get("quiet", False))
             for args in steps:
                 logger.info("Running: %s", " ".join(args))
                 result = subprocess.run(
@@ -109,16 +110,17 @@ class JobManager:
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
         logger.info("Job %s [%s] %s", job["id"], command, status)
 
-    def _build_steps(self, command):
+    def _build_steps(self, command, quiet=False):
         """Return list of argv lists for the given command."""
         base = [self._python, self._main] + self._config_arg + ["--cli"]
+        q = ["-q"] if quiet else []
 
-        scan_args = base + ["scan-changes", "--library", self._library, "-q"]
+        scan_args = base + ["scan-changes", "--library", self._library] + q
         plex_args = base + ["generate-all", "--library", self._library,
-                            "--target", "plex", "-q"]
+                            "--target", "plex"] + q
         m3u_args = base + ["generate-all", "--library", self._library,
                            "--format", "m3u",
-                           "--output-dir", self._m3u_output_dir, "-q"]
+                           "--output-dir", self._m3u_output_dir] + q
 
         steps = {
             "plex": [plex_args],
@@ -187,8 +189,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
                                     {"error": "missing 'command' field"})
                 return
 
+            quiet = bool(body.get("quiet", False))
+
             try:
-                job = self.server.job_manager.submit(command)
+                job = self.server.job_manager.submit(command, quiet=quiet)
             except ValueError as exc:
                 self._json_response(HTTPStatus.BAD_REQUEST,
                                     {"error": str(exc)})

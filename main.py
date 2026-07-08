@@ -50,6 +50,9 @@ CLI commands:
   export-library --library NAME --output FILE [-v]
       Export a library (tracks, profiles, overrides) to a JSON backup.
 
+  import-library --input FILE [--name NAME] [-v]
+      Import a library from a JSON backup file.
+
   webhook [--library NAME] [--host ADDR] [--port PORT] [-v]
       Start the webhook HTTP service for remote job submission.
       Used by Home Assistant or other automation tools.

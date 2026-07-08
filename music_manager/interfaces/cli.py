@@ -551,3 +551,44 @@ def export_library(
     n_overrides = len(data["overrides"])
     typer.echo(f"Exported '{lib.name}': {n_albums} albums, "
                f"{n_profiles} profiles, {n_overrides} overrides → {output}")
+
+
+@app.command("import-library")
+def import_library_cmd(
+    input: str = typer.Option(..., "--input", help="Input JSON file path"),
+    name: str = typer.Option(None, "--name", help="Library name (default: from file)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Import a library from a JSON backup file."""
+    _setup_logging(verbose)
+    _init_database()
+
+    import json as json_mod
+    from music_manager.core.database import Library
+    from music_manager.core.library_io import import_library
+
+    try:
+        data = json_mod.loads(Path(input).read_text())
+    except Exception as exc:
+        typer.echo(f"Error reading file: {exc}", err=True)
+        raise typer.Exit(1)
+
+    lib_name = name or data.get("library_name", "Imported")
+    existing = {l.name for l in Library.select()}
+    final_name = lib_name
+    n = 2
+    while final_name in existing:
+        final_name = f"{lib_name} ({n})"
+        n += 1
+
+    lib = Library.create(name=final_name,
+                         plex_section=data.get("plex_section", ""))
+    result = import_library(lib, data)
+
+    typer.echo(f"Imported '{final_name}': {result['albums']} albums, "
+               f"{result['profiles']} profiles, {result['overrides']} overrides")
+    typer.echo(f"Rules mapped: {result['rules_mapped']}, "
+               f"skipped: {result['rules_skipped']}")
+    if result['pins_mapped'] or result['pins_skipped']:
+        typer.echo(f"Pins mapped: {result['pins_mapped']}, "
+                   f"skipped: {result['pins_skipped']}")

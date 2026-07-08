@@ -163,6 +163,7 @@ class App:
 
         self._setup_theme()
         self._build_layout()
+        self.root.update_idletasks()  # ensure all widgets render before loading data
         self._refresh_library_list()
         self._start_autosave_timer()
 
@@ -400,6 +401,7 @@ class App:
             yield
         finally:
             self._set_cursor("")
+            self.root.update_idletasks()
 
     def _set_cursor(self, cursor):
         """Set cursor on all widgets (needed for Windows propagation)."""
@@ -1534,7 +1536,8 @@ class App:
         _save_prefs(self._prefs)
 
         from music_manager.core.library_io import export_library
-        export_library(self.active_library, Path(path))
+        with self._busy():
+            export_library(self.active_library, Path(path))
         messagebox.showinfo("Export",
                            f"Exported library '{self.active_library.name}' to:\n{path}")
 
@@ -1558,112 +1561,31 @@ class App:
             messagebox.showerror("Import Error", f"Cannot read file: {exc}")
             return
 
-        from music_manager.core.database import (
-            Library, SourceFolder, Album, Work, Track, Composer,
-            Override, PlaylistProfile, ProfileRule,
-        )
-        import datetime
+        from music_manager.core.database import Library
+        from music_manager.core.library_io import import_library
 
-        lib_name = data.get("library_name", "Imported")
-        # Avoid name collision
-        existing = [l.name for l in Library.select()]
-        final_name = lib_name
-        n = 2
-        while final_name in existing:
-            final_name = f"{lib_name} ({n})"
-            n += 1
+        with self._busy():
+            lib_name = data.get("library_name", "Imported")
+            existing = [l.name for l in Library.select()]
+            final_name = lib_name
+            n = 2
+            while final_name in existing:
+                final_name = f"{lib_name} ({n})"
+                n += 1
 
-        lib = Library.create(name=final_name,
-                             plex_section=data.get("plex_section", ""))
+            lib = Library.create(name=final_name,
+                                 plex_section=data.get("plex_section", ""))
+            result = import_library(lib, data)
 
-        # Source folders
-        folder_map = {}
-        for root_path in data.get("source_folders", []):
-            sf = SourceFolder.create(library=lib, root_path=root_path)
-            folder_map[root_path] = sf
+            self._refresh_library_list()
+            self.lib_combo.set(final_name)
+            self._on_library_changed(final_name)
 
-        # Composers
-        composer_list = []
-        for cd in data.get("composers", []):
-            c = Composer.create(library=lib, name=cd["name"],
-                                sort_name=cd.get("sort_name"),
-                                norm_key=cd["norm_key"])
-            composer_list.append(c)
-
-        # Albums → Works → Tracks
-        first_folder = list(folder_map.values())[0] if folder_map else None
-        for ad in data.get("albums", []):
-            album = Album.create(
-                library=lib,
-                folder=first_folder,
-                album_key=ad["album_key"], title=ad["title"],
-                album_artist=ad.get("album_artist"),
-                year=ad.get("year"),
-                musicbrainz_album_id=ad.get("mb_album_id"),
-            )
-            for wd in ad.get("works", []):
-                comp_idx = wd.get("composer_idx")
-                work = Work.create(
-                    album=album,
-                    composer=composer_list[comp_idx] if comp_idx is not None else None,
-                    work_name=wd["work_name"],
-                    work_sequence=wd.get("work_sequence"),
-                    work_source=wd.get("work_source", "import"),
-                    musicbrainz_work_id=wd.get("mb_work_id"),
-                )
-                for td in wd.get("tracks", []):
-                    t_comp_idx = td.get("composer_idx")
-                    Track.create(
-                        library=lib,
-                        folder=first_folder,
-                        album=album,
-                        work=work,
-                        composer=composer_list[t_comp_idx] if t_comp_idx is not None else None,
-                        title=td["title"],
-                        relative_path=td["relative_path"],
-                        disc_number=td.get("disc_number", 1),
-                        track_number=td.get("track_number", 0),
-                        movement_number=td.get("movement_number"),
-                        duration_ms=td.get("duration_ms", 0),
-                        musicbrainz_recording_id=td.get("mb_recording_id"),
-                    )
-
-        # Profiles (rules reference old IDs — import rules by target_level only)
-        for pd in data.get("profiles", []):
-            prof = PlaylistProfile.create(
-                library=lib, name=pd["name"],
-                shuffle_mode=pd.get("shuffle_mode", "work"),
-                work_integrity=pd.get("work_integrity", "enforce"),
-                length_mode=pd.get("length_mode", "all"),
-                length_value=pd.get("length_value"),
-                seed=pd.get("seed"),
-                no_repeat_tracks=pd.get("no_repeat_tracks", True),
-                separate_composers=pd.get("separate_composers", False),
-                separate_albums=pd.get("separate_albums", False),
-                separate_forms=pd.get("separate_forms", False),
-            )
-            for rd in pd.get("rules", []):
-                ProfileRule.create(
-                    profile=prof, rule_type=rd["rule_type"],
-                    target_level=rd["target_level"],
-                    target_id=rd["target_id"],
-                )
-
-        # Overrides
-        for od in data.get("overrides", []):
-            Override.create(
-                library=lib, scope=od["scope"], field=od["field"],
-                value=od["value"],
-                match_mb_id=od.get("match_mb_id"),
-                match_relative_path=od.get("match_relative_path"),
-                updated_at=datetime.datetime.now(),
-            )
-
-        self._refresh_library_list()
-        self.lib_combo.set(final_name)
-        self._on_library_changed(final_name)
-        messagebox.showinfo("Import",
-                           f"Imported library '{final_name}' from:\n{path}")
+        msg = f"Imported library '{final_name}' from:\n{path}"
+        if result["rules_skipped"]:
+            msg += (f"\n\nNote: {result['rules_skipped']} profile rules "
+                    f"could not be re-mapped to new IDs.")
+        messagebox.showinfo("Import", msg)
 
     def _import_old_playlists(self):
         """Import old-style playlists (text files with one album directory per line).

@@ -1,7 +1,7 @@
 """Playlist engine (§7).
 
-Assembles the track population, applies include/exclude rules, shuffles by
-the selected mode (track / work / album), enforces work-integrity policy,
+Assembles the track population from profile selections, shuffles by the
+selected mode (track / work / album), enforces work-integrity policy,
 applies stop conditions, and returns an ordered list of resolved Track rows.
 """
 
@@ -14,7 +14,7 @@ import peewee as pw
 
 from music_manager.core.database import (
     Library, Album, Work, Track, Composer,
-    PlaylistProfile, ProfileRule, ProfilePin,
+    PlaylistProfile, ProfileSelection,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
     library = profile.library
 
     # Step 1: Selection — resolve to a set of track IDs
-    selected_ids, admission_map = _select_tracks(profile)
+    selected_ids, admission_map, excluded_work_keys = _select_tracks(profile)
     logger.info("Selection: %d tracks from library '%s'",
                 len(selected_ids), library.name)
 
@@ -142,7 +142,7 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
 
     # Step 2: Work-integrity expansion
     selected_ids, admission_map = _apply_work_integrity(
-        profile, selected_ids, admission_map
+        profile, selected_ids, admission_map, excluded_work_keys
     )
 
     # Step 3: Build resolved track objects
@@ -213,7 +213,7 @@ def find_unused_tracks(
 
     used_ids: set[int] = set()
     for profile in profiles:
-        selected, _ = _select_tracks(profile)
+        selected, _, _ = _select_tracks(profile)
         used_ids |= selected
 
     unused_albums: list[tuple[int, str]] = []
@@ -260,103 +260,18 @@ def find_unused_tracks(
 
 def _select_tracks(
     profile: PlaylistProfile,
-) -> tuple[set[int], dict[int, str]]:
-    """Assemble the selected track set based on include/exclude rules.
+) -> tuple[set[int], dict[int, str], set[str]]:
+    """Assemble the selected track set from profile selections.
+
+    Pure additive model with specificity — see selection.py for the
+    resolution algorithm.
 
     Returns:
-        (set of track IDs, dict mapping track_id → admission reason)
+        (set of track IDs, dict mapping track_id → admission reason,
+         set of excluded work keys)
     """
-    library = profile.library
-    rules = list(ProfileRule.select().where(ProfileRule.profile == profile))
-
-    includes = [r for r in rules if r.rule_type == "include"]
-    excludes = [r for r in rules if r.rule_type == "exclude"]
-
-    # Base population: all tracks in the library
-    all_track_ids = set(
-        t.id for t in Track.select(Track.id).where(Track.library == library)
-    )
-
-    admission_map: dict[int, str] = {}
-
-    if includes:
-        # Whitelist mode: start empty, add tracks matching include rules
-        selected = set()
-        for rule in includes:
-            matched = _resolve_rule_to_track_ids(library, rule)
-            for tid in matched:
-                if tid in all_track_ids:
-                    selected.add(tid)
-                    admission_map[tid] = (
-                        f"include:{rule.target_level}:{rule.target_id}"
-                    )
-    else:
-        # No includes = everything is included
-        selected = set(all_track_ids)
-        for tid in selected:
-            admission_map[tid] = "all"
-
-    # Apply exclusions
-    for rule in excludes:
-        excluded = _resolve_rule_to_track_ids(library, rule)
-        for tid in excluded:
-            selected.discard(tid)
-            admission_map.pop(tid, None)
-
-    # Auto-include tracks from pinned works
-    pins = list(ProfilePin.select().where(ProfilePin.profile == profile))
-    for pin in pins:
-        pin_track_ids = set(
-            t.id for t in
-            Track.select(Track.id).where(
-                (Track.library == library) & (Track.work == pin.work_id)
-            )
-        )
-        for tid in pin_track_ids:
-            if tid in all_track_ids and tid not in selected:
-                selected.add(tid)
-                admission_map[tid] = f"pin:position:{pin.position}"
-
-    return selected, admission_map
-
-
-def _resolve_rule_to_track_ids(
-    library: Library, rule: ProfileRule
-) -> set[int]:
-    """Expand a single rule to the set of track IDs it covers."""
-    level = rule.target_level
-    target_id = rule.target_id
-
-    if level == "track":
-        return {target_id}
-
-    elif level == "work":
-        return set(
-            t.id for t in
-            Track.select(Track.id).where(
-                (Track.library == library) & (Track.work == target_id)
-            )
-        )
-
-    elif level == "album":
-        return set(
-            t.id for t in
-            Track.select(Track.id).where(
-                (Track.library == library) & (Track.album == target_id)
-            )
-        )
-
-    elif level == "composer":
-        return set(
-            t.id for t in
-            Track.select(Track.id).where(
-                (Track.library == library) & (Track.composer == target_id)
-            )
-        )
-
-    else:
-        logger.warning("Unknown rule target_level: %s", level)
-        return set()
+    from music_manager.core.selection import resolve_selections
+    return resolve_selections(profile)
 
 
 # ---------------------------------------------------------------------------
@@ -367,14 +282,22 @@ def _apply_work_integrity(
     profile: PlaylistProfile,
     selected_ids: set[int],
     admission_map: dict[int, str],
+    excluded_work_keys: set[str] | None = None,
 ) -> tuple[set[int], dict[int, str]]:
     """Apply work-integrity policy to the selection.
 
-    - enforce: any work with >= 1 selected track plays whole.
+    - enforce: any work with >= 1 selected track plays whole,
+      UNLESS the work is explicitly excluded by a selection (specificity
+      takes precedence — a track-level add within an excluded work does
+      not pull the whole work back in).
     - respect_selection: emit exactly what was selected.
     """
     if profile.work_integrity == "respect_selection":
         return selected_ids, admission_map
+
+    from music_manager.core.selection import key_for_work
+
+    excluded_wkeys = excluded_work_keys or set()
 
     # enforce mode: expand partial works to full
     # Find all works that have at least one selected track
@@ -387,8 +310,14 @@ def _apply_work_integrity(
         except Track.DoesNotExist:
             pass
 
-    # Add all tracks from those works
+    # Add all tracks from those works (skip explicitly excluded works)
     for wid in work_ids_with_selected:
+        try:
+            work = Work.get_by_id(wid)
+        except Work.DoesNotExist:
+            continue
+        if key_for_work(work) in excluded_wkeys:
+            continue  # don't expand into an explicitly excluded work
         work_tracks = Track.select(Track.id).where(Track.work == wid)
         for t in work_tracks:
             if t.id not in selected_ids:
@@ -704,26 +633,58 @@ def _apply_pins(
 ) -> list[ResolvedTrack]:
     """Insert pinned works at their designated positions.
 
-    Pinned works are pulled out of the shuffled list (or built fresh if
-    not already selected) and re-inserted at the correct work-boundary
-    position. Position 1 = beginning, position 2 = after the first work, etc.
+    Pinned works are pulled out of the shuffled list and re-inserted at
+    the correct work-boundary position.  Pins are stored as pin_position
+    on ProfileSelection rows (level='work').
+    Position 1 = beginning, position 2 = after the first work, etc.
     """
-    pins = list(
-        ProfilePin.select()
-        .where(ProfilePin.profile == profile)
-        .order_by(ProfilePin.position)
+    from music_manager.core.selection import parse_work_key
+
+    pin_sels = list(
+        ProfileSelection.select()
+        .where(
+            (ProfileSelection.profile == profile)
+            & (ProfileSelection.pin_position.is_null(False))
+        )
+        .order_by(ProfileSelection.pin_position)
     )
-    if not pins:
+    if not pin_sels:
         return tracks
 
-    for pin in pins:
+    for sel in pin_sels:
+        # Resolve the work key to a Work object to get its integer ID
+        parsed = parse_work_key(sel.key)
+        if not parsed:
+            logger.warning("Bad pin work key '%s', skipping", sel.key)
+            continue
+
+        album_key, work_name, work_seq = parsed
+        album = Album.select().where(
+            (Album.library == profile.library) & (Album.album_key == album_key)
+        ).first()
+        if not album:
+            logger.warning("Pin album not found: '%s', skipping", album_key)
+            continue
+
+        query = Work.select().where(
+            (Work.album == album) & (Work.work_name == work_name)
+        )
+        if work_seq is not None:
+            query = query.where(Work.work_sequence == work_seq)
+        work = query.first()
+        if not work:
+            logger.warning("Pinned work not found: '%s', skipping", sel.key)
+            continue
+
         # Separate pinned tracks from the main list
-        pinned_rts = [rt for rt in tracks if rt.work_id == pin.work_id]
-        remaining = [rt for rt in tracks if rt.work_id != pin.work_id]
+        pinned_rts = [rt for rt in tracks if rt.work_id == work.id]
+        remaining = [rt for rt in tracks if rt.work_id != work.id]
 
         if not pinned_rts:
-            # Work not in selection (shouldn't happen with auto-include, but guard)
-            logger.warning("Pinned work %d has no resolved tracks, skipping", pin.work_id)
+            logger.warning(
+                "Pinned work '%s' has no resolved tracks, skipping",
+                work_name,
+            )
             continue
 
         # Sort pinned tracks in natural order
@@ -733,7 +694,7 @@ def _apply_pins(
         ))
 
         # Insert at the correct work-boundary position
-        insert_idx = _find_work_boundary_index(remaining, pin.position - 1)
+        insert_idx = _find_work_boundary_index(remaining, sel.pin_position - 1)
         tracks = remaining[:insert_idx] + pinned_rts + remaining[insert_idx:]
 
     return tracks

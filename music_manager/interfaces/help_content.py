@@ -155,9 +155,9 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Settings \u2014 application-wide configuration")
     bullet("View Logs \u2014 log output for the current session")
 
-    # ── Explorer & Rules ──
-    heading("explorer", "Explorer & Rules")
-    body("Browse your library and set include/exclude rules.\n")
+    # ── Explorer & Selections ──
+    heading("explorer", "Explorer & Selections")
+    body("Browse your library and add or exclude items from your playlist.\n")
 
     subheading("Album List (left pane)")
     bullet("Columns: Album, Genre, Year, Tracks")
@@ -170,13 +170,13 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open the track in your system's default player")
-    bullet("Include Album/Work/Track \u2014 add an include rule")
-    bullet("Exclude Album/Work/Track \u2014 add an exclude rule")
+    bullet("Add Album/Work/Track \u2014 add to the playlist selection")
+    bullet("Exclude Album/Work/Track \u2014 create an exception within a broader add")
 
-    subheading("Rules Display")
+    subheading("Selections Display")
     body(
-        "The bottom section shows all active rules. Select a rule and click "
-        "Remove to delete it. Rules are shared with the Playlist Builder.\n"
+        "The bottom section shows all active selections. Select an entry and "
+        "click Remove to delete it. Selections are shared with the Playlist Builder.\n"
     )
 
     # ── Playlist Builder ──
@@ -185,8 +185,8 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Profile Management")
     bullet("Profile name \u2014 enter a name for your playlist profile")
-    bullet("Load \u2014 restore a saved profile's settings and rules")
-    bullet("Save \u2014 save current settings and rules")
+    bullet("Load \u2014 restore a saved profile's settings and selections")
+    bullet("Save \u2014 save current settings and selections")
     bullet("Delete \u2014 remove saved profiles")
     bullet("Profile Summary \u2014 stats for all profiles")
 
@@ -240,7 +240,7 @@ def build_help_content(text: tk.Text) -> None:
     )
     bullet("Right-click a work in the Playlist pane \u2192 Pin to position... \u2192 choose 1\u20135")
     bullet("Pinned works show [#N] prefix in orchid color")
-    bullet("Pinned works are auto-included \u2014 no separate include rule needed")
+    bullet("Pinned works are auto-added \u2014 no separate selection needed")
     bullet("Right-click \u2192 Remove pin to unpin")
     bullet("Pins are saved with the profile")
 
@@ -263,12 +263,11 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Edit Controls")
     bold("Set Work Name")
-    body(" \u2014 change the display name (creates a work_name override)\n")
-    bold("Set Group Key")
-    body(" \u2014 assign a work_group_key to control grouping. Requires re-detect or rescan.\n")
+    body(" \u2014 set the work name for selected tracks. Tracks sharing the same "
+         "work name are grouped into a single work on re-detect or rescan.\n")
     bold("Make Standalone")
     body(
-        " \u2014 marks tracks with __standalone__, forcing each into its own work. "
+        " \u2014 marks tracks as standalone, forcing each into its own work. "
         "Useful for suppressing incorrect WORK tags.\n"
     )
     bold("Set Composer")
@@ -279,7 +278,7 @@ def build_help_content(text: tk.Text) -> None:
     subheading("Show Album Popup")
     bullet("Edit album title, artist, and year (creates album-scope overrides)")
     bullet("Works/tracks tree with multi-select; right-click to Play")
-    bullet("Set Group Key, Work Name, Composer, or Make Standalone for selected tracks")
+    bullet("Set Work Name, Composer, or Make Standalone for selected tracks")
 
     subheading("Current Overrides")
     body(
@@ -288,7 +287,7 @@ def build_help_content(text: tk.Text) -> None:
         "files and survive rescans.\n"
     )
     bold("Track fields: ")
-    body("composer, work_group_key, work_name, disc_number, track_number, "
+    body("composer, work_name, disc_number, track_number, "
          "movement_number, title, genre, performer, conductor, ensemble\n")
     bold("Album fields: ")
     body("album_title, album_artist, year\n")

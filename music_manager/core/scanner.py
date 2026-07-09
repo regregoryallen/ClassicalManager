@@ -465,7 +465,7 @@ def detect_works(album: Album, pending_tracks: list[PendingTrack]) -> None:
     Work records in the database.  Tracks are processed per-album.
 
     Precedence (stop at first match per track):
-      0. Manual override (work_group_key from Overrides table)
+      0. Manual override (work_name from Overrides table)
       1. MUSICBRAINZ_WORKID — group tracks sharing the id
       2. WORK tag — group by work name; order by MOVEMENT tags
       3. Title-prefix heuristic — within album/disc, group by common prefix
@@ -536,9 +536,9 @@ def _create_work(album: Album, name: str, source: str,
 
 def _assign_by_override(album: Album, pending: list[PendingTrack],
                         assigned: set[int]) -> None:
-    """Step 0: Group tracks by manual work_group_key overrides.
+    """Step 0: Group tracks by manual work_name overrides.
 
-    Special key ``__standalone__`` forces each track into its own standalone
+    Special value ``__standalone__`` forces each track into its own standalone
     work, bypassing all later detection steps (MB work ID, WORK tag,
     heuristic).  Use this to suppress erroneous WORK tags.
     """
@@ -943,7 +943,7 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
     """
     stats = ScanStats()
 
-    # Load overrides for this library (for work_group_key lookups)
+    # Load overrides for this library (for work_name grouping lookups)
     work_overrides = _load_work_overrides(library)
 
     # Clear existing scan data (but not overrides)
@@ -1020,6 +1020,15 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
     stats.heuristic_works = Work.select().join(Album).where(
         (Album.library == library) & (Work.work_source == "heuristic")
     ).count()
+
+    # Reconcile profile selections that may have been orphaned by ID changes
+    from music_manager.core.selection import reconcile_selections
+    recon = reconcile_selections(library)
+    if recon["remapped"] or recon["orphaned"]:
+        logger.info(
+            "Selection reconciliation: %d remapped, %d orphaned",
+            recon["remapped"], recon["orphaned"],
+        )
 
     return stats
 
@@ -1262,19 +1271,31 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
         len(stats.files_failed),
     )
 
+    # Reconcile profile selections that may have been orphaned by ID changes
+    from music_manager.core.selection import reconcile_selections
+    recon = reconcile_selections(library)
+    if recon["remapped"] or recon["orphaned"]:
+        logger.info(
+            "Selection reconciliation: %d remapped, %d orphaned",
+            recon["remapped"], recon["orphaned"],
+        )
+
     return stats
 
 
 def _load_work_overrides(library: Library) -> dict[str, str]:
-    """Load work_group_key overrides for a library.
+    """Load work-name overrides that drive grouping.
 
-    Returns a dict mapping relative_path → work_group_key value.
+    Tracks sharing the same work_name override value are grouped into
+    one work during detection.
+
+    Returns a dict mapping relative_path → work name value.
     """
     overrides = {}
     for ov in Override.select().where(
         (Override.library == library) &
         (Override.scope == "track") &
-        (Override.field == "work_group_key")
+        (Override.field == "work_name")
     ):
         if ov.match_relative_path:
             overrides[ov.match_relative_path] = ov.value
@@ -1350,7 +1371,7 @@ def _process_album_group(
             stats.tracks_no_duration += 1
 
         pt = PendingTrack(db_track=track, tags=raw)
-        # Check for work_group_key override
+        # Check for work_name override (drives grouping)
         if rel_path in work_overrides:
             pt.override_work_key = work_overrides[rel_path]
         pending_tracks.append(pt)

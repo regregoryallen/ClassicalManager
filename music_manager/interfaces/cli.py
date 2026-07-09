@@ -587,8 +587,7 @@ def import_library_cmd(
 
     typer.echo(f"Imported '{final_name}': {result['albums']} albums, "
                f"{result['profiles']} profiles, {result['overrides']} overrides")
-    typer.echo(f"Rules mapped: {result['rules_mapped']}, "
-               f"skipped: {result['rules_skipped']}")
-    if result['pins_mapped'] or result['pins_skipped']:
-        typer.echo(f"Pins mapped: {result['pins_mapped']}, "
-                   f"skipped: {result['pins_skipped']}")
+    typer.echo(f"Selections imported: {result['selections_imported']}")
+    if result.get('old_format_skipped'):
+        typer.echo(f"Old-format rules skipped: {result['old_format_skipped']} "
+                   f"(re-create selections manually)")

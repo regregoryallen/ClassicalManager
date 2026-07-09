@@ -150,8 +150,7 @@ class App:
         self.root.geometry(self._prefs.get("window_geometry", "1280x800"))
 
         self.active_library = None
-        self._current_profile_rules = []  # in-memory include/exclude rules
-        self._current_profile_pins = []   # in-memory pins: [{work_id, position, display}]
+        self._current_selections = []  # in-memory selections: [{level, key, excluded, pin_position, track_paths, display}]
         self._profile_picker_open = False
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
@@ -269,15 +268,13 @@ class App:
         """Silently save current builder state as an __autosave__ profile."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
+        from music_manager.core.database import PlaylistProfile, ProfileSelection
 
-        # Delete existing autosave for this library
+        # Delete existing autosave for this library (CASCADE deletes selections)
         for existing in PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
             (PlaylistProfile.name == "__autosave__")
         ):
-            ProfileRule.delete().where(ProfileRule.profile == existing).execute()
-            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
             existing.delete_instance()
 
         # Capture current UI state
@@ -299,19 +296,14 @@ class App:
             separate_forms=self.sep_form_var.get() == 1,
         )
 
-        for rule in self._current_profile_rules:
-            ProfileRule.create(
+        for sel in self._current_selections:
+            ProfileSelection.create(
                 profile=profile,
-                rule_type=rule["rule_type"],
-                target_level=rule["target_level"],
-                target_id=rule["target_id"],
-            )
-
-        for pin in self._current_profile_pins:
-            ProfilePin.create(
-                profile=profile,
-                work_id=pin["work_id"],
-                position=pin["position"],
+                level=sel["level"],
+                key=sel["key"],
+                excluded=sel["excluded"],
+                pin_position=sel.get("pin_position"),
+                track_paths=sel.get("track_paths"),
             )
 
         # Remember the profile name entry text separately
@@ -344,14 +336,12 @@ class App:
         """Delete the autosave profile for the active library."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
+        from music_manager.core.database import PlaylistProfile
         for existing in PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
             (PlaylistProfile.name == "__autosave__")
         ):
-            ProfileRule.delete().where(ProfileRule.profile == existing).execute()
-            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
-            existing.delete_instance()
+            existing.delete_instance()  # CASCADE deletes selections
 
     def mainloop(self):
         """Start the Tk event loop."""
@@ -589,11 +579,10 @@ class App:
 
     def _refresh_library_list(self):
         """Reload the library dropdown from the database."""
-        from music_manager.core.database import Library, PlaylistProfile, ProfileRule
-        # Clean up any leftover temp profiles
+        from music_manager.core.database import Library, PlaylistProfile
+        # Clean up any leftover temp profiles (CASCADE deletes selections)
         for temp in PlaylistProfile.select().where(
                 PlaylistProfile.name.startswith("__")):
-            ProfileRule.delete().where(ProfileRule.profile == temp).execute()
             temp.delete_instance()
         libs = list(Library.select())
         names = [lib.name for lib in libs]
@@ -1093,12 +1082,10 @@ class App:
             return
         from music_manager.core.database import (
             SourceFolder, Album, Work, Track, Composer, Override,
-            PlaylistProfile, ProfileRule,
+            PlaylistProfile,
         )
         lib = self.active_library
-        # Delete child records
-        for p in PlaylistProfile.select().where(PlaylistProfile.library == lib):
-            ProfileRule.delete().where(ProfileRule.profile == p).execute()
+        # Delete child records (CASCADE deletes selections)
         PlaylistProfile.delete().where(PlaylistProfile.library == lib).execute()
         Override.delete().where(Override.library == lib).execute()
         Track.delete().where(Track.library == lib).execute()
@@ -1354,8 +1341,9 @@ class App:
             return
 
         from music_manager.core.database import (
-            PlaylistProfile, ProfileRule, Album, Work, Track, Composer,
+            PlaylistProfile, Album, Work, Track, Composer,
         )
+        from music_manager.core.selection import resolve_selections
 
         profiles = list(PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
@@ -1369,54 +1357,35 @@ class App:
         with self._busy():
             rows = []
             for prof in profiles:
-                rules = list(ProfileRule.select().where(
-                    ProfileRule.profile == prof))
-                included = set()
-                excluded = set()
-                for r in rules:
-                    key = (r.target_level, r.target_id)
-                    if r.rule_type == "include":
-                        included.add(key)
-                    else:
-                        excluded.add(key)
+                selected_ids, _ = resolve_selections(prof)
 
                 albums_set = set()
                 works_set = set()
-                tracks_list = []
                 composers_set = set()
+                total_ms = 0
 
-                for album in Album.select().where(
-                        Album.library == self.active_library):
-                    ak = ("album", album.id)
-                    if ak in excluded:
-                        continue
-                    album_inc = ak in included
+                if selected_ids:
+                    tracks = list(
+                        Track.select(Track, Work, Album)
+                        .join(Work, on=(Track.work == Work.id))
+                        .switch(Track)
+                        .join(Album, on=(Track.album == Album.id))
+                        .where(Track.id.in_(list(selected_ids)))
+                    )
+                    for t in tracks:
+                        albums_set.add(t.album_id)
+                        works_set.add(t.work_id)
+                        total_ms += t.duration_ms or 0
+                        if t.composer_id:
+                            composers_set.add(t.composer_id)
 
-                    for work in Work.select().where(Work.album == album):
-                        wk = ("work", work.id)
-                        if wk in excluded:
-                            continue
-                        work_inc = wk in included or album_inc
-
-                        for t in Track.select().where(Track.work == work):
-                            tk_key = ("track", t.id)
-                            if tk_key in excluded:
-                                continue
-                            if tk_key in included or work_inc:
-                                albums_set.add(album.id)
-                                works_set.add(work.id)
-                                tracks_list.append(t.duration_ms or 0)
-                                if t.composer_id:
-                                    composers_set.add(t.composer_id)
-
-                total_ms = sum(tracks_list)
                 total_s = total_ms // 1000
                 dur_str = (f"{total_s // 3600}h {(total_s % 3600) // 60:02d}m"
                            if total_s >= 3600
                            else f"{total_s // 60}m {total_s % 60:02d}s")
 
                 rows.append((prof.name, len(albums_set), len(works_set),
-                             len(tracks_list), len(composers_set), dur_str))
+                             len(selected_ids), len(composers_set), dur_str))
 
         popup = tk.Toplevel(self.root)
         popup.title(f"Profile Summary — {self.active_library.name}")
@@ -1582,15 +1551,15 @@ class App:
             self._on_library_changed(final_name)
 
         msg = f"Imported library '{final_name}' from:\n{path}"
-        if result["rules_skipped"]:
-            msg += (f"\n\nNote: {result['rules_skipped']} profile rules "
-                    f"could not be re-mapped to new IDs.")
+        if result.get("old_format_skipped"):
+            msg += (f"\n\nNote: {result['old_format_skipped']} old-format rules "
+                    f"were skipped. Re-create selections manually.")
         messagebox.showinfo("Import", msg)
 
     def _import_old_playlists(self):
         """Import old-style playlists (text files with one album directory per line).
 
-        Each file becomes a profile with include rules for matching albums.
+        Each file becomes a profile with album-level selections.
         """
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
@@ -1608,7 +1577,7 @@ class App:
         self.root.update_idletasks()
 
         from music_manager.core.database import (
-            Album, PlaylistProfile, ProfileRule,
+            Album, PlaylistProfile, ProfileSelection,
         )
 
         albums = list(Album.select().where(Album.library == self.active_library))
@@ -1624,12 +1593,11 @@ class App:
             # Profile name from filename without extension
             profile_name = Path(filepath).stem
 
-            # Delete existing profile with same name
+            # Delete existing profile with same name (CASCADE deletes selections)
             for existing in PlaylistProfile.select().where(
                 (PlaylistProfile.library == self.active_library) &
                 (PlaylistProfile.name == profile_name)
             ):
-                ProfileRule.delete().where(ProfileRule.profile == existing).execute()
                 existing.delete_instance()
 
             profile = PlaylistProfile.create(
@@ -1659,9 +1627,9 @@ class App:
                     # album_key is the folder name relative to source root
                     album_dir = Path(album.album_key).name
                     if album_dir == dir_name or album.title == dir_name:
-                        ProfileRule.create(
-                            profile=profile, rule_type="include",
-                            target_level="album", target_id=album.id,
+                        ProfileSelection.create(
+                            profile=profile, level="album",
+                            key=album.album_key, excluded=False,
                         )
                         matched += 1
                         found = True
@@ -1763,7 +1731,7 @@ class App:
                                         font=("Segoe UI", 10))
         self.rules_listbox.pack(side="left", fill="x", expand=True, padx=5, pady=5)
         ctk.CTkButton(rules_frame, text="Remove", width=80,
-                      command=self._remove_rule).pack(side="right", padx=5)
+                      command=self._remove_selection).pack(side="right", padx=5)
 
         # Store album_id map for treeview items
         self._album_iid_map = {}
@@ -1861,11 +1829,16 @@ class App:
         if not album_id:
             return
 
+        from music_manager.core.database import Album
+        from music_manager.core.selection import key_for_album
+        album = Album.get_by_id(album_id)
+        album_key = key_for_album(album)
+
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Include Album",
-                         command=lambda: self._add_rule("include", "album", album_id))
+                         command=lambda: self._add_selection("album", album_key))
         menu.add_command(label="Exclude Album",
-                         command=lambda: self._add_rule("exclude", "album", album_id))
+                         command=lambda: self._add_selection("album", album_key, excluded=True))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _work_context_menu(self, event):
@@ -1879,73 +1852,117 @@ class App:
             return
 
         level, entity_id = entry
+        from music_manager.core.selection import key_for_entity
+        from music_manager.core.database import Work, Track
         menu = tk.Menu(self.root, tearoff=0)
 
         if level == "work":
+            work = Work.get_by_id(entity_id)
+            work_key = key_for_entity("work", work)
             menu.add_command(label="Include Work",
-                             command=lambda: self._add_rule("include", "work", entity_id))
+                             command=lambda: self._add_selection("work", work_key))
             menu.add_command(label="Exclude Work",
-                             command=lambda: self._add_rule("exclude", "work", entity_id))
+                             command=lambda: self._add_selection("work", work_key, excluded=True))
         elif level == "track":
+            track = Track.get_by_id(entity_id)
+            track_key = key_for_entity("track", track)
             menu.add_command(label="Play",
                              command=lambda: self._play_track(entity_id))
             menu.add_separator()
             menu.add_command(label="Include Track",
-                             command=lambda: self._add_rule("include", "track", entity_id))
+                             command=lambda: self._add_selection("track", track_key))
             menu.add_command(label="Exclude Track",
-                             command=lambda: self._add_rule("exclude", "track", entity_id))
+                             command=lambda: self._add_selection("track", track_key, excluded=True))
 
         menu.tk_popup(event.x_root, event.y_root)
 
-    def _add_rule(self, rule_type, target_level, target_id, refresh=True):
-        """Add an include/exclude rule to the in-memory list."""
-        # Skip if this exact rule already exists
-        if any(r["rule_type"] == rule_type and r["target_level"] == target_level
-               and r["target_id"] == target_id
-               for r in self._current_profile_rules):
+    def _add_selection(self, level, key, excluded=False, pin_position=None,
+                       track_paths=None, refresh=True):
+        """Add a selection to the in-memory list."""
+        # Skip if this exact (level, key) already exists with the same excluded state
+        existing = self._find_selection(level, key)
+        if existing is not None and existing["excluded"] == excluded:
             return
 
-        # Get a display label
-        from music_manager.core.database import Album, Work, Track
-        if target_level == "album":
-            name = Album.get_by_id(target_id).title
-        elif target_level == "work":
-            name = Work.get_by_id(target_id).work_name
-        elif target_level == "track":
-            name = Track.get_by_id(target_id).title
-        elif target_level == "composer":
-            from music_manager.core.database import Composer
-            name = Composer.get_by_id(target_id).name
-        else:
-            name = str(target_id)
+        from music_manager.core.selection import display_name_for_selection
+        display_name = display_name_for_selection(self.active_library, level, key)
+        prefix = "EXCEPT" if excluded else "ADD"
+        pin_str = f"[#{pin_position}] " if pin_position else ""
 
-        rule = {
-            "rule_type": rule_type,
-            "target_level": target_level,
-            "target_id": target_id,
-            "display": f"{rule_type.upper()}: {target_level} — {name}",
+        sel = {
+            "level": level,
+            "key": key,
+            "excluded": excluded,
+            "pin_position": pin_position,
+            "track_paths": track_paths,
+            "display": f"{pin_str}{prefix}: {level} — {display_name}",
         }
-        self._current_profile_rules.append(rule)
+        self._current_selections.append(sel)
         if refresh:
             self._refresh_rules_display()
 
-    def _remove_rule(self):
-        """Remove selected rule from the in-memory list."""
+    def _find_selection(self, level, key):
+        """Find an existing selection by level and key."""
+        return next((s for s in self._current_selections
+                     if s["level"] == level and s["key"] == key), None)
+
+    def _is_item_selected(self, level, key):
+        """Check if item is selected (directly or via parent, respecting specificity)."""
+        from music_manager.core.selection import parse_work_key, COMPOSITE_SEP
+        sel = self._find_selection(level, key)
+        if sel is not None:
+            return not sel["excluded"]
+        # Walk up hierarchy
+        if level == "track":
+            # Find the work and album this track belongs to
+            from music_manager.core.database import Track
+            track = Track.select(Track.work, Track.album).where(
+                (Track.library == self.active_library) &
+                (Track.relative_path == key)
+            ).first()
+            if track and track.work_id:
+                from music_manager.core.selection import key_for_work
+                from music_manager.core.database import Work
+                work = Work.get_by_id(track.work_id)
+                work_key = key_for_work(work)
+                work_sel = self._find_selection("work", work_key)
+                if work_sel is not None:
+                    return not work_sel["excluded"]
+                # Check album level
+                album_sel = self._find_selection("album", work.album.album_key)
+                if album_sel is not None:
+                    return not album_sel["excluded"]
+            elif track:
+                from music_manager.core.database import Album
+                album = Album.get_by_id(track.album_id)
+                album_sel = self._find_selection("album", album.album_key)
+                if album_sel is not None:
+                    return not album_sel["excluded"]
+        elif level == "work":
+            # Extract album_key from work key
+            parsed = parse_work_key(key)
+            if parsed:
+                album_key = parsed[0]
+                album_sel = self._find_selection("album", album_key)
+                if album_sel is not None:
+                    return not album_sel["excluded"]
+        return False
+
+    def _remove_selection(self):
+        """Remove selected selection from the in-memory list."""
         sel = self.rules_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
-        if 0 <= idx < len(self._current_profile_rules):
-            self._current_profile_rules.pop(idx)
+        if 0 <= idx < len(self._current_selections):
+            self._current_selections.pop(idx)
             self._refresh_rules_display()
 
     def _refresh_rules_display(self):
         """Update the rules listbox on the Explorer tab and builder trees."""
         self.rules_listbox.delete(0, "end")
-        for rule in self._current_profile_rules:
-            self.rules_listbox.insert("end", rule["display"])
-        for pin in self._current_profile_pins:
-            self.rules_listbox.insert("end", pin["display"])
+        for sel in self._current_selections:
+            self.rules_listbox.insert("end", sel["display"])
         # Refresh builder panes if they exist
         if hasattr(self, "builder_lib_tree"):
             self._rebuild_library_tree()
@@ -2093,7 +2110,7 @@ class App:
         self._setup_tree_sort(self.builder_lib_tree,
                               row_dbl_click=self._builder_toggle_include)
         self.builder_lib_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "lib"))
-        self._builder_lib_iid_map = {}  # iid → (level, entity_id)
+        self._builder_lib_iid_map = {}  # iid → (level, entity_id, key)
 
         # Tag styles for visual state (colorblind-friendly)
         self.builder_lib_tree.tag_configure("included", foreground="#4da6ff")   # blue
@@ -2172,7 +2189,7 @@ class App:
                               row_dbl_click=self._builder_exclude_selected)
         self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
         self.builder_pl_tree.tag_configure("pinned", foreground="#e680ff")  # orchid
-        self._builder_pl_iid_map = {}  # iid → (level, entity_id)
+        self._builder_pl_iid_map = {}  # iid → (level, entity_id, key)
 
         # -- Bottom: action buttons --
         bot = ctk.CTkFrame(tab, fg_color="transparent")
@@ -2507,16 +2524,14 @@ class App:
             return
 
         from music_manager.core.database import Album, Work, Track
+        from music_manager.core.selection import (
+            key_for_album, key_for_work, key_for_track, COMPOSITE_SEP,
+        )
 
-        # Build sets of included/excluded entity keys for quick lookup
-        included = set()  # ("album", id), ("work", id), ("track", id)
-        excluded = set()
-        for rule in self._current_profile_rules:
-            key = (rule["target_level"], rule["target_id"])
-            if rule["rule_type"] == "include":
-                included.add(key)
-            else:
-                excluded.add(key)
+        # Build selection lookup dicts for quick matching
+        sel_by_key = {}  # (level, key) → selection dict
+        for s in self._current_selections:
+            sel_by_key[(s["level"], s["key"])] = s
 
         hide_single = self.builder_hide_single.get()
 
@@ -2525,8 +2540,10 @@ class App:
                   .order_by(Album.title))
 
         for album in albums:
-            album_key = ("album", album.id)
-            album_included = album_key in included
+            a_key = key_for_album(album)
+            album_sel = sel_by_key.get(("album", a_key))
+            album_is_add = album_sel is not None and not album_sel["excluded"]
+            album_is_except = album_sel is not None and album_sel["excluded"]
 
             works = list(Work.select()
                          .where(Work.album == album)
@@ -2538,22 +2555,36 @@ class App:
                 work_track_counts[work.id] = Track.select().where(
                     Track.work == work).count()
 
-            # Pre-scan children to detect partial state
-            album_has_excluded_child = False
-            album_has_included_child = False
-
+            # Pre-scan children to detect partial state.
+            # album_has_child_exception: a child is explicitly excluded
+            #   → album is "partial" when it's added (not everything included)
+            # album_has_child_add: a child is explicitly added
+            #   → album is "partial" when it's NOT added (some content selected)
+            album_has_child_exception = False
+            album_has_child_add = False
             for work in works:
-                work_key = ("work", work.id)
-                if work_key in included:
-                    album_has_included_child = True
-                if work_key in excluded:
-                    album_has_excluded_child = True
-                tracks_for_work = list(Track.select(Track.id).where(Track.work == work))
+                w_key = key_for_work(work)
+                w_sel = sel_by_key.get(("work", w_key))
+                if w_sel:
+                    if w_sel["excluded"]:
+                        album_has_child_exception = True
+                    else:
+                        album_has_child_add = True
+                    if album_has_child_exception and album_has_child_add:
+                        break
+                tracks_for_work = list(Track.select(Track.relative_path).where(
+                    Track.work == work))
                 for t in tracks_for_work:
-                    if ("track", t.id) in included:
-                        album_has_included_child = True
-                    if ("track", t.id) in excluded:
-                        album_has_excluded_child = True
+                    t_sel = sel_by_key.get(("track", t.relative_path))
+                    if t_sel:
+                        if t_sel["excluded"]:
+                            album_has_child_exception = True
+                        else:
+                            album_has_child_add = True
+                        if album_has_child_exception and album_has_child_add:
+                            break
+                if album_has_child_exception and album_has_child_add:
+                    break
 
             # Filter works for display when hiding single-track works
             visible_works = works
@@ -2563,14 +2594,14 @@ class App:
                     continue
 
             # Determine album tag
-            if album_key in excluded:
+            if album_is_except:
                 album_tag = "excluded"
-            elif album_included and album_has_excluded_child:
-                album_tag = "partial"
-            elif album_included:
+            elif album_is_add and album_has_child_exception:
+                album_tag = "partial"  # added but some children excluded
+            elif album_is_add:
                 album_tag = "included"
-            elif album_has_included_child:
-                album_tag = "partial"
+            elif album_has_child_add:
+                album_tag = "partial"  # not added but some children are
             else:
                 album_tag = ""
 
@@ -2587,42 +2618,48 @@ class App:
                 "", "end", text=album.title,
                 values=(album_artist, album_genre, f"{track_count} trk"),
                 tags=(album_tag,) if album_tag else ())
-            self._builder_lib_iid_map[album_iid] = ("album", album.id)
+            self._builder_lib_iid_map[album_iid] = ("album", album.id, a_key)
             self._lib_search_meta[album_iid] = " ".join(filter(None, [
                 album.title, album_artist, album_genre]))
 
             for work in visible_works:
-                work_key = ("work", work.id)
+                w_key = key_for_work(work)
                 tracks = list(Track.select().where(Track.work == work)
                               .order_by(Track.disc_number, Track.track_number))
 
+                work_sel = sel_by_key.get(("work", w_key))
+                work_is_add = work_sel is not None and not work_sel["excluded"]
+                work_is_except = work_sel is not None and work_sel["excluded"]
                 work_effectively_included = (
-                    work_key in included or album_included
-                ) and work_key not in excluded
-
-                # Check if any child track is excluded under this work
-                work_has_excluded_track = any(
-                    ("track", t.id) in excluded for t in tracks
-                )
-                work_has_included_track = any(
-                    ("track", t.id) in included for t in tracks
+                    (work_is_add or album_is_add) and not work_is_except
                 )
 
-                # Check if all tracks are excluded
-                all_tracks_excluded = (
-                    tracks and all(("track", t.id) in excluded for t in tracks)
-                )
+                # Check if any child track has an exception or add
+                work_has_child_exception = False
+                work_has_child_add = False
+                for t in tracks:
+                    t_sel = sel_by_key.get(("track", t.relative_path))
+                    if t_sel:
+                        if t_sel["excluded"]:
+                            work_has_child_exception = True
+                        else:
+                            work_has_child_add = True
+                        if work_has_child_exception and work_has_child_add:
+                            break
 
-                if work_key in excluded or all_tracks_excluded:
-                    work_tag = "excluded"
-                elif work_effectively_included and work_has_excluded_track:
-                    work_tag = "partial"
+                if work_is_except:
+                    if work_has_child_add:
+                        work_tag = "partial"  # excluded but some tracks added back
+                    else:
+                        work_tag = "excluded"
+                elif work_effectively_included and work_has_child_exception:
+                    work_tag = "partial"  # included but some tracks excluded
                 elif work_effectively_included:
                     work_tag = "included"
-                elif work_key in included:
+                elif work_is_add:
                     work_tag = "included"
-                elif work_has_included_track:
-                    work_tag = "partial"
+                elif work_has_child_add:
+                    work_tag = "partial"  # not included but some tracks are
                 else:
                     work_tag = ""
 
@@ -2632,18 +2669,22 @@ class App:
                     album_iid, "end", text=work.work_name,
                     values=(work_composer, work_genre, f"{len(tracks)} trk"),
                     tags=(work_tag,) if work_tag else ())
-                self._builder_lib_iid_map[work_iid] = ("work", work.id)
+                self._builder_lib_iid_map[work_iid] = ("work", work.id, w_key)
                 self._lib_search_meta[work_iid] = " ".join(filter(None, [
                     work.work_name, work_composer, work_genre]))
 
                 for t in tracks:
-                    track_key = ("track", t.id)
+                    t_key = key_for_track(t)
                     dur_s = (t.duration_ms or 0) // 1000
                     dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
 
-                    if track_key in excluded:
+                    track_sel = sel_by_key.get(("track", t_key))
+                    track_is_except = track_sel is not None and track_sel["excluded"]
+                    track_is_add = track_sel is not None and not track_sel["excluded"]
+
+                    if track_is_except:
                         t_tag = "excluded"
-                    elif track_key in included or work_effectively_included:
+                    elif track_is_add or work_effectively_included:
                         t_tag = "included"
                     else:
                         t_tag = ""
@@ -2655,7 +2696,7 @@ class App:
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
                         values=(t_composer, t_genre, dur_str),
                         tags=(t_tag,) if t_tag else ())
-                    self._builder_lib_iid_map[t_iid] = ("track", t.id)
+                    self._builder_lib_iid_map[t_iid] = ("track", t.id, t_key)
                     self._lib_search_meta[t_iid] = " ".join(filter(None, [
                         t.title, t_composer, t_genre,
                         t.performer or "", t.conductor or "", t.ensemble or ""]))
@@ -2681,31 +2722,31 @@ class App:
 
         if not self.active_library:
             return
-        if not self._current_profile_rules:
-            return  # empty rules = all tracks (shown via label)
+        if not self._current_selections:
+            return  # empty selections = all tracks (shown via label)
 
         from music_manager.core.database import Album, Work, Track
+        from music_manager.core.selection import (
+            key_for_album, key_for_work, key_for_track, COMPOSITE_SEP,
+        )
 
         hide_single = self.builder_hide_single.get()
 
-        # Build include/exclude sets
-        included = set()
-        excluded = set()
-        for rule in self._current_profile_rules:
-            key = (rule["target_level"], rule["target_id"])
-            if rule["rule_type"] == "include":
-                included.add(key)
-            else:
-                excluded.add(key)
+        # Build selection lookup dicts
+        sel_by_key = {}
+        for s in self._current_selections:
+            sel_by_key[(s["level"], s["key"])] = s
 
         albums = (Album.select()
                   .where(Album.library == self.active_library)
                   .order_by(Album.title))
 
         for album in albums:
-            album_key = ("album", album.id)
-            album_included = album_key in included and album_key not in excluded
-            if album_key in excluded:
+            a_key = key_for_album(album)
+            album_sel = sel_by_key.get(("album", a_key))
+            album_is_add = album_sel is not None and not album_sel["excluded"]
+            album_is_except = album_sel is not None and album_sel["excluded"]
+            if album_is_except:
                 continue
 
             works = list(Work.select()
@@ -2716,20 +2757,29 @@ class App:
             album_has_content = False
             work_entries = []
             for work in works:
-                work_key = ("work", work.id)
-                if work_key in excluded:
-                    continue
-                work_included = (work_key in included or album_included)
+                w_key = key_for_work(work)
+                work_sel = sel_by_key.get(("work", w_key))
+                work_is_add = work_sel is not None and not work_sel["excluded"]
+                work_is_except = work_sel is not None and work_sel["excluded"]
+                # Don't skip excluded works entirely — track-level adds
+                # within them must still appear (specificity model).
+                if work_is_except:
+                    work_included = False
+                else:
+                    work_included = work_is_add or album_is_add
 
                 tracks = list(Track.select().where(Track.work == work)
                               .order_by(Track.disc_number, Track.track_number))
 
                 visible_tracks = []
                 for t in tracks:
-                    track_key = ("track", t.id)
-                    if track_key in excluded:
+                    t_key = key_for_track(t)
+                    track_sel = sel_by_key.get(("track", t_key))
+                    track_is_except = track_sel is not None and track_sel["excluded"]
+                    track_is_add = track_sel is not None and not track_sel["excluded"]
+                    if track_is_except:
                         continue
-                    if track_key in included or work_included:
+                    if track_is_add or work_included:
                         visible_tracks.append(t)
 
                 if visible_tracks:
@@ -2755,27 +2805,29 @@ class App:
             album_iid = self.builder_pl_tree.insert(
                 "", "end", text=album.title,
                 values=(album_artist, album_genre, f"{total_tracks} trk"))
-            self._builder_pl_iid_map[album_iid] = ("album", album.id)
+            self._builder_pl_iid_map[album_iid] = ("album", album.id, a_key)
             self._pl_search_meta[album_iid] = " ".join(filter(None, [
                 album.title, album_artist, album_genre]))
 
             for work, vis_tracks in work_entries:
+                w_key = key_for_work(work)
                 work_composer = work.composer.name if work.composer_id else ""
                 work_genre = vis_tracks[0].genre if vis_tracks and vis_tracks[0].genre else ""
-                # Check if this work is pinned
-                pin = next((p for p in self._current_profile_pins
-                            if p["work_id"] == work.id), None)
-                work_text = (f"[#{pin['position']}] {work.work_name}"
-                             if pin else work.work_name)
+                # Check if this work is pinned (via selection pin_position)
+                work_sel = sel_by_key.get(("work", w_key))
+                pin_pos = work_sel.get("pin_position") if work_sel else None
+                work_text = (f"[#{pin_pos}] {work.work_name}"
+                             if pin_pos else work.work_name)
                 work_iid = self.builder_pl_tree.insert(
                     album_iid, "end", text=work_text,
                     values=(work_composer, work_genre, f"{len(vis_tracks)} trk"),
-                    tags=("pinned",) if pin else ())
-                self._builder_pl_iid_map[work_iid] = ("work", work.id)
+                    tags=("pinned",) if pin_pos else ())
+                self._builder_pl_iid_map[work_iid] = ("work", work.id, w_key)
                 self._pl_search_meta[work_iid] = " ".join(filter(None, [
                     work.work_name, work_composer, work_genre]))
 
                 for t in vis_tracks:
+                    t_key = key_for_track(t)
                     dur_s = (t.duration_ms or 0) // 1000
                     dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
                     t_composer = t.composer.name if t.composer_id else ""
@@ -2784,7 +2836,7 @@ class App:
                         work_iid, "end",
                         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
                         values=(t_composer, t_genre, dur_str))
-                    self._builder_pl_iid_map[t_iid] = ("track", t.id)
+                    self._builder_pl_iid_map[t_iid] = ("track", t.id, t_key)
                     self._pl_search_meta[t_iid] = " ".join(filter(None, [
                         t.title, t_composer, t_genre,
                         t.performer or "", t.conductor or "", t.ensemble or ""]))
@@ -2811,7 +2863,7 @@ class App:
         entry = iid_map.get(iid)
         if not entry:
             return
-        level, entity_id = entry
+        level, entity_id, key = entry
 
         menu = tk.Menu(self.root, tearoff=0)
 
@@ -2849,7 +2901,7 @@ class App:
             menu.add_separator()
             menu.add_command(
                 label="Show in profiles...",
-                command=lambda lv=level, eid=entity_id: self._show_in_profiles(lv, eid))
+                command=lambda lv=level, eid=entity_id, k=key: self._show_in_profiles(lv, eid, k))
         else:
             menu.add_command(label="<< Remove",
                              command=self._builder_exclude_selected)
@@ -2858,51 +2910,72 @@ class App:
                 for pos in range(1, 6):
                     pin_menu.add_command(
                         label=f"Position {pos}",
-                        command=lambda p=pos, wid=entity_id: self._pin_work(wid, p),
+                        command=lambda p=pos, wid=entity_id, wk=key: self._pin_work(wid, p, wk),
                     )
                 pin_menu.add_separator()
                 pin_menu.add_command(
                     label="Remove pin",
-                    command=lambda wid=entity_id: self._unpin_work(wid),
+                    command=lambda wk=key: self._unpin_work(wk),
                 )
                 menu.add_cascade(label="Pin to position...", menu=pin_menu)
 
         menu.tk_popup(event.x_root, event.y_root)
 
-    def _pin_work(self, work_id, position):
+    def _pin_work(self, work_id, position, work_key):
         """Pin a work to a position (1-5). Replaces any existing pin at that position."""
-        from music_manager.core.database import Work
+        from music_manager.core.database import Work, Track
+        from music_manager.core.selection import display_name_for_selection
         try:
             work = Work.get_by_id(work_id)
-            display = f"PIN #{position}: {work.work_name}"
         except Work.DoesNotExist:
             return
 
-        # Remove any existing pin at this position or for this work
-        self._current_profile_pins = [
-            p for p in self._current_profile_pins
-            if p["position"] != position and p["work_id"] != work_id
-        ]
-        self._current_profile_pins.append({
-            "work_id": work_id,
-            "position": position,
-            "display": display,
-        })
-        self._current_profile_pins.sort(key=lambda p: p["position"])
-        self._rebuild_playlist_tree()
+        # Remove any existing pin at this position from other selections
+        for s in self._current_selections:
+            if s.get("pin_position") == position and s["key"] != work_key:
+                s["pin_position"] = None
+                # Rebuild display text without pin prefix
+                prefix = "EXCEPT" if s["excluded"] else "ADD"
+                dn = display_name_for_selection(self.active_library, s["level"], s["key"])
+                s["display"] = f"{prefix}: {s['level']} — {dn}"
 
-    def _unpin_work(self, work_id):
+        # Find or create selection for this work
+        sel = self._find_selection("work", work_key)
+        if sel is not None:
+            sel["pin_position"] = position
+            # Rebuild display text with pin prefix
+            prefix = "EXCEPT" if sel["excluded"] else "ADD"
+            dn = display_name_for_selection(self.active_library, "work", work_key)
+            sel["display"] = f"[#{position}] {prefix}: work — {dn}"
+        else:
+            # Create a new add selection with pin and track_paths breadcrumbs
+            track_paths = json.dumps([
+                t.relative_path for t in
+                Track.select(Track.relative_path).where(Track.work == work)
+            ])
+            self._add_selection("work", work_key, excluded=False,
+                                pin_position=position, track_paths=track_paths,
+                                refresh=False)
+
+        self._refresh_rules_display()
+
+    def _unpin_work(self, work_key):
         """Remove a pin for a work."""
-        self._current_profile_pins = [
-            p for p in self._current_profile_pins if p["work_id"] != work_id
-        ]
-        self._rebuild_playlist_tree()
+        from music_manager.core.selection import display_name_for_selection
+        sel = self._find_selection("work", work_key)
+        if sel and sel.get("pin_position"):
+            sel["pin_position"] = None
+            prefix = "EXCEPT" if sel["excluded"] else "ADD"
+            dn = display_name_for_selection(self.active_library, "work", work_key)
+            sel["display"] = f"{prefix}: work — {dn}"
+        self._refresh_rules_display()
 
-    def _show_in_profiles(self, level, entity_id):
+    def _show_in_profiles(self, level, entity_id, key):
         """Show a popup listing all profiles that include this item."""
         from music_manager.core.database import (
-            PlaylistProfile, ProfileRule, Album, Work, Track,
+            PlaylistProfile, ProfileSelection, Album, Work, Track,
         )
+        from music_manager.core.selection import parse_work_key
 
         # Get display name for the item
         if level == "album":
@@ -2914,79 +2987,59 @@ class App:
         else:
             name = str(entity_id)
 
-        # Find all profiles (non-internal) that have a matching include rule
+        # Find all profiles (non-internal) that have a matching add selection
         # Direct match at this level
-        direct_rules = list(ProfileRule.select().where(
-            (ProfileRule.rule_type == "include") &
-            (ProfileRule.target_level == level) &
-            (ProfileRule.target_id == entity_id)
+        direct_sels = list(ProfileSelection.select().where(
+            (ProfileSelection.excluded == False) &
+            (ProfileSelection.level == level) &
+            (ProfileSelection.key == key)
         ))
-        profile_ids = {r.profile_id for r in direct_rules}
+        profile_ids = {s.profile_id for s in direct_sels}
 
-        # Also check parent-level includes (album includes work/track, work includes track)
+        # Also check parent-level adds (album add covers work/track)
         if level == "work":
-            work = Work.get_by_id(entity_id)
-            album_rules = list(ProfileRule.select().where(
-                (ProfileRule.rule_type == "include") &
-                (ProfileRule.target_level == "album") &
-                (ProfileRule.target_id == work.album_id)
-            ))
-            profile_ids.update(r.profile_id for r in album_rules)
-            if work.composer_id:
-                composer_rules = list(ProfileRule.select().where(
-                    (ProfileRule.rule_type == "include") &
-                    (ProfileRule.target_level == "composer") &
-                    (ProfileRule.target_id == work.composer_id)
+            parsed = parse_work_key(key)
+            if parsed:
+                album_key = parsed[0]
+                album_sels = list(ProfileSelection.select().where(
+                    (ProfileSelection.excluded == False) &
+                    (ProfileSelection.level == "album") &
+                    (ProfileSelection.key == album_key)
                 ))
-                profile_ids.update(r.profile_id for r in composer_rules)
+                profile_ids.update(s.profile_id for s in album_sels)
         elif level == "track":
             track = Track.get_by_id(entity_id)
             if track.work_id:
-                work_rules = list(ProfileRule.select().where(
-                    (ProfileRule.rule_type == "include") &
-                    (ProfileRule.target_level == "work") &
-                    (ProfileRule.target_id == track.work_id)
+                from music_manager.core.selection import key_for_work
+                work = Work.get_by_id(track.work_id)
+                work_key = key_for_work(work)
+                work_sels = list(ProfileSelection.select().where(
+                    (ProfileSelection.excluded == False) &
+                    (ProfileSelection.level == "work") &
+                    (ProfileSelection.key == work_key)
                 ))
-                profile_ids.update(r.profile_id for r in work_rules)
-            album_rules = list(ProfileRule.select().where(
-                (ProfileRule.rule_type == "include") &
-                (ProfileRule.target_level == "album") &
-                (ProfileRule.target_id == track.album_id)
+                profile_ids.update(s.profile_id for s in work_sels)
+            album = Album.get_by_id(track.album_id)
+            album_sels = list(ProfileSelection.select().where(
+                (ProfileSelection.excluded == False) &
+                (ProfileSelection.level == "album") &
+                (ProfileSelection.key == album.album_key)
             ))
-            profile_ids.update(r.profile_id for r in album_rules)
-            if track.composer_id:
-                composer_rules = list(ProfileRule.select().where(
-                    (ProfileRule.rule_type == "include") &
-                    (ProfileRule.target_level == "composer") &
-                    (ProfileRule.target_id == track.composer_id)
-                ))
-                profile_ids.update(r.profile_id for r in composer_rules)
-        elif level == "album":
-            # Check composer-level includes for the album's artists
-            tracks = Track.select(Track.composer).where(
-                Track.album == entity_id).distinct()
-            composer_ids = {t.composer_id for t in tracks if t.composer_id}
-            for cid in composer_ids:
-                composer_rules = list(ProfileRule.select().where(
-                    (ProfileRule.rule_type == "include") &
-                    (ProfileRule.target_level == "composer") &
-                    (ProfileRule.target_id == cid)
-                ))
-                profile_ids.update(r.profile_id for r in composer_rules)
+            profile_ids.update(s.profile_id for s in album_sels)
 
-        # Also include profiles with NO include rules (they include everything)
+        # Also include profiles with NO selections (they include everything)
         all_profiles = list(PlaylistProfile.select().where(
             ~PlaylistProfile.name.startswith("__")))
-        profiles_with_no_includes = []
+        profiles_with_no_selections = []
         for prof in all_profiles:
             if prof.id in profile_ids:
                 continue
-            has_includes = ProfileRule.select().where(
-                (ProfileRule.profile == prof) &
-                (ProfileRule.rule_type == "include")
+            has_adds = ProfileSelection.select().where(
+                (ProfileSelection.profile == prof) &
+                (ProfileSelection.excluded == False)
             ).exists()
-            if not has_includes:
-                profiles_with_no_includes.append(prof)
+            if not has_adds:
+                profiles_with_no_selections.append(prof)
 
         # Gather matching profile objects
         matching = [p for p in all_profiles if p.id in profile_ids]
@@ -3012,24 +3065,26 @@ class App:
         if matching:
             for p in matching:
                 lb.insert("end", f"{p.name}  ({p.library.name})")
-        if profiles_with_no_includes:
+        if profiles_with_no_selections:
             lb.insert("end", "")
-            lb.insert("end", "— Profiles with no include rules (all tracks) —")
-            for p in sorted(profiles_with_no_includes, key=lambda p: p.name):
+            lb.insert("end", "— Profiles with no selections (all tracks) —")
+            for p in sorted(profiles_with_no_selections, key=lambda p: p.name):
                 lb.insert("end", f"{p.name}  ({p.library.name})")
 
-        if not matching and not profiles_with_no_includes:
+        if not matching and not profiles_with_no_selections:
             lb.insert("end", "(not included in any profile)")
 
         ctk.CTkButton(popup, text="Close", width=80,
                       command=popup.destroy).pack(pady=(0, 10))
 
     def _builder_toggle_include(self, event=None):
-        """Toggle include state of selected library items on double-click.
+        """Toggle selection state of library items on double-click.
 
-        The toggle matches the *visual* state in the library tree:
-          - Looks included (blue) → exclude it
-          - Looks excluded/unstyled → include it (or remove child excludes)
+        Simple 3-state toggle:
+          - Has direct add → remove it (and clean up children)
+          - Has direct exception → remove the exception
+          - Not selected → add it
+          - Selected via parent → add exception
         """
         sel = self.builder_lib_tree.selection()
         if not sel:
@@ -3039,47 +3094,26 @@ class App:
         for iid in sel:
             entry = self._builder_lib_iid_map.get(iid)
             if entry:
-                entries.append((iid, entry))
+                entries.append(entry)
 
-        for iid, (level, entity_id) in entries:
-            has_direct_include = any(
-                r["rule_type"] == "include" and r["target_level"] == level
-                and r["target_id"] == entity_id
-                for r in self._current_profile_rules
-            )
-            has_direct_exclude = any(
-                r["rule_type"] == "exclude" and r["target_level"] == level
-                and r["target_id"] == entity_id
-                for r in self._current_profile_rules
-            )
-
-            # Use the tree's visual tag to determine current appearance
-            tags = self.builder_lib_tree.item(iid, "tags")
-            visually_included = "included" in tags
-            eff_included = self._is_effectively_included(level, entity_id)
-
-            if has_direct_include:
-                self._current_profile_rules = [
-                    r for r in self._current_profile_rules
-                    if not (r["rule_type"] == "include" and r["target_level"] == level
-                            and r["target_id"] == entity_id)
-                ]
-                self._cascade_remove_children(level, entity_id)
-            elif has_direct_exclude:
-                self._current_profile_rules = [
-                    r for r in self._current_profile_rules
-                    if not (r["rule_type"] == "exclude" and r["target_level"] == level
-                            and r["target_id"] == entity_id)
-                ]
-            elif visually_included:
-                self._add_rule("exclude", level, entity_id, refresh=False)
-            elif eff_included:
-                self._cascade_remove_children(level, entity_id)
+        for level, entity_id, key in entries:
+            existing = self._find_selection(level, key)
+            if existing is not None:
+                if existing["excluded"]:
+                    # Exception → remove it (re-includes via parent)
+                    # Also clean up child selections that were workarounds
+                    self._current_selections.remove(existing)
+                    self._cascade_remove_children(level, key)
+                else:
+                    # Direct add → remove it and clean up children
+                    self._current_selections.remove(existing)
+                    self._cascade_remove_children(level, key)
+            elif self._is_item_selected(level, key):
+                # Included via parent — add exception
+                self._add_selection(level, key, excluded=True, refresh=False)
             else:
-                # Before adding include, remove any parent excludes that
-                # would override it in the engine (excludes apply after includes)
-                if not self._remove_blocking_parent_excludes(level, entity_id):
-                    self._add_rule("include", level, entity_id, refresh=False)
+                # Not selected — add it
+                self.__add_with_breadcrumbs(level, key, entity_id)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -3087,129 +3121,31 @@ class App:
             self._restore_builder_view_state(view_state)
         return "break"
 
-    def _is_effectively_included(self, level, entity_id):
-        """Check if an item is effectively included (via parent, not blocked by exclude)."""
-        from music_manager.core.database import Work, Track
-        if level == "work":
-            work = Work.get_by_id(entity_id)
-            return any(
-                r["rule_type"] == "include" and r["target_level"] == "album"
-                and r["target_id"] == work.album_id
-                for r in self._current_profile_rules
-            )
-        elif level == "track":
-            track = Track.get_by_id(entity_id)
-            # Check if work is excluded (blocks album-level include)
-            work_excluded = track.work_id and any(
-                r["rule_type"] == "exclude" and r["target_level"] == "work"
-                and r["target_id"] == track.work_id
-                for r in self._current_profile_rules
-            )
-            if work_excluded:
-                return False
-            # Check album-level include
-            if any(r["rule_type"] == "include" and r["target_level"] == "album"
-                   and r["target_id"] == track.album_id
-                   for r in self._current_profile_rules):
-                return True
-            # Check work-level include
-            if track.work_id and any(
-                r["rule_type"] == "include" and r["target_level"] == "work"
-                and r["target_id"] == track.work_id
-                for r in self._current_profile_rules
-            ):
-                return True
-        return False
-
-    def _remove_blocking_parent_excludes(self, level, entity_id):
-        """Remove ancestor exclude rules that would override a child include.
-
-        In the engine, excludes apply after includes with no specificity —
-        a work exclude blocks all its tracks even if they have direct includes.
-        This removes those blocking excludes so the user's include takes effect.
-
-        Returns True if any blocking excludes were removed.
-        """
-        from music_manager.core.database import Track
-        removed = False
-        if level == "track":
-            track = Track.get_by_id(entity_id)
-            # Remove work-level exclude that blocks this track
-            if track.work_id:
-                before = len(self._current_profile_rules)
-                self._current_profile_rules = [
-                    r for r in self._current_profile_rules
-                    if not (r["rule_type"] == "exclude" and r["target_level"] == "work"
-                            and r["target_id"] == track.work_id)
-                ]
-                if len(self._current_profile_rules) < before:
-                    self._cascade_remove_children("work", track.work_id)
-                    removed = True
-            # Remove album-level exclude that blocks this track
-            before = len(self._current_profile_rules)
-            self._current_profile_rules = [
-                r for r in self._current_profile_rules
-                if not (r["rule_type"] == "exclude" and r["target_level"] == "album"
-                        and r["target_id"] == track.album_id)
-            ]
-            if len(self._current_profile_rules) < before:
-                self._cascade_remove_children("album", track.album_id)
-                removed = True
-        elif level == "work":
-            from music_manager.core.database import Work
-            work = Work.get_by_id(entity_id)
-            # Remove album-level exclude that blocks this work
-            before = len(self._current_profile_rules)
-            self._current_profile_rules = [
-                r for r in self._current_profile_rules
-                if not (r["rule_type"] == "exclude" and r["target_level"] == "album"
-                        and r["target_id"] == work.album_id)
-            ]
-            if len(self._current_profile_rules) < before:
-                self._cascade_remove_children("album", work.album_id)
-                removed = True
-        return removed
-
     def _builder_include_selected(self, event=None):
-        """Add selected library items as include rules."""
+        """Add selected library items as selections."""
         sel = self.builder_lib_tree.selection()
         if not sel:
             if event is None:
                 messagebox.showinfo("Select", "Select items in the Library pane first.")
             return "break"
 
-        # Snapshot all entries before any tree rebuild
         entries = []
         for iid in sel:
             entry = self._builder_lib_iid_map.get(iid)
             if entry:
                 entries.append(entry)
 
-        for level, entity_id in entries:
-            # Don't duplicate an existing include rule
-            if any(r["rule_type"] == "include" and r["target_level"] == level
-                   and r["target_id"] == entity_id
-                   for r in self._current_profile_rules):
-                continue
-            # If there's an exclude rule for this, remove it instead of adding include
-            removed = False
-            for i, r in enumerate(self._current_profile_rules):
-                if (r["rule_type"] == "exclude" and r["target_level"] == level
-                        and r["target_id"] == entity_id):
-                    self._current_profile_rules.pop(i)
-                    removed = True
-                    break
-            if not removed:
-                # If already effectively included via parent, just remove
-                # child excludes rather than adding a redundant include rule
-                if self._is_effectively_included(level, entity_id):
-                    self._cascade_remove_children(level, entity_id)
-                elif self._remove_blocking_parent_excludes(level, entity_id):
-                    pass  # parent exclude removed — item is now included
-                else:
-                    self._add_rule("include", level, entity_id, refresh=False)
-            # Always clean up child excludes when explicitly including a parent
-            self._cascade_remove_children(level, entity_id)
+        for level, entity_id, key in entries:
+            existing = self._find_selection(level, key)
+            if existing and not existing["excluded"]:
+                continue  # already added
+            if existing and existing["excluded"]:
+                # Has exception — remove it to re-include via parent
+                # Also clean up child selections that are now redundant
+                self._current_selections.remove(existing)
+                self._cascade_remove_children(level, key)
+            else:
+                self.__add_with_breadcrumbs(level, key, entity_id)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -3218,7 +3154,7 @@ class App:
         return "break"
 
     def _builder_exclude_selected(self, event=None):
-        """Remove selected playlist items (add exclude rules or remove include rules)."""
+        """Remove selected items (remove direct adds or add exceptions)."""
         # Try playlist tree first, then library tree
         sel = self.builder_pl_tree.selection()
         iid_map = self._builder_pl_iid_map
@@ -3230,32 +3166,21 @@ class App:
                 messagebox.showinfo("Select", "Select items to remove.")
             return "break"
 
-        # Snapshot all entries before any tree rebuild
         entries = []
         for iid in sel:
             entry = iid_map.get(iid)
             if entry:
                 entries.append(entry)
 
-        for level, entity_id in entries:
-            # Check if there's a direct include rule for this item
-            old_len = len(self._current_profile_rules)
-            self._current_profile_rules = [
-                r for r in self._current_profile_rules
-                if not (r["rule_type"] == "include" and r["target_level"] == level
-                        and r["target_id"] == entity_id)
-            ]
-            had_direct_include = len(self._current_profile_rules) < old_len
-
-            if had_direct_include:
-                # Cascade: remove all child rules that only existed under this parent
-                self._cascade_remove_children(level, entity_id)
-            else:
-                # Item is included via parent — add an explicit exclude
-                if not any(r["rule_type"] == "exclude" and r["target_level"] == level
-                           and r["target_id"] == entity_id
-                           for r in self._current_profile_rules):
-                    self._add_rule("exclude", level, entity_id, refresh=False)
+        for level, entity_id, key in entries:
+            existing = self._find_selection(level, key)
+            if existing and not existing["excluded"]:
+                # Direct add — remove it and clean up children
+                self._current_selections.remove(existing)
+                self._cascade_remove_children(level, key)
+            elif not existing and self._is_item_selected(level, key):
+                # Included via parent — add exception
+                self._add_selection(level, key, excluded=True, refresh=False)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -3263,26 +3188,59 @@ class App:
             self._restore_builder_view_state(view_state)
         return "break"
 
-    def _cascade_remove_children(self, level, entity_id):
-        """Remove all child include/exclude rules when a parent is removed."""
-        from music_manager.core.database import Work, Track
+    def _cascade_remove_children(self, level, key):
+        """Remove all child selections when a parent selection is removed."""
+        from music_manager.core.selection import COMPOSITE_SEP
 
-        child_keys = set()
         if level == "album":
-            works = Work.select().where(Work.album == entity_id)
-            for w in works:
-                child_keys.add(("work", w.id))
-                for t in Track.select(Track.id).where(Track.work == w):
-                    child_keys.add(("track", t.id))
-        elif level == "work":
-            for t in Track.select(Track.id).where(Track.work == entity_id):
-                child_keys.add(("track", t.id))
-
-        if child_keys:
-            self._current_profile_rules = [
-                r for r in self._current_profile_rules
-                if (r["target_level"], r["target_id"]) not in child_keys
+            album_key = key
+            self._current_selections = [
+                s for s in self._current_selections
+                if not (
+                    (s["level"] == "work" and s["key"].startswith(album_key + COMPOSITE_SEP))
+                    or (s["level"] == "track" and s["key"].startswith(album_key + "/"))
+                )
             ]
+        elif level == "work":
+            # Remove track-level selections for tracks belonging to this work
+            from music_manager.core.selection import parse_work_key
+            from music_manager.core.database import Work, Track, Album
+            parsed = parse_work_key(key)
+            if parsed:
+                album_key, work_name, work_seq = parsed
+                album = Album.select().where(
+                    (Album.library == self.active_library) &
+                    (Album.album_key == album_key)
+                ).first()
+                if album:
+                    query = Work.select().where(
+                        (Work.album == album) & (Work.work_name == work_name)
+                    )
+                    if work_seq is not None:
+                        query = query.where(Work.work_sequence == work_seq)
+                    work = query.first()
+                    if work:
+                        track_paths = {
+                            t.relative_path for t in
+                            Track.select(Track.relative_path).where(Track.work == work)
+                        }
+                        self._current_selections = [
+                            s for s in self._current_selections
+                            if not (s["level"] == "track" and s["key"] in track_paths)
+                        ]
+
+    def __add_with_breadcrumbs(self, level, key, entity_id):
+        """Add a selection, including track_paths breadcrumbs for work-level."""
+        import json
+        track_paths = None
+        if level == "work":
+            from music_manager.core.database import Track
+            track_paths = json.dumps([
+                t.relative_path for t in
+                Track.select(Track.relative_path).where(Track.work == entity_id)
+            ])
+        self._add_selection(level, key, excluded=False,
+                            track_paths=track_paths, refresh=False)
 
     def _build_temp_profile(self):
         """Build a temporary PlaylistProfile from current UI settings."""
@@ -3290,14 +3248,12 @@ class App:
             messagebox.showwarning("No Library", "Select a library first.")
             return None
 
-        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
+        from music_manager.core.database import PlaylistProfile, ProfileSelection
 
         # Use a temp name that won't collide with user-saved profiles
         name = "__temp_preview__"
-        # Clean up any leftover temp profiles
+        # Clean up any leftover temp profiles (CASCADE deletes selections)
         for old in PlaylistProfile.select().where(PlaylistProfile.name == name):
-            ProfileRule.delete().where(ProfileRule.profile == old).execute()
-            ProfilePin.delete().where(ProfilePin.profile == old).execute()
             old.delete_instance()
 
         length_val = self.length_value.get().strip()
@@ -3317,19 +3273,14 @@ class App:
             separate_forms=self.sep_form_var.get() == 1,
         )
 
-        for rule in self._current_profile_rules:
-            ProfileRule.create(
+        for sel in self._current_selections:
+            ProfileSelection.create(
                 profile=profile,
-                rule_type=rule["rule_type"],
-                target_level=rule["target_level"],
-                target_id=rule["target_id"],
-            )
-
-        for pin in self._current_profile_pins:
-            ProfilePin.create(
-                profile=profile,
-                work_id=pin["work_id"],
-                position=pin["position"],
+                level=sel["level"],
+                key=sel["key"],
+                excluded=sel["excluded"],
+                pin_position=sel.get("pin_position"),
+                track_paths=sel.get("track_paths"),
             )
 
         return profile
@@ -3358,10 +3309,7 @@ class App:
     def _delete_temp_profile(self, profile):
         """Delete a temporarily-created profile."""
         if profile:
-            from music_manager.core.database import ProfileRule, ProfilePin
-            ProfileRule.delete().where(ProfileRule.profile == profile).execute()
-            ProfilePin.delete().where(ProfilePin.profile == profile).execute()
-            profile.delete_instance()
+            profile.delete_instance()  # CASCADE deletes selections
 
     def _preview_playlist(self):
         """Preview the playlist in a popup window (dry-run)."""
@@ -3464,12 +3412,17 @@ class App:
 
         # Clear builder and populate with unused items
         self._new_profile()
+        from music_manager.core.database import Album, Work, Track
+        from music_manager.core.selection import key_for_album, key_for_work, key_for_track
         for target_id, name in albums:
-            self._add_rule("include", "album", target_id, refresh=False)
+            album = Album.get_by_id(target_id)
+            self._add_selection("album", key_for_album(album), refresh=False)
         for target_id, name in works:
-            self._add_rule("include", "work", target_id, refresh=False)
+            work = Work.get_by_id(target_id)
+            self.__add_with_breadcrumbs("work", key_for_work(work), target_id)
         for target_id, name in tracks:
-            self._add_rule("include", "track", target_id, refresh=False)
+            track = Track.get_by_id(target_id)
+            self._add_selection("track", key_for_track(track), refresh=False)
         self._refresh_rules_display()
 
     def _save_before_export(self):
@@ -3482,7 +3435,7 @@ class App:
         """
         name = self.profile_name_entry.get().strip()
         if name and self.active_library:
-            from music_manager.core.database import PlaylistProfile, ProfileRule
+            from music_manager.core.database import PlaylistProfile, ProfileSelection
 
             # Skip if there's a cross-library name conflict
             conflict = PlaylistProfile.select().where(
@@ -3512,18 +3465,19 @@ class App:
                 existing.separate_albums = self.sep_album_var.get() == 1
                 existing.separate_forms = self.sep_form_var.get() == 1
                 existing.save()
-                # Sync rules from current UI state
-                ProfileRule.delete().where(
-                    ProfileRule.profile == existing).execute()
-                for rule in self._current_profile_rules:
-                    ProfileRule.create(
+                # Sync selections from current UI state
+                ProfileSelection.delete().where(
+                    ProfileSelection.profile == existing).execute()
+                for sel in self._current_selections:
+                    ProfileSelection.create(
                         profile=existing,
-                        rule_type=rule["rule_type"],
-                        target_level=rule["target_level"],
-                        target_id=rule["target_id"],
+                        level=sel["level"],
+                        key=sel["key"],
+                        excluded=sel["excluded"],
+                        pin_position=sel.get("pin_position"),
+                        track_paths=sel.get("track_paths"),
                     )
             else:
-                # New profile — safe to write current rules
                 profile = PlaylistProfile.create(
                     library=self.active_library,
                     name=name,
@@ -3537,13 +3491,14 @@ class App:
                     separate_albums=self.sep_album_var.get() == 1,
                     separate_forms=self.sep_form_var.get() == 1,
                 )
-
-                for rule in self._current_profile_rules:
-                    ProfileRule.create(
+                for sel in self._current_selections:
+                    ProfileSelection.create(
                         profile=profile,
-                        rule_type=rule["rule_type"],
-                        target_level=rule["target_level"],
-                        target_id=rule["target_id"],
+                        level=sel["level"],
+                        key=sel["key"],
+                        excluded=sel["excluded"],
+                        pin_position=sel.get("pin_position"),
+                        track_paths=sel.get("track_paths"),
                     )
 
             self._clear_autosave()
@@ -3673,8 +3628,7 @@ class App:
         self.sep_composer_var.deselect()
         self.sep_album_var.deselect()
         self.sep_form_var.deselect()
-        self._current_profile_rules.clear()
-        self._current_profile_pins.clear()
+        self._current_selections.clear()
         self._refresh_rules_display()
         self._refresh_builder_tree()
 
@@ -3689,7 +3643,7 @@ class App:
             messagebox.showwarning("No Name", "Enter a profile name.")
             return
 
-        from music_manager.core.database import PlaylistProfile, ProfileRule, ProfilePin
+        from music_manager.core.database import PlaylistProfile, ProfileSelection
 
         # Enforce unique profile names across all libraries
         conflict = PlaylistProfile.select().where(
@@ -3705,13 +3659,11 @@ class App:
                 f"across all libraries.")
             return
 
-        # Delete existing profile with same name in this library
+        # Delete existing profile with same name in this library (CASCADE handles selections)
         for existing in PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
             (PlaylistProfile.name == name)
         ):
-            ProfileRule.delete().where(ProfileRule.profile == existing).execute()
-            ProfilePin.delete().where(ProfilePin.profile == existing).execute()
             existing.delete_instance()
 
         length_val = self.length_value.get().strip()
@@ -3731,19 +3683,14 @@ class App:
             separate_forms=self.sep_form_var.get() == 1,
         )
 
-        for rule in self._current_profile_rules:
-            ProfileRule.create(
+        for sel in self._current_selections:
+            ProfileSelection.create(
                 profile=profile,
-                rule_type=rule["rule_type"],
-                target_level=rule["target_level"],
-                target_id=rule["target_id"],
-            )
-
-        for pin in self._current_profile_pins:
-            ProfilePin.create(
-                profile=profile,
-                work_id=pin["work_id"],
-                position=pin["position"],
+                level=sel["level"],
+                key=sel["key"],
+                excluded=sel.get("excluded", False),
+                pin_position=sel.get("pin_position"),
+                track_paths=sel.get("track_paths"),
             )
 
         self._clear_autosave()
@@ -3758,7 +3705,7 @@ class App:
             return
         self._profile_picker_open = True
 
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        from music_manager.core.database import PlaylistProfile
 
         profiles = list(PlaylistProfile.select().where(
             (PlaylistProfile.library == self.active_library) &
@@ -3806,17 +3753,14 @@ class App:
                     (PlaylistProfile.library == self.active_library) &
                     (PlaylistProfile.name == sname)
                 ):
-                    ProfileRule.delete().where(
-                        ProfileRule.profile == existing).execute()
-                    existing.delete_instance()
+                    existing.delete_instance()  # CASCADE deletes selections
             picker.destroy()
             self._profile_picker_open = False
             # Clear the profile name if it was one of the deleted profiles
             current_name = self.profile_name_entry.get().strip()
             if current_name in selected_names:
                 self.profile_name_entry.delete(0, "end")
-                self._current_profile_rules.clear()
-                self._current_profile_pins.clear()
+                self._current_selections.clear()
                 self._refresh_rules_display()
             messagebox.showinfo("Deleted", f"Deleted {label}.")
 
@@ -3888,8 +3832,9 @@ class App:
         lb.bind("<Double-1>", lambda e: on_select())
 
     def _apply_profile(self, name):
-        """Load a named profile's settings and rules into the UI."""
-        from music_manager.core.database import PlaylistProfile, ProfileRule
+        """Load a named profile's settings and selections into the UI."""
+        from music_manager.core.database import PlaylistProfile, ProfileSelection
+        from music_manager.core.selection import display_name_for_selection
 
         try:
             profile = PlaylistProfile.get(
@@ -3931,46 +3876,24 @@ class App:
         else:
             self.sep_form_var.deselect()
 
-        # Load rules
-        self._current_profile_rules.clear()
-        from music_manager.core.database import Album, Work, Track, Composer
-        for rule in ProfileRule.select().where(ProfileRule.profile == profile):
-            try:
-                if rule.target_level == "album":
-                    display_name = Album.get_by_id(rule.target_id).title
-                elif rule.target_level == "work":
-                    display_name = Work.get_by_id(rule.target_id).work_name
-                elif rule.target_level == "track":
-                    display_name = Track.get_by_id(rule.target_id).title
-                elif rule.target_level == "composer":
-                    display_name = Composer.get_by_id(rule.target_id).name
-                else:
-                    display_name = str(rule.target_id)
-            except Exception:
-                display_name = f"(deleted id={rule.target_id})"
-
-            self._current_profile_rules.append({
-                "rule_type": rule.rule_type,
-                "target_level": rule.target_level,
-                "target_id": rule.target_id,
-                "display": f"{rule.rule_type.upper()}: {rule.target_level} — {display_name}",
+        # Load selections
+        self._current_selections.clear()
+        for sel in ProfileSelection.select().where(
+            ProfileSelection.profile == profile
+        ):
+            display_name = display_name_for_selection(
+                self.active_library, sel.level, sel.key
+            )
+            prefix = "EXCLUDE" if sel.excluded else "ADD"
+            pin_str = f" [PIN #{sel.pin_position}]" if sel.pin_position else ""
+            self._current_selections.append({
+                "level": sel.level,
+                "key": sel.key,
+                "excluded": sel.excluded,
+                "pin_position": sel.pin_position,
+                "track_paths": sel.track_paths,
+                "display": f"{prefix}: {sel.level} — {display_name}{pin_str}",
             })
-
-        # Load pins
-        from music_manager.core.database import ProfilePin
-        self._current_profile_pins.clear()
-        for pin in ProfilePin.select().where(ProfilePin.profile == profile):
-            try:
-                work = Work.get_by_id(pin.work_id)
-                display = f"PIN #{pin.position}: {work.work_name}"
-            except Work.DoesNotExist:
-                display = f"PIN #{pin.position}: (deleted id={pin.work_id})"
-            self._current_profile_pins.append({
-                "work_id": pin.work_id,
-                "position": pin.position,
-                "display": display,
-            })
-        self._current_profile_pins.sort(key=lambda p: p["position"])
 
         self._refresh_rules_display()
         self.root.config(cursor="")
@@ -4086,11 +4009,6 @@ class App:
 
         row_e2 = ctk.CTkFrame(edit_frame, fg_color="transparent")
         row_e2.pack(fill="x", padx=10, pady=3)
-        ctk.CTkLabel(row_e2, text="Work Group Key:").pack(side="left", padx=5)
-        self.edit_group_key = ctk.CTkEntry(row_e2, width=300)
-        self.edit_group_key.pack(side="left", padx=5)
-        ctk.CTkButton(row_e2, text="Set Group Key", width=120,
-                      command=self._set_work_group_key_override).pack(side="left", padx=5)
         ctk.CTkButton(row_e2, text="Make Standalone", width=120,
                       command=self._make_work_standalone).pack(side="left", padx=5)
 
@@ -4561,63 +4479,6 @@ class App:
         action_frame.pack(fill="x", padx=10, pady=5)
 
         # Group Key
-        row_g = ctk.CTkFrame(action_frame, fg_color="transparent")
-        row_g.pack(fill="x", padx=5, pady=3)
-        ctk.CTkLabel(row_g, text="Group Key:").pack(side="left", padx=5)
-        popup_group_key = ctk.CTkEntry(row_g, width=280)
-        popup_group_key.pack(side="left", padx=5)
-
-        def _set_group_key():
-            key = popup_group_key.get().strip()
-            if not key:
-                messagebox.showwarning("Empty", "Enter a group key.",
-                                       parent=popup)
-                return
-            tracks = _resolve_selected_tracks()
-            if not tracks:
-                messagebox.showwarning("Select", "Select tracks first.",
-                                       parent=popup)
-                return
-            for t in tracks:
-                set_override(
-                    library=self.active_library, scope="track",
-                    field="work_group_key", value=key,
-                    match_relative_path=t.relative_path,
-                    match_mb_id=t.musicbrainz_recording_id,
-                )
-            messagebox.showinfo(
-                "Done",
-                f"Set work_group_key to '{key}' for {len(tracks)} track(s).\n"
-                f"Re-detect Works or Rescan to apply.",
-                parent=popup)
-            self._refresh_overrides_list()
-
-        ctk.CTkButton(row_g, text="Set for Selected", width=130,
-                      command=_set_group_key).pack(side="left", padx=5)
-
-        def _make_standalone():
-            tracks = _resolve_selected_tracks()
-            if not tracks:
-                messagebox.showwarning("Select", "Select tracks first.",
-                                       parent=popup)
-                return
-            for t in tracks:
-                set_override(
-                    library=self.active_library, scope="track",
-                    field="work_group_key", value="__standalone__",
-                    match_relative_path=t.relative_path,
-                    match_mb_id=t.musicbrainz_recording_id,
-                )
-            messagebox.showinfo(
-                "Done",
-                f"Marked {len(tracks)} track(s) as standalone.\n"
-                f"Re-detect Works or Rescan to apply.",
-                parent=popup)
-            self._refresh_overrides_list()
-
-        ctk.CTkButton(row_g, text="Make Standalone", width=130,
-                      command=_make_standalone).pack(side="left", padx=5)
-
         # Work Name
         row_w = ctk.CTkFrame(action_frame, fg_color="transparent")
         row_w.pack(fill="x", padx=5, pady=3)
@@ -4661,6 +4522,29 @@ class App:
 
         ctk.CTkButton(row_w, text="Set for Selected", width=130,
                       command=_set_work_name).pack(side="left", padx=5)
+
+        def _make_standalone():
+            tracks = _resolve_selected_tracks()
+            if not tracks:
+                messagebox.showwarning("Select", "Select tracks first.",
+                                       parent=popup)
+                return
+            for t in tracks:
+                set_override(
+                    library=self.active_library, scope="track",
+                    field="work_name", value="__standalone__",
+                    match_relative_path=t.relative_path,
+                    match_mb_id=t.musicbrainz_recording_id,
+                )
+            messagebox.showinfo(
+                "Done",
+                f"Marked {len(tracks)} track(s) as standalone.\n"
+                f"Re-detect Works or Rescan to apply.",
+                parent=popup)
+            self._refresh_overrides_list()
+
+        ctk.CTkButton(row_w, text="Make Standalone", width=130,
+                      command=_make_standalone).pack(side="left", padx=5)
 
         # Composer
         row_c = ctk.CTkFrame(action_frame, fg_color="transparent")
@@ -4755,38 +4639,8 @@ class App:
         self._refresh_cleanup()
         self._refresh_explorer()
 
-    def _set_work_group_key_override(self):
-        """Set work_group_key overrides for all selected works' tracks."""
-        work_ids = self._get_selected_cleanup_works()
-        if not work_ids:
-            return
-        group_key = self.edit_group_key.get().strip()
-        if not group_key:
-            messagebox.showwarning("Empty", "Enter a work group key.")
-            return
-
-        from music_manager.core.database import Work, Track
-        from music_manager.core.overrides import set_override
-
-        total = 0
-        for work_id in work_ids:
-            work = Work.get_by_id(work_id)
-            tracks = list(Track.select().where(Track.work == work))
-            for t in tracks:
-                set_override(
-                    library=self.active_library, scope="track", field="work_group_key",
-                    value=group_key, match_relative_path=t.relative_path,
-                    match_mb_id=t.musicbrainz_recording_id,
-                )
-            total += len(tracks)
-
-        messagebox.showinfo("Done", f"Set work_group_key to '{group_key}' "
-                           f"for {total} tracks across {len(work_ids)} work(s). "
-                           f"Re-detect or rescan to apply.")
-        self._refresh_cleanup()
-
     def _make_work_standalone(self):
-        """Set __standalone__ group key for all tracks in all selected works."""
+        """Set __standalone__ work name for all tracks in all selected works."""
         work_ids = self._get_selected_cleanup_works()
         if not work_ids:
             return
@@ -4800,7 +4654,7 @@ class App:
             tracks = list(Track.select().where(Track.work == work))
             for t in tracks:
                 set_override(
-                    library=self.active_library, scope="track", field="work_group_key",
+                    library=self.active_library, scope="track", field="work_name",
                     value="__standalone__", match_relative_path=t.relative_path,
                     match_mb_id=t.musicbrainz_recording_id,
                 )

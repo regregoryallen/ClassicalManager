@@ -13,7 +13,7 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 - **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics — with intelligent merging when per-movement MB IDs share a common WORK tag
 - **Work-aware shuffling** that keeps movements together in correct order while randomizing the sequence of complete works
 - **Avoid adjacent** option to prevent consecutive works by the same composer, from the same album, or of the same musical form
-- **Include/exclude rules** at the composer, album, work, or track level for precise playlist curation
+- **Additive selection** at album, work, or track level with specificity-based exceptions for precise playlist curation
 - **Pin to position** — pin specific works to fixed positions (1–5) at the start of a generated playlist, ensuring a curated opening sequence
 - **Show in profiles** — right-click any album, work, or track to see which saved profiles include it
 - **Double-click toggle** — double-click items in the Playlist Builder's library pane to toggle their include/exclude state
@@ -166,7 +166,7 @@ No installer script is provided yet. Follow the manual Linux steps above (the sa
 
 Works are detected using a five-step precedence chain:
 
-1. **Manual overrides** (`work_group_key`) — highest priority
+1. **Manual overrides** (`work_name`) — highest priority
 2. **MusicBrainz Work ID** — tracks sharing the same MB work ID (or same WORK tag across different MB IDs)
 3. **WORK tag** — tracks with matching WORK metadata
 4. **Title-prefix heuristic** — contiguous tracks whose titles share a common prefix with movement markers

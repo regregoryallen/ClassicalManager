@@ -7,7 +7,7 @@ Override application order (§6.3):
   Match by match_mb_id first, then by match_relative_path.
   Both are stored when available so an override survives a change to either.
 
-Track-scope fields: composer, work_group_key, work_name, disc_number,
+Track-scope fields: composer, work_name, disc_number,
                     track_number, movement_number, title.
 Album-scope fields: album_title, album_artist, year.
 """
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Valid override fields per scope
 TRACK_FIELDS = frozenset({
-    "composer", "work_group_key", "work_name", "disc_number",
+    "composer", "work_name", "disc_number",
     "track_number", "movement_number", "title",
     "genre", "performer", "conductor", "ensemble",
 })
@@ -212,13 +212,11 @@ def _apply_track_override(library: Library, ov: Override) -> bool:
     elif field == "movement_number":
         track.movement_number = int(value) if value else None
         track.save()
-    elif field == "work_group_key":
-        # This is handled during scan (§5.4 step 0), not post-hoc.
-        # The override exists for the scanner to read; no DB mutation here.
-        pass
     elif field == "work_name":
-        # Update the work name if this track belongs to a work
-        if track.work_id:
+        # Update the work name immediately for display.
+        # Also drives grouping during scan/redetect (scanner reads these).
+        # __standalone__ is a grouping directive, not a display name.
+        if track.work_id and value != "__standalone__":
             work = Work.get_by_id(track.work_id)
             work.work_name = value
             work.save()

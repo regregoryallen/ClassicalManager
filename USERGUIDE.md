@@ -29,7 +29,7 @@ Key capabilities:
 
 - **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics
 - **Work-aware shuffling** that keeps movements together in the correct order
-- **Include/exclude rules** at the composer, album, work, or track level
+- **Additive selection** at album, work, or track level with specificity-based exceptions
 - **Export to M3U, JSON, or Plex** with configurable path rewriting
 - **Non-destructive metadata overrides** to correct grouping without modifying audio files
 - **Multiple libraries** for distinct collections (e.g., classical, holiday music)
@@ -275,8 +275,8 @@ the default from config.json. Leave blank to use the default from Settings.
 ### Import Old Playlists
 
 Imports plain-text playlist files (one album directory name per line). Each file
-becomes a profile with include rules for matched albums. Useful for migrating from
-a simpler playlist system.
+becomes a profile with album-level selections for matched albums. Useful for
+migrating from a simpler playlist system.
 
 ### Bottom Buttons
 
@@ -324,13 +324,13 @@ Click an album to see its works and tracks in a hierarchical view.
 Right-click any item for:
 
 - **Play** (tracks only): Opens the audio file in your system's default player
-- **Include Album/Work/Track**: Add an include rule
-- **Exclude Album/Work/Track**: Add an exclude rule
+- **Add Album/Work/Track**: Add to the playlist selection
+- **Exclude Album/Work/Track**: Create an exception within a broader add
 
-### Rules Display
+### Selections Display
 
-The bottom section shows all active rules for the selected profile. Select a rule and
-click **Remove** to delete it. Rules are shared with the Playlist Builder tab.
+The bottom section shows all active selections for the current profile. Select an
+entry and click **Remove** to delete it. Selections are shared with the Playlist Builder tab.
 
 ---
 
@@ -435,8 +435,8 @@ playlist. This ensures a curated opening sequence regardless of shuffle settings
 2. Select **Pin to position...** and choose a position (1–5)
 3. The work is prefixed with **[#N]** and shown in orchid color
 
-Pinned works are automatically included — no separate include rule is needed. If a
-pinned work isn't otherwise selected by include rules, it is added automatically.
+Pinned works are automatically added — no separate selection is needed. If a pinned
+work isn't otherwise in the selection, it is added automatically.
 
 To remove a pin, right-click the work and select **Remove pin**.
 
@@ -477,10 +477,9 @@ Album, Tracks, Composer.
 
 Operates on all selected works:
 
-- **Set Work Name**: Change the display name (creates a `work_name` override)
-- **Set Group Key**: Assign a `work_group_key` override to control grouping.
-  Requires re-detect or rescan to take effect.
-- **Make Standalone**: Marks tracks with `__standalone__`, forcing each track into
+- **Set Work Name**: Set the work name for selected tracks. Tracks sharing the same
+  work name are grouped into a single work on re-detect or rescan.
+- **Make Standalone**: Marks tracks as standalone, forcing each track into
   its own work and bypassing all detection. Useful for suppressing incorrect WORK
   tags or MB work IDs.
 - **Set Composer**: Override the composer for all tracks in the selected works
@@ -509,7 +508,7 @@ Supported override fields:
 
 | Scope | Fields |
 |-------|--------|
-| Track | composer, work_group_key, work_name, disc_number, track_number, movement_number, title, genre, performer, conductor, ensemble |
+| Track | composer, work_name, disc_number, track_number, movement_number, title, genre, performer, conductor, ensemble |
 | Album | album_title, album_artist, year |
 
 Use **Export Overrides JSON** and **Import Overrides JSON** to back up or share
@@ -728,7 +727,7 @@ If you have text files listing album directories (one per line):
 
 1. Click **Import Old Playlists** in the sidebar
 2. Select your text files
-3. Each file becomes a profile with include rules for matched albums
+3. Each file becomes a profile with album-level selections for matched albums
 4. Load the profile in the Playlist Builder to review and adjust
 
 ### Backing Up Your Library

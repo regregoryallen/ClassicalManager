@@ -11,7 +11,7 @@ dist/
 build/
 .idea/
 .vscode/
-TestData/
+no_git/
 gui_prefs.json
 config.json
 *.m3u

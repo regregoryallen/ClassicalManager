@@ -2,7 +2,7 @@
 
 Defines all tables from §4.2 of the specification:
   Libraries, SourceFolders, Composers, Albums, Works, Tracks,
-  PlaylistProfiles, ProfileRules, Overrides.
+  PlaylistProfiles, ProfileSelections, Overrides.
 
 Design rules (§4.1):
   - All stored paths use forward slashes (POSIX) regardless of host OS.
@@ -52,8 +52,7 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         Work,
         Track,
         PlaylistProfile,
-        ProfileRule,
-        ProfilePin,
+        ProfileSelection,
         Override,
     ])
 
@@ -245,7 +244,7 @@ class Track(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Playlist profiles & rules
+# Playlist profiles & selections
 # ---------------------------------------------------------------------------
 
 class PlaylistProfile(BaseModel):
@@ -271,29 +270,34 @@ class PlaylistProfile(BaseModel):
         table_name = "playlist_profiles"
 
 
-class ProfileRule(BaseModel):
-    """An include/exclude rule attached to a playlist profile."""
+class ProfileSelection(BaseModel):
+    """A single selection entry in a playlist profile.
 
-    profile = pw.ForeignKeyField(PlaylistProfile, backref="rules", on_delete="CASCADE")
-    rule_type = pw.TextField()      # include / exclude
-    target_level = pw.TextField()   # composer / album / work / track
-    target_id = pw.IntegerField()   # id of the referenced entity
+    Each row represents one item the user has explicitly added to or
+    excluded from the profile.  Uses stable text keys so entries survive
+    library rescans that reassign integer IDs.
+
+    Semantics:
+      - excluded=False: this item is ADDED to the playlist.
+      - excluded=True:  this item is an EXCEPTION (removed from a broader add).
+
+    Specificity is structural: track overrides work, work overrides album.
+    The most specific selection matching a track always wins.
+    """
+
+    profile = pw.ForeignKeyField(PlaylistProfile, backref="selections",
+                                 on_delete="CASCADE")
+    level = pw.TextField()          # 'album' / 'work' / 'track'
+    key = pw.TextField()            # stable text key (album_key, composite work key, or relative_path)
+    excluded = pw.BooleanField(default=False)  # False=add, True=exception
+    pin_position = pw.IntegerField(null=True)  # 1-5 or NULL; only for level='work'
+    track_paths = pw.TextField(null=True)  # JSON list of relative_paths; work-level only.
+                                           # Breadcrumbs for reconciliation after rescan.
 
     class Meta:
-        table_name = "profile_rules"
-
-
-class ProfilePin(BaseModel):
-    """A work pinned to a specific position in the playlist output."""
-
-    profile = pw.ForeignKeyField(PlaylistProfile, backref="pins", on_delete="CASCADE")
-    work_id = pw.IntegerField()
-    position = pw.IntegerField()  # 1-5
-
-    class Meta:
-        table_name = "profile_pins"
+        table_name = "profile_selections"
         indexes = (
-            (("profile", "position"), True),  # one work per position per profile
+            (("profile", "level", "key"), True),  # one entry per item per profile
         )
 
 

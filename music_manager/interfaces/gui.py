@@ -612,6 +612,7 @@ class App:
         # Remember last-used library
         self._prefs["last_library"] = name
         _save_prefs(self._prefs)
+        self._save_active_library_to_config()
         # Populate plex section from library
         self.plex_section_entry.delete(0, "end")
         if self.active_library.plex_section:
@@ -624,6 +625,16 @@ class App:
             self._refresh_builder_tree()
             self._refresh_cleanup()
             self._restore_autosave()
+
+    def _save_active_library_to_config(self):
+        """Persist the current active_library ID to config.json."""
+        try:
+            from music_manager.core.config import load_config, save_config
+            config = load_config()
+            config["active_library"] = self.active_library.id if self.active_library else 0
+            save_config(config)
+        except Exception:
+            pass  # non-critical — GUI still works
 
     def _refresh_metrics(self):
         """Update sidebar metric counts."""
@@ -1098,6 +1109,8 @@ class App:
         lib.delete_instance()
         self.active_library = None
         self._refresh_library_list()
+        # Update active_library in config so CLI/webhook don't reference deleted ID
+        self._save_active_library_to_config()
 
     def _add_source_folder(self):
         """Add a source folder to the active library."""

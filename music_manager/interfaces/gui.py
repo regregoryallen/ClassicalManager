@@ -1497,31 +1497,117 @@ class App:
     # ------------------------------------------------------------------
 
     def _export_library(self):
-        """Export the active library to a JSON file."""
-        if not self.active_library:
-            messagebox.showwarning("No Library", "Select a library first.")
+        """Show a library picker, then export selected libraries to JSON files."""
+        from music_manager.core.database import Library
+
+        libs = list(Library.select())
+        if not libs:
+            messagebox.showwarning("No Libraries", "No libraries to export.")
             return
 
-        initial_dir = self._prefs.get("last_export_dir", "")
-        default_name = self.active_library.name.replace(" ", "_")
-        path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            initialfile=f"{default_name}_library.json",
-            initialdir=initial_dir or None,
-            filetypes=[("JSON", "*.json")],
-            title="Export Library",
-            parent=self.root,
-        )
-        if not path:
+        # If only one library, skip the picker
+        if len(libs) == 1:
+            self._export_libraries(libs)
             return
-        self._prefs["last_export_dir"] = str(Path(path).parent)
-        _save_prefs(self._prefs)
 
+        picker = tk.Toplevel(self.root)
+        picker.title("Export Libraries")
+        picker.transient(self.root)
+        self._center_on_main(picker, 350, 320)
+        picker.wait_visibility()
+        picker.grab_set()
+
+        ctk = self.ctk
+        ctk.CTkLabel(picker, text="Select libraries to export:",
+                     font=("Segoe UI", 12)).pack(padx=10, pady=(10, 5))
+
+        check_frame = ctk.CTkScrollableFrame(picker, height=180)
+        check_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        check_vars = []
+        for lib in libs:
+            var = tk.BooleanVar(value=True)
+            check_vars.append((lib, var))
+            ctk.CTkCheckBox(check_frame, text=lib.name, variable=var,
+                            font=("Segoe UI", 11)).pack(anchor="w", pady=2)
+
+        btn_frame = ctk.CTkFrame(picker, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        def select_all():
+            for _, var in check_vars:
+                var.set(True)
+
+        def select_none():
+            for _, var in check_vars:
+                var.set(False)
+
+        ctk.CTkButton(btn_frame, text="All", width=60,
+                      command=select_all).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="None", width=60,
+                      command=select_none).pack(side="left", padx=5)
+
+        def on_export():
+            selected = [lib for lib, var in check_vars if var.get()]
+            if not selected:
+                messagebox.showwarning("None Selected",
+                                       "Select at least one library.",
+                                       parent=picker)
+                return
+            picker.destroy()
+            self._export_libraries(selected)
+
+        ctk.CTkButton(picker, text="Export", width=100,
+                      command=on_export).pack(pady=(0, 10))
+
+    def _export_libraries(self, libraries):
+        """Export one or more libraries to JSON files in a chosen directory."""
         from music_manager.core.library_io import export_library
-        with self._busy():
-            export_library(self.active_library, Path(path))
-        messagebox.showinfo("Export",
-                           f"Exported library '{self.active_library.name}' to:\n{path}")
+
+        if len(libraries) == 1:
+            # Single library — save-as dialog for one file
+            lib = libraries[0]
+            initial_dir = self._prefs.get("last_export_dir", "")
+            default_name = lib.name.replace(" ", "_")
+            path = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                initialfile=f"{default_name}_library.json",
+                initialdir=initial_dir or None,
+                filetypes=[("JSON", "*.json")],
+                title="Export Library",
+                parent=self.root,
+            )
+            if not path:
+                return
+            self._prefs["last_export_dir"] = str(Path(path).parent)
+            _save_prefs(self._prefs)
+            with self._busy():
+                export_library(lib, Path(path))
+            messagebox.showinfo("Export",
+                               f"Exported library '{lib.name}' to:\n{path}")
+        else:
+            # Multiple libraries — pick a directory
+            initial_dir = self._prefs.get("last_export_dir", "")
+            directory = filedialog.askdirectory(
+                initialdir=initial_dir or None,
+                title="Choose Export Directory",
+                parent=self.root,
+            )
+            if not directory:
+                return
+            self._prefs["last_export_dir"] = directory
+            _save_prefs(self._prefs)
+            exported = []
+            with self._busy():
+                for lib in libraries:
+                    safe_name = lib.name.replace(" ", "_")
+                    path = Path(directory) / f"{safe_name}_library.json"
+                    export_library(lib, path)
+                    exported.append(f"  {lib.name} → {path.name}")
+            messagebox.showinfo(
+                "Export",
+                f"Exported {len(exported)} libraries to:\n{directory}\n\n"
+                + "\n".join(exported))
 
     def _import_library(self):
         """Import a library from a JSON file."""

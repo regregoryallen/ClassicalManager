@@ -231,7 +231,7 @@ tabs.
 | **New** | Create a library (prompts for name) |
 | **Rename** | Rename the active library |
 | **Delete** | Delete the library and all its data (confirmation required) |
-| **Export Lib** | Save the entire library to a JSON file (structure, profiles, overrides) |
+| **Export Lib** | Export one or more libraries to JSON files (picker dialog when multiple libraries exist) |
 | **Import Lib** | Load a library from a JSON file (handles name collisions automatically) |
 
 ### Metrics
@@ -732,9 +732,12 @@ If you have text files listing album directories (one per line):
 
 ### Backing Up Your Library
 
-**Export Lib** saves the entire library (structure, profiles, overrides) to a JSON
-file. **Import Lib** restores it on the same or a different machine. Source folders
-must exist at the same paths (or be updated after import) for rescanning to work.
+**Export Lib** exports libraries to JSON files. When multiple libraries exist, a
+picker dialog lets you choose which ones to export (with All/None buttons).
+Multiple libraries are saved as separate files in a chosen directory.
+**Import Lib** restores a library from a JSON file on the same or a different
+machine. Source folders must exist at the same paths (or be updated after import)
+for rescanning to work.
 
 ### Sharing a Database Across Systems
 

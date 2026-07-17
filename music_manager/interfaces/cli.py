@@ -531,6 +531,33 @@ def webhook(
                  config_arg, m3u_dir, log_file=str(log_file))
 
 
+@app.command("analyze-similarity")
+def analyze_similarity(
+    library: str = typer.Option(..., help="Library name"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress"),
+):
+    """Analyze all tracks for similarity features (librosa)."""
+    _setup_logging(verbose)
+
+    from music_manager.core.similarity import analyze_library
+    lib = _get_library(library)
+
+    def progress(current, total, message):
+        typer.echo(f"\r[{current}/{total}] {message}", nl=False)
+
+    if not quiet:
+        typer.echo(f"Analyzing similarity features for: {lib.name}")
+    stats = analyze_library(lib, progress_callback=None if quiet else progress)
+    if not quiet:
+        typer.echo("")
+        typer.echo(f"\n--- Similarity Analysis Report ---")
+        typer.echo(f"Total tracks:   {stats['total']}")
+        typer.echo(f"Already done:   {stats['skipped']}")
+        typer.echo(f"Analyzed now:   {stats['analyzed']}")
+        typer.echo(f"Failed:         {stats['failed']}")
+
+
 @app.command("export-library")
 def export_library(
     library: str = typer.Option(..., help="Library name"),

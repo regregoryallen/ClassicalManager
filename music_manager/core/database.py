@@ -102,6 +102,9 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         )
         logger.info("Migrated: added separation columns to playlist_profiles")
 
+    from music_manager.core.similarity import ensure_table
+    ensure_table()
+
     logger.info("Database tables created/verified")
     return database
 

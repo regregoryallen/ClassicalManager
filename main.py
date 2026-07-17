@@ -39,6 +39,10 @@ CLI commands:
       --output-dir sets where files are written (default: current directory).
       Each profile becomes <profile_name>.m3u (or .json).
 
+  analyze-similarity --library NAME [-v] [-q]
+      Pre-compute audio similarity features (librosa) for all
+      tracks in a library. Useful before using the GUI similarity finder.
+
   integrity --library NAME [-v]
       Check for orphaned tracks, unscanned files, duplicates, and
       cross-folder works.

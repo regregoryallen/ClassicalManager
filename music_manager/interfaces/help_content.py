@@ -151,6 +151,8 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Plex Section \u2014 map this library to a specific Plex music section")
     bullet("Import Old Playlists \u2014 import text files as profiles")
     bullet("Library Integrity Check \u2014 find orphans, duplicates, cross-folder works")
+    bullet("Track Similarity \u2014 standalone finder: pick seed tracks and browse "
+           "audio-similar matches (see Playlist Builder \u2192 Find Similar)")
     bullet("Profile Summary \u2014 sortable table of all profiles with stats")
     bullet("Settings \u2014 application-wide configuration")
     bullet("View Logs \u2014 log output for the current session")
@@ -206,14 +208,17 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Library Pane (left)")
     bullet("Columns: Name, Composer, Genre, Info (track count or duration)")
-    bullet("Color coding: Blue = included, Amber = partial, Gray = excluded")
+    bullet("Color coding: Blue = included, Amber = partial, Gray = excluded. "
+           "A container is blue when every track under it is included (including "
+           "when all children were added individually), amber only when some but "
+           "not all content is included")
     bullet("Filter matches name, composer, genre, performer, conductor, ensemble")
     bullet("Hide 1-track: hides standalone works")
     bullet("+/\u2212: expand/collapse all (to work level)")
     bullet("Double-click column headers to sort (numeric-aware)")
     bullet("Select items and click Add >> or double-click to include "
            "(double-click toggles: included items are removed, unselected items are included)")
-    bullet("Right-click: Play, Details, Show Album")
+    bullet("Right-click: Play, Details (metadata incl. per-track volatility), Show Album")
     bullet("Show in profiles\u2026 \u2014 right-click to see which saved profiles include this item")
 
     subheading("Playlist Pane (right)")
@@ -232,6 +237,30 @@ def build_help_content(text: tk.Text) -> None:
            "(preserves playlist ID across regenerations)")
     bullet("Find Unused \u2014 populate the builder with all tracks not included "
            "in any saved profile, so you can browse and assign them")
+    bullet("Find Similar \u2014 find tracks that sound similar to your selections "
+           "(see below); needs a one-time audio analysis pass the first time")
+
+    subheading("Find Similar Tracks")
+    body(
+        "A Pandora-style search: every track you have selected acts as a seed, "
+        "and the library is ranked by audio similarity. Accept the matches you "
+        "like back into the profile; accepting widens the seed set so the search "
+        "broadens as you go. The first run analyzes the library (one-time audio "
+        "pass per track, with progress); results are cached for later searches.\n"
+    )
+    bullet("Max results \u2014 how many matches to return")
+    bullet("Volatility max \u2014 optional filter on internal variation (soft-to-loud, "
+           "sparse-to-dense). Tick the checkbox next to the slider to enable it; "
+           "moving the slider alone does nothing until enabled")
+    bullet("Blend \u2014 slide between nearest (single closest seed) and consensus "
+           "(favor tracks many seeds agree are close)")
+    bullet("Match column \u2014 % that is high when a track is as close to your seeds "
+           "as the seeds are to each other; self-calibrating per search. "
+           "Green = strong, amber = loose, red = weak")
+    bullet("Agreement column \u2014 how many seeds consider the track close (e.g. 12/31)")
+    bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
+    bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
+    bullet("Right-click a result for Play or Details")
 
     subheading("Pin to Position")
     body(
@@ -256,7 +285,7 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open track in default player")
-    bullet("Details \u2014 read-only metadata popup with copy buttons")
+    bullet("Details \u2014 read-only metadata popup (incl. per-track volatility) with copy buttons")
     bullet("Show Album \u2014 full album view with editing")
     bullet("Set Work Name / Group Key / Composer \u2014 jump to edit fields")
     bullet("Make Standalone \u2014 set __standalone__ group key")

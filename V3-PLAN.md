@@ -48,9 +48,22 @@
   rescans keyed on (folder_id, relative_path) with mtime/size match;
   `ScanStats.analyses_preserved` reported in scan-complete status.
   `similarity.py` timestamps now UTC-aware.
-  **Remaining user checkpoint:** run a full rescan on a real/test library and
-  confirm the "N analyses kept" count is nonzero and Find Similar still works.
-- [ ] Phase 3 — Mechanical GUI decomposition
+  **User checkpoint passed 2026-07-19** on a fresh testMusicData library
+  (`no_git/config-v3test.json` → `no_git/v3test.db`): analyses preserved
+  across rescan, Find Similar works without re-analysis.
+- [x] Phase 3 — Mechanical GUI decomposition — **code done 2026-07-19**
+  (56 tests green, pyflakes clean). `gui.py` (5,285 lines) split via AST into
+  `music_manager/interfaces/gui/`: `app.py` (App shell, 35 methods),
+  `builder_tab.py` (34), `cleanup_tab.py` (18), `dialogs.py` (9),
+  `treeutil.py` (9), `similarity_ui.py` (9), `explorer_tab.py` (6 — deleted
+  whole in Phase 5), `common.py` (prefs/log helpers). App = mixin composition;
+  120 methods verified reachable via MRO; public surface unchanged
+  (`from music_manager.interfaces.gui import launch_gui`). Method bodies are
+  verbatim except: `__add_with_breadcrumbs` de-mangled to
+  `_add_with_breadcrumbs`, and `Path(__file__).*parent*3` replaced with
+  `PROJECT_ROOT` (package is one level deeper).
+  **Remaining user checkpoint:** launch the GUI and click through each tab
+  once (builder toggles, a popup or two, help window).
 - [ ] Phase 4 — Builder performance + shared-state adoption
 - [ ] Phase 5 — Rules surface + retire Explorer
 - [ ] Phase 6 — Minor findings sweep

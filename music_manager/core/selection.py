@@ -465,20 +465,33 @@ class EffectiveState:
     States: 'included' (every track in), 'partial' (some in),
     'excluded' (explicit EXCEPT on the entity, nothing in),
     'none' (untouched).  Track states have no 'partial'.
+
+    expanded_track_ids holds tracks the engine will ADD via
+    work-integrity enforcement (computed only when the resolver is
+    called with work_integrity='enforce'); they are not members of
+    included_track_ids — the playlist actually plays the union.
     """
 
     included_track_ids: set[int] = field(default_factory=set)
+    expanded_track_ids: set[int] = field(default_factory=set)
     governing: dict[int, tuple[str, str]] = field(default_factory=dict)
     track_states: dict[int, str] = field(default_factory=dict)
     work_states: dict[int, str] = field(default_factory=dict)
     album_states: dict[int, str] = field(default_factory=dict)
 
 
-def resolve_effective_state(index: LibraryIndex, rules) -> EffectiveState:
+def resolve_effective_state(index: LibraryIndex, rules,
+                            work_integrity: str | None = None,
+                            ) -> EffectiveState:
     """Compute effective inclusion for every entity, in pure Python.
 
     Uses the same `_decide_track` as `resolve_selections`, so tree
     display and playlist membership cannot disagree (V3 fix for F1/F2).
+
+    When work_integrity='enforce', also mirrors the engine's expansion:
+    every work with >=1 included track contributes its remaining tracks
+    to expanded_track_ids — skipping explicitly excluded works and
+    explicitly excluded tracks (D1), exactly like the engine.
     """
     album_sel, work_sel, track_sel = _selection_maps(rules)
     state = EffectiveState()
@@ -496,6 +509,20 @@ def resolve_effective_state(index: LibraryIndex, rules) -> EffectiveState:
             state.track_states[t.id] = "excluded"
         else:
             state.track_states[t.id] = "none"
+
+    if work_integrity == "enforce":
+        for w in index.works.values():
+            if work_sel.get(w.key) is True:
+                continue  # explicitly excluded work — never expanded
+            if not any(tid in state.included_track_ids
+                       for tid in w.track_ids):
+                continue
+            for tid in w.track_ids:
+                if tid in state.included_track_ids:
+                    continue
+                if index.tracks[tid].relative_path in track_sel:
+                    continue  # explicit track EXCEPT holds (D1)
+                state.expanded_track_ids.add(tid)
 
     def container_state(track_ids, explicit_except):
         n_in = sum(1 for tid in track_ids

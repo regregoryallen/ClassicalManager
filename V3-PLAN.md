@@ -89,7 +89,25 @@
   (dimmed variant), count it in the header/strip ("8 selected + 4 via work
   integrity"), and update live when the Integrity dropdown changes. Help
   must state explicitly that integrity applies to works only, never albums.
-- [ ] Phase 5 — Rules surface + retire Explorer
+- [x] Phase 5 — Rules surface + retire Explorer — **code done 2026-07-19**
+  (77 tests green, pyflakes clean). D4 resolved: sortable Year column added to
+  both Builder trees (album rows); work_source already visible in Cleanup's
+  Works Browser. Delivered: integrity-aware effective state
+  (`resolve_effective_state(..., work_integrity="enforce")` mirrors engine
+  expansion incl. D1, parity-tested against `generate_playlist`); playlist
+  pane renders expanded movements in dimmed blue ('integrity' tag) and
+  updates live on Integrity dropdown change; health strip
+  (replaces "(empty = all tracks)" label — D2 text fixed everywhere) with
+  active/redundant/no-op/orphaned counts + "N + M via integrity" tracks,
+  click opens Rules window; new `gui/rules_window.py` (RulesWindowMixin):
+  graded rule list, surgical Remove, Reveal-in-Library, Clean Up dead rules;
+  breadcrumb backfill on profile save AND load; `explorer_tab.py` deleted,
+  tab removed, all references gone; help_content + USERGUIDE rewritten
+  (Rules section added, Explorer removed, integrity works-only documented).
+  **Remaining user checkpoint:** GUI walkthrough — two-tab layout, Year
+  column, dimmed integrity tracks toggling with the Integrity setting,
+  health strip counts, Rules window (remove/reveal/clean up), and a
+  save→load round trip.
 - [ ] Phase 6 — Minor findings sweep
 - [ ] Phase 7 — Verification & wrap-up
 

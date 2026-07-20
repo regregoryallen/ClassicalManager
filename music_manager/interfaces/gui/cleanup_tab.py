@@ -768,7 +768,6 @@ class CleanupTabMixin:
         messagebox.showinfo("Done", f"Set work name to '{new_name}' "
                            f"for {total} tracks across {len(work_ids)} work(s).")
         self._refresh_cleanup()
-        self._refresh_explorer()
 
     def _make_work_standalone(self):
         """Set __standalone__ work name for all tracks in all selected works."""

@@ -24,7 +24,7 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 from music_manager.interfaces.gui.dialogs import DialogsMixin
-from music_manager.interfaces.gui.explorer_tab import ExplorerTabMixin
+from music_manager.interfaces.gui.rules_window import RulesWindowMixin
 from music_manager.interfaces.gui.builder_tab import BuilderTabMixin
 from music_manager.interfaces.gui.treeutil import TreeUtilMixin
 from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
@@ -94,7 +94,7 @@ def launch_gui():
     app.mainloop()
 
 
-class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, SimilarityUIMixin, CleanupTabMixin):
+class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, SimilarityUIMixin, CleanupTabMixin):
     """Main application window."""
 
     def __init__(self, ctk, log_handler=None):
@@ -113,6 +113,7 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._lib_index = None  # cached LibraryIndex (V3 Phase 4)
         self._current_selections = []  # in-memory selections: [{level, key, excluded, pin_position, track_paths, display}]
         self._profile_picker_open = False
+        self._rules_window = None      # singleton Rules window (Phase 5)
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
         self._lib_search_meta = {}   # iid → searchable text for builder lib tree
@@ -391,11 +392,9 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.tabview.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
         self.tab_builder = self.tabview.add("Playlist Builder")
-        self.tab_explorer = self.tabview.add("Explorer & Rules")
         self.tab_cleanup = self.tabview.add("Cleanup / Overlay")
 
         self._build_builder_tab()
-        self._build_explorer_tab()
         self._build_cleanup_tab()
 
     def _build_sidebar(self):
@@ -574,7 +573,6 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._new_profile()
             self._refresh_metrics()
             self._refresh_source_folders()
-            self._refresh_explorer()
             self._refresh_builder_tree()
             self._refresh_cleanup()
             self._restore_autosave()
@@ -833,7 +831,6 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.scan_btn.configure(state="normal", text="Rescan Library",
                                     command=self._start_scan)
             self._refresh_metrics()
-            self._refresh_explorer()
             self._refresh_builder_tree()
             self._refresh_cleanup()
 
@@ -900,7 +897,6 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.scan_btn.configure(state="normal", text="Rescan Library",
                                     command=self._start_scan)
             self._refresh_metrics()
-            self._refresh_explorer()
             self._refresh_builder_tree()
             self._refresh_cleanup()
 
@@ -924,7 +920,6 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
             result = redetect_works(self.active_library)
             self._refresh_metrics()
             self._refresh_cleanup()
-            self._refresh_explorer()
         messagebox.showinfo(
             "Re-detect Complete",
             f"Albums processed: {result['albums_processed']}\n"

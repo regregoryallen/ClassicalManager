@@ -46,7 +46,8 @@ def _track_row(t, tag: str) -> TreeRow:
     return TreeRow(
         level="track", entity_id=t.id, key=t.relative_path,
         text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-        values=(t.composer_name, t.genre, _duration_str(t.duration_ms)),
+        values=(t.composer_name, t.genre, "",
+                _duration_str(t.duration_ms)),
         tag=tag,
         search=_search_text(t.title, t.composer_name, t.genre,
                             t.performer, t.conductor, t.ensemble))
@@ -68,6 +69,7 @@ def library_tree_rows(index: LibraryIndex, state: EffectiveState,
             level="album", entity_id=album.id, key=album.key,
             text=album.title,
             values=(album.album_artist, album.genre,
+                    str(album.year) if album.year else "",
                     f"{len(album.track_ids)} trk"),
             tag=_STATE_TO_TAG[state.album_states[album.id]],
             search=_search_text(album.title, album.album_artist,
@@ -79,7 +81,7 @@ def library_tree_rows(index: LibraryIndex, state: EffectiveState,
             work_row = TreeRow(
                 level="work", entity_id=work.id, key=work.key,
                 text=work.name,
-                values=(work.composer_name, work_genre,
+                values=(work.composer_name, work_genre, "",
                         f"{len(tracks)} trk"),
                 tag=_STATE_TO_TAG[state.work_states[work.id]],
                 search=_search_text(work.name, work.composer_name,
@@ -97,16 +99,20 @@ def library_tree_rows(index: LibraryIndex, state: EffectiveState,
 def playlist_tree_rows(index: LibraryIndex, state: EffectiveState,
                        pins: dict[str, int] | None = None,
                        hide_single: bool = False) -> list[TreeRow]:
-    """Rows for the right (playlist) pane: effectively included tracks.
+    """Rows for the right (playlist) pane: what the engine will play.
 
     Membership comes straight from the effective state, so a track ADD
     inside an excluded album appears here exactly as the engine will
-    play it (F2 fix — V2 skipped the whole album).
+    play it (F2 fix — V2 skipped the whole album).  Tracks pulled in by
+    work-integrity enforcement (state.expanded_track_ids) appear with
+    the 'integrity' tag so selected and expanded tracks are visually
+    distinct.
 
     Args:
         pins: work_key → pin position (1-5) for pinned-work decoration.
     """
     pins = pins or {}
+    playing = state.included_track_ids | state.expanded_track_ids
     rows = []
     for album in sorted(index.albums.values(), key=lambda a: a.title):
         work_rows = []
@@ -116,7 +122,7 @@ def playlist_tree_rows(index: LibraryIndex, state: EffectiveState,
         for wid in album.work_ids:
             work = index.works[wid]
             vis_tracks = [index.tracks[tid] for tid in work.track_ids
-                          if tid in state.included_track_ids]
+                          if tid in playing]
             if not vis_tracks:
                 continue
             if hide_single and len(vis_tracks) <= 1:
@@ -131,12 +137,16 @@ def playlist_tree_rows(index: LibraryIndex, state: EffectiveState,
             work_row = TreeRow(
                 level="work", entity_id=work.id, key=work.key,
                 text=(f"[#{pin_pos}] {work.name}" if pin_pos else work.name),
-                values=(work.composer_name, work_genre,
+                values=(work.composer_name, work_genre, "",
                         f"{len(vis_tracks)} trk"),
                 tag="pinned" if pin_pos else "",
                 search=_search_text(work.name, work.composer_name,
                                     work_genre))
-            work_row.children = [_track_row(t, "") for t in vis_tracks]
+            work_row.children = [
+                _track_row(t, "integrity"
+                           if t.id in state.expanded_track_ids else "")
+                for t in vis_tracks
+            ]
             work_rows.append(work_row)
             visible_total += len(vis_tracks)
 
@@ -146,7 +156,7 @@ def playlist_tree_rows(index: LibraryIndex, state: EffectiveState,
         album_row = TreeRow(
             level="album", entity_id=album.id, key=album.key,
             text=album.title,
-            values=(album.album_artist, album_genre,
+            values=(album.album_artist, album_genre, "",
                     f"{visible_total} trk"),
             search=_search_text(album.title, album.album_artist,
                                 album_genre))

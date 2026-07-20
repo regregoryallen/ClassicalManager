@@ -52,7 +52,10 @@ class BuilderTabMixin:
 
     def _current_effective_state(self, index):
         from music_manager.core.selection import resolve_effective_state
-        return resolve_effective_state(index, self._current_rules())
+        integrity = (self.work_integrity.get()
+                     if hasattr(self, "work_integrity") else None)
+        return resolve_effective_state(index, self._current_rules(),
+                                       work_integrity=integrity)
 
     def _selection_maps(self):
         """Per-level key → excluded dicts from the in-memory selections."""
@@ -145,25 +148,71 @@ class BuilderTabMixin:
                 return not album_sel[parsed[0]]
         return False
 
-    def _remove_selection(self):
-        """Remove selected selection from the in-memory list."""
-        sel = self.rules_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if 0 <= idx < len(self._current_selections):
-            self._current_selections.pop(idx)
-            self._refresh_rules_display()
-
     def _refresh_rules_display(self):
-        """Update the rules listbox on the Explorer tab and builder trees."""
-        self.rules_listbox.delete(0, "end")
-        for sel in self._current_selections:
-            self.rules_listbox.insert("end", sel["display"])
-        # Refresh builder panes if they exist
+        """Refresh everything that renders the current rules: both
+        builder trees, the health strip, and the Rules window if open."""
         if hasattr(self, "builder_lib_tree"):
             self._rebuild_library_tree()
             self._rebuild_playlist_tree()
+        if hasattr(self, "rules_strip"):
+            self.rules_strip.configure(text=self._rules_strip_text())
+        self._refresh_rules_window()
+
+    def _rules_strip_text(self):
+        """Compose the health-strip text from rule classification and
+        the effective (selected + integrity-expanded) track counts."""
+        if not self.active_library:
+            return ""
+        if not self._current_selections:
+            return "Rules: 0 — playlist is empty"
+
+        from music_manager.core.selection import classify_selections
+        index = self._get_library_index()
+        results = classify_selections(index, self._current_rules())
+
+        counts = {}
+        for r in results:
+            counts[r.status] = counts.get(r.status, 0) + 1
+        parts = []
+        if counts.get("active"):
+            parts.append(f"{counts['active']} active")
+        if counts.get("redundant"):
+            parts.append(f"{counts['redundant']} redundant")
+        if counts.get("no_op"):
+            parts.append(f"{counts['no_op']} no-op")
+        if counts.get("orphaned"):
+            parts.append(f"{counts['orphaned']} orphaned ⚠")
+
+        state = self._current_effective_state(index)
+        n_sel = len(state.included_track_ids)
+        n_exp = len(state.expanded_track_ids)
+        if n_exp:
+            trk = f"{n_sel + n_exp} trk ({n_sel} + {n_exp} via integrity)"
+        else:
+            trk = f"{n_sel} trk"
+
+        return (f"Rules: {len(results)} ({', '.join(parts)}) — {trk}"
+                if parts else f"Rules: {len(results)} — {trk}")
+
+    def _backfill_breadcrumbs(self):
+        """Regenerate missing track_paths on work-level ADD rules.
+
+        Heals rules created without breadcrumbs (e.g. by the retired
+        Explorer tab) so rescan reconciliation can remap them.  Runs on
+        profile save and load; persisted by the next save/autosave.
+        """
+        if not self.active_library:
+            return
+        index = self._get_library_index()
+        for s in self._current_selections:
+            if (s["level"] == "work" and not s["excluded"]
+                    and not s.get("track_paths")):
+                wid = index.work_id_by_key.get(s["key"])
+                if wid is not None:
+                    s["track_paths"] = json.dumps([
+                        index.tracks[tid].relative_path
+                        for tid in index.works[wid].track_ids
+                    ])
 
     def _build_builder_tab(self):
         """Build the Playlist Builder tab.
@@ -206,7 +255,8 @@ class BuilderTabMixin:
 
         ctk.CTkLabel(row1, text="Integrity:").pack(side="left", padx=(0, 2))
         self.work_integrity = ctk.CTkComboBox(
-            row1, values=["enforce", "respect_selection"], width=140)
+            row1, values=["enforce", "respect_selection"], width=140,
+            command=lambda _v: self._refresh_rules_display())
         self.work_integrity.pack(side="left", padx=(0, 8))
         self.work_integrity.set("enforce")
 
@@ -281,15 +331,17 @@ class BuilderTabMixin:
                         width=20).pack(side="right", padx=5)
 
         self.builder_lib_tree = ttk.Treeview(
-            left_frame, columns=("composer", "genre", "info"),
+            left_frame, columns=("composer", "genre", "year", "info"),
             show="tree headings", selectmode="extended")
         self.builder_lib_tree.heading("#0", text="Name")
         self.builder_lib_tree.heading("composer", text="Composer")
         self.builder_lib_tree.heading("genre", text="Genre")
+        self.builder_lib_tree.heading("year", text="Year")
         self.builder_lib_tree.heading("info", text="Info")
         self.builder_lib_tree.column("#0", width=220)
         self.builder_lib_tree.column("composer", width=120)
         self.builder_lib_tree.column("genre", width=90)
+        self.builder_lib_tree.column("year", width=50, anchor="center")
         self.builder_lib_tree.column("info", width=70, anchor="center")
         self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
@@ -360,15 +412,17 @@ class BuilderTabMixin:
             text_color="#b08830", font=ctk.CTkFont(size=11))
 
         self.builder_pl_tree = ttk.Treeview(
-            right_frame, columns=("composer", "genre", "info"),
+            right_frame, columns=("composer", "genre", "year", "info"),
             show="tree headings", selectmode="extended")
         self.builder_pl_tree.heading("#0", text="Name")
         self.builder_pl_tree.heading("composer", text="Composer")
         self.builder_pl_tree.heading("genre", text="Genre")
+        self.builder_pl_tree.heading("year", text="Year")
         self.builder_pl_tree.heading("info", text="Info")
         self.builder_pl_tree.column("#0", width=220)
         self.builder_pl_tree.column("composer", width=120)
         self.builder_pl_tree.column("genre", width=90)
+        self.builder_pl_tree.column("year", width=50, anchor="center")
         self.builder_pl_tree.column("info", width=70, anchor="center")
         self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
@@ -382,6 +436,9 @@ class BuilderTabMixin:
                               row_dbl_click=self._builder_exclude_selected)
         self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
         self.builder_pl_tree.tag_configure("pinned", foreground="#e680ff")  # orchid
+        # Tracks pulled in by work-integrity enforcement: dimmed blue,
+        # distinct from directly selected tracks (V3 Phase 5).
+        self.builder_pl_tree.tag_configure("integrity", foreground="#5f8db3")
         self._builder_pl_iid_map = {}  # iid → (level, entity_id, key)
 
         # -- Bottom: action buttons --
@@ -401,9 +458,14 @@ class BuilderTabMixin:
         ctk.CTkButton(bot, text="Find Similar", width=110,
                       command=self._find_similar_tracks).pack(side="left", padx=4)
 
-        info = ctk.CTkLabel(bot, text="(empty = all tracks)",
-                            text_color="gray")
-        info.pack(side="right", padx=10)
+        # Rules health strip (V3 Phase 5): live rule/track counts;
+        # click opens the Rules window.
+        self.rules_strip = ctk.CTkLabel(
+            bot, text="Rules: 0 — playlist is empty", text_color="gray",
+            cursor="hand2")
+        self.rules_strip.pack(side="right", padx=10)
+        self.rules_strip.bind("<Button-1>",
+                              lambda _e: self._show_rules_window())
 
     def _toggle_tree(self, tree, expand):
         """Expand or collapse all nodes in a treeview.
@@ -750,7 +812,7 @@ class BuilderTabMixin:
                 lb.insert("end", f"{p.name}  ({p.library.name})")
         if profiles_with_no_selections:
             lb.insert("end", "")
-            lb.insert("end", "— Profiles with no selections (all tracks) —")
+            lb.insert("end", "— Profiles with no selections (empty playlist) —")
             for p in sorted(profiles_with_no_selections, key=lambda p: p.name):
                 lb.insert("end", f"{p.name}  ({p.library.name})")
 
@@ -1335,6 +1397,9 @@ class BuilderTabMixin:
 
         from music_manager.core.database import PlaylistProfile, ProfileSelection
 
+        # Heal work-level rules that lack breadcrumbs before persisting
+        self._backfill_breadcrumbs()
+
         # Enforce unique profile names across all libraries
         conflict = PlaylistProfile.select().where(
             (PlaylistProfile.name == name) &
@@ -1584,6 +1649,10 @@ class BuilderTabMixin:
                 "track_paths": sel.track_paths,
                 "display": f"{prefix}: {sel.level} — {display_name}{pin_str}",
             })
+
+        # Heal work rules loaded without breadcrumbs (e.g. created by the
+        # retired Explorer tab); persisted on the next save/autosave.
+        self._backfill_breadcrumbs()
 
         self._refresh_rules_display()
         self.root.config(cursor="")

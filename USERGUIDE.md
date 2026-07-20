@@ -7,8 +7,8 @@
 3. [Initial Setup](#initial-setup)
 4. [Getting Started](#getting-started)
 5. [The Sidebar](#the-sidebar)
-6. [Explorer & Rules Tab](#explorer--rules-tab)
-7. [Playlist Builder Tab](#playlist-builder-tab)
+6. [Playlist Builder Tab](#playlist-builder-tab)
+7. [Rules](#rules)
 8. [Cleanup / Overlay Tab](#cleanup--overlay-tab)
 9. [Settings](#settings)
 10. [Command-Line Interface](#command-line-interface)
@@ -190,12 +190,11 @@ tracks, and composers found.
 
 ### Step 4: Browse Your Library
 
-Switch to the **Explorer & Rules** tab:
-
-- The left pane lists all albums with genre, year, and track count
-- Click an album to see its works and tracks in the right pane
-- The "Source" column shows how each work was detected:
-  `mb_workid`, `work_tag`, `heuristic`, or `standalone`
+The **Playlist Builder**'s Library pane (left) shows the full
+album → work → track hierarchy with composer, genre, and year columns.
+To audit how each work was detected (`mb_workid`, `work_tag`,
+`heuristic`, or `standalone`), use the **Works Browser** on the
+Cleanup / Overlay tab — its Source column shows the detection method.
 
 ### Step 5: Build a Playlist
 
@@ -303,40 +302,6 @@ bar at the top of the help window lets you jump between all sections.
 
 ---
 
-## Explorer & Rules Tab
-
-This tab provides a browsable view of your library and lets you set include/exclude
-rules.
-
-### Album List (left pane)
-
-- All albums sorted by title
-- Columns: Album, Genre, Year, Tracks
-- Use the filter field to narrow by album title, artist, or track metadata (genre,
-  performer, conductor, ensemble). Filtering is live as you type.
-
-### Works & Tracks (right pane)
-
-Click an album to see its works and tracks in a hierarchical view.
-
-- Columns: Name, Source (detection method), Composer, Tracks
-- Works contain their constituent tracks as children
-
-### Context Menus
-
-Right-click any item for:
-
-- **Play** (tracks only): Opens the audio file in your system's default player
-- **Add Album/Work/Track**: Add to the playlist selection
-- **Exclude Album/Work/Track**: Create an exception within a broader add
-
-### Selections Display
-
-The bottom section shows all active selections for the current profile. Select an
-entry and click **Remove** to delete it. Selections are shared with the Playlist Builder tab.
-
----
-
 ## Playlist Builder Tab
 
 The main workspace for creating playlists.
@@ -374,7 +339,14 @@ The main workspace for creating playlists.
 
 - **enforce**: If any track from a work is selected, include the entire work in
   correct movement order. Ensures you never hear just one movement of a symphony.
+  Applies to **works only, never albums** — selecting one work never pulls in the
+  album's other works. Explicitly excluded tracks and works are honored and never
+  re-added by enforce.
 - **respect_selection**: Play exactly what was selected, even if it means partial works.
+
+The Playlist pane shows integrity expansion live: movements pulled in by
+`enforce` appear in dimmed blue, and switching the Integrity setting updates
+the pane immediately.
 
 #### Avoid Adjacent
 
@@ -390,7 +362,7 @@ These are best-effort: if the playlist is dominated by one composer, album, or f
 
 Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
-- **Columns**: Name, Composer, Genre, Info (track count or duration)
+- **Columns**: Name, Composer, Genre, Year (albums), Info (track count or duration)
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded.
   A container (album or work) is blue when *every* track under it is included —
   including when you have added all of its children individually — and amber only
@@ -489,6 +461,46 @@ work isn't otherwise in the selection, it is added automatically.
 To remove a pin, right-click the work and select **Remove pin**.
 
 Pins are saved with the profile and persist across sessions.
+
+---
+
+## Rules
+
+Every add and exclusion you make in the Builder is stored as a *rule*: **ADD** or
+**EXCEPT** at album, work, or track level. The most specific rule matching a track
+always wins (track beats work beats album). The Builder trees show the *effect* of
+your rules; the Rules window shows the rules themselves.
+
+### Health Strip
+
+The status line at the bottom right of the Builder summarizes your rules and the
+resulting track count, e.g.
+`Rules: 12 (9 active, 2 redundant, 1 orphaned ⚠) — 45 trk (41 + 4 via integrity)`.
+Click it to open the Rules window. An empty profile reads "playlist is empty" —
+no rules means no tracks.
+
+### Rules Window
+
+A non-modal window grading each rule against the current library:
+
+- **active** — removing it would change the playlist (or it carries a pin)
+- **redundant** — an ADD already fully covered by a broader ADD
+- **no-op** — an EXCEPT with no broader ADD to except from
+- **orphaned** — the key no longer matches anything (deleted files or works
+  regrouped by a rescan); shown in red. This window is the only place orphaned
+  rules are visible at all.
+
+Actions:
+
+- **Remove** — delete exactly the selected rules, nothing else (no cascades)
+- **Reveal in Library** — jump to the rule's item in the Builder tree
+  (double-click does the same)
+- **Clean Up** — remove all redundant, no-op, and orphaned rules in one
+  confirmed step
+
+The Tracks column shows how many tracks each rule currently decides.
+"no breadcrumbs" marks a work rule missing its rescan-reconciliation data; it is
+healed automatically when the profile is saved or loaded.
 
 ---
 

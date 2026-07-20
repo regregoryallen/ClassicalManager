@@ -103,9 +103,11 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("4. Browse Your Library")
     body(
-        "Switch to Explorer & Rules. The left pane lists albums; click one to "
-        "see its works and tracks. The Source column shows detection method: "
-        "mb_workid, work_tag, heuristic, or standalone.\n"
+        "The Playlist Builder's Library pane (left) shows the full "
+        "album → work → track hierarchy with composer, genre, and "
+        "year. To audit how works were detected (mb_workid, work_tag, "
+        "heuristic, standalone), use the Works Browser on the Cleanup tab "
+        "— its Source column shows the detection method.\n"
     )
 
     subheading("5. Build a Playlist")
@@ -157,30 +159,6 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Settings \u2014 application-wide configuration")
     bullet("View Logs \u2014 log output for the current session")
 
-    # ── Explorer & Selections ──
-    heading("explorer", "Explorer & Selections")
-    body("Browse your library and add or exclude items from your playlist.\n")
-
-    subheading("Album List (left pane)")
-    bullet("Columns: Album, Genre, Year, Tracks")
-    bullet("Filter narrows by album title, artist, or track metadata")
-
-    subheading("Works & Tracks (right pane)")
-    body("Click an album to see its works and tracks.\n")
-    bullet("Columns: Name, Source (detection method), Composer, Tracks")
-    bullet("Works contain their tracks as children in the tree")
-
-    subheading("Context Menu (right-click)")
-    bullet("Play \u2014 open the track in your system's default player")
-    bullet("Add Album/Work/Track \u2014 add to the playlist selection")
-    bullet("Exclude Album/Work/Track \u2014 create an exception within a broader add")
-
-    subheading("Selections Display")
-    body(
-        "The bottom section shows all active selections. Select an entry and "
-        "click Remove to delete it. Selections are shared with the Playlist Builder.\n"
-    )
-
     # ── Playlist Builder ──
     heading("builder", "Playlist Builder")
     body("The main workspace for creating playlists.\n")
@@ -196,7 +174,12 @@ def build_help_content(text: tk.Text) -> None:
     bold("Shuffle: ")
     body("track (fully random), work (keep movements in order), album (shuffle albums as units)\n")
     bold("Integrity: ")
-    body("enforce (include entire works) or respect_selection (play exactly what was selected)\n")
+    body("enforce (any work with at least one selected track plays whole, "
+         "in movement order) or respect_selection (play exactly what was "
+         "selected). Integrity applies to WORKS only, never albums — "
+         "selecting one movement pulls in its siblings, but selecting one "
+         "work never pulls in the album's other works. Explicitly excluded "
+         "tracks and works are honored and never re-added by enforce.\n")
     bold("Length: ")
     body("all (no limit), count (max tracks), or duration (seconds, H:MM, or H:MM:SS)\n")
     bold("Seed: ")
@@ -207,7 +190,7 @@ def build_help_content(text: tk.Text) -> None:
          "dominated by one value, some adjacencies may remain.\n")
 
     subheading("Library Pane (left)")
-    bullet("Columns: Name, Composer, Genre, Info (track count or duration)")
+    bullet("Columns: Name, Composer, Genre, Year (albums), Info (track count or duration)")
     bullet("Color coding: Blue = included, Amber = partial, Gray = excluded. "
            "A container is blue when every track under it is included (including "
            "when all children were added individually), amber only when some but "
@@ -223,11 +206,17 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Playlist Pane (right)")
     body(
-        "Shows included items. Tree state (expansion, sort, scroll) is "
-        "preserved when items are added or removed.\n"
+        "Shows what the playlist will actually play. Tree state (expansion, "
+        "sort, scroll) is preserved when items are added or removed.\n"
     )
+    bullet("Tracks pulled in by Integrity=enforce (unselected movements of a "
+           "partially selected work) appear in dimmed blue; directly selected "
+           "tracks in normal text. Switching the Integrity setting updates "
+           "the pane immediately")
     bullet("Filter and column sorting work the same as the library pane")
-    bullet("Select and click << Remove or double-click to remove items")
+    bullet("Select and click << Remove or double-click to remove items. "
+           "Removing a container (album or work) removes everything beneath "
+           "it, regardless of sub-selections")
 
     subheading("Action Buttons")
     bullet("Preview \u2014 dry-run showing resolved playlist with track details")
@@ -272,6 +261,47 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Pinned works are auto-added \u2014 no separate selection needed")
     bullet("Right-click \u2192 Remove pin to unpin")
     bullet("Pins are saved with the profile")
+
+    # ── Rules ──
+    heading("rules", "Rules")
+    body(
+        "Every add and exclusion you make in the Builder is stored as a "
+        "rule: ADD or EXCEPT at album, work, or track level. The most "
+        "specific rule matching a track always wins (track beats work "
+        "beats album). The Builder trees show the EFFECT of your rules; "
+        "the Rules window shows the rules themselves.\n"
+    )
+
+    subheading("Health Strip")
+    body(
+        "The status line at the bottom right of the Builder summarizes "
+        "your rules and the resulting track count, e.g. "
+        "\"Rules: 12 (9 active, 2 redundant, 1 orphaned \u26a0) \u2014 "
+        "45 trk (41 + 4 via integrity)\". Click it to open the Rules "
+        "window. An empty profile reads \"playlist is empty\" \u2014 no "
+        "rules means no tracks.\n"
+    )
+
+    subheading("Rules Window")
+    body("Each rule is graded against the current library:\n")
+    bullet("active \u2014 removing it would change the playlist (or it carries a pin)")
+    bullet("redundant \u2014 an ADD already fully covered by a broader ADD")
+    bullet("no-op \u2014 an EXCEPT with no broader ADD to except from")
+    bullet("orphaned \u2014 the key no longer matches anything (deleted or "
+           "regrouped after a rescan); shown in red. This window is the "
+           "only place orphaned rules are visible")
+    body("\nActions:\n")
+    bullet("Remove \u2014 delete exactly the selected rules, nothing else")
+    bullet("Reveal in Library \u2014 jump to the rule's item in the Builder "
+           "(also on double-click)")
+    bullet("Clean Up \u2014 remove all redundant, no-op, and orphaned rules "
+           "in one confirmed step")
+    body(
+        "\nThe Tracks column shows how many tracks each rule currently "
+        "decides. \"no breadcrumbs\" marks a work rule missing its "
+        "reconciliation data; it is healed automatically when the profile "
+        "is saved or loaded.\n"
+    )
 
     # ── Cleanup / Overlay ──
     heading("cleanup", "Cleanup / Overlay")

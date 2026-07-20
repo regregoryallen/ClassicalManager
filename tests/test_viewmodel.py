@@ -40,7 +40,7 @@ def test_library_rows_structure_and_tags(lib):
     (album_row,) = _rows(index, rules)
 
     assert album_row.tag == "partial"
-    assert album_row.values[2] == "4 trk"
+    assert album_row.values[3] == "4 trk"
     w1, w2 = album_row.children
     assert w1.tag == "partial" and w2.tag == "included"
     t1, t2 = w1.children
@@ -97,7 +97,7 @@ def test_playlist_rows_show_adds_inside_excluded_album_F2(lib):
     assert [w.text for w in album_row.children] == ["Work Two"]
     (work_row,) = album_row.children
     assert [t.text for t in work_row.children] == ["1-03: Work Two - part 3"]
-    assert album_row.values[2] == "1 trk"
+    assert album_row.values[3] == "1 trk"
 
 
 def test_playlist_rows_respect_excepts_and_counts(lib):
@@ -109,13 +109,29 @@ def test_playlist_rows_respect_excepts_and_counts(lib):
     (album_row,) = _rows(index, rules, fn=playlist_tree_rows)
     (work_row,) = album_row.children
     assert len(work_row.children) == 2
-    assert album_row.values[2] == "2 trk"
+    assert album_row.values[3] == "2 trk"
 
 
 def test_playlist_rows_empty_rules_yield_no_rows_D2(lib):
     make_album(lib, "A/Alb1", [("Work One", 3)])
     index = load_library_index(lib)
     assert _rows(index, [], fn=playlist_tree_rows) == []
+
+
+def test_playlist_rows_mark_integrity_expanded_tracks(lib):
+    """Expanded movements render with the 'integrity' tag, distinct from
+    directly selected tracks (Phase 5 user-reported expectation gap)."""
+    make_album(lib, "A/Alb1", [("Work One", 3)])
+    index = load_library_index(lib)
+
+    rules = [Rule("track", "A/Alb1/02.flac")]
+    state = resolve_effective_state(index, rules, work_integrity="enforce")
+    (album_row,) = playlist_tree_rows(index, state)
+    (work_row,) = album_row.children
+
+    tags = {t.text.split(": ")[0]: t.tag for t in work_row.children}
+    assert tags == {"1-01": "integrity", "1-02": "", "1-03": "integrity"}
+    assert album_row.values[3] == "3 trk"  # counts include expansion
 
 
 def test_playlist_rows_pin_decoration(lib):
@@ -263,3 +279,39 @@ def test_cascade_remove_children_uses_index(lib):
     remaining = {(s["level"], s["key"]) for s in app._current_selections}
     assert ("track", "A/Alb1/01.flac") not in remaining
     assert ("track", "A/Alb1/03.flac") in remaining
+
+
+def test_backfill_breadcrumbs_heals_work_rules(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    wk1 = work_key("A/Alb1", "Work One", 1)
+
+    app = _FakeApp(index)
+    app.add("work", wk1)                      # no breadcrumbs (Explorer-era)
+    app.add("work", work_key("A/Alb1", "Ghost", 9))  # orphan — left alone
+    app._backfill_breadcrumbs()
+
+    import json as _json
+    healed = next(s for s in app._current_selections if s["key"] == wk1)
+    assert _json.loads(healed["track_paths"]) == [
+        "A/Alb1/01.flac", "A/Alb1/02.flac"]
+    ghost = next(s for s in app._current_selections if "Ghost" in s["key"])
+    assert ghost["track_paths"] is None
+
+
+def test_rules_strip_text(lib):
+    make_album(lib, "A/Alb1", [("Work One", 3)])
+    index = load_library_index(lib)
+
+    app = _FakeApp(index)
+    assert app._rules_strip_text() == "Rules: 0 — playlist is empty"
+
+    app.add("album", "A/Alb1")
+    app.add("track", "A/Alb1/02.flac")        # redundant
+    app.add("album", "Z/Missing")             # orphaned
+    text = app._rules_strip_text()
+    assert text.startswith("Rules: 3 ")
+    assert "1 active" in text
+    assert "1 redundant" in text
+    assert "1 orphaned ⚠" in text
+    assert text.endswith("3 trk")

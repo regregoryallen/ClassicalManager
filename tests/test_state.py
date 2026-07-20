@@ -109,6 +109,62 @@ def test_container_states(lib):
 
 
 # ---------------------------------------------------------------------------
+# Work-integrity expansion mirror (Phase 5)
+# ---------------------------------------------------------------------------
+
+def test_expansion_mirrors_enforce_semantics(lib):
+    make_album(lib, "A/Alb1", [("Work One", 4), ("Work Two", 2)])
+    index = load_library_index(lib)
+
+    rules = [Rule("track", "A/Alb1/02.flac"),
+             Rule("track", "A/Alb1/04.flac", excluded=True)]
+    state = resolve_effective_state(index, rules, work_integrity="enforce")
+
+    assert len(state.included_track_ids) == 1
+    # Work One's remaining tracks expand, EXCEPT the explicit exclusion
+    # (D1); Work Two has no selected track and is untouched.
+    expanded_paths = {index.tracks[tid].relative_path
+                      for tid in state.expanded_track_ids}
+    assert expanded_paths == {"A/Alb1/01.flac", "A/Alb1/03.flac"}
+
+
+def test_expansion_skips_excluded_works_and_respect_mode(lib):
+    make_album(lib, "A/Alb1", [("Work One", 3)])
+    index = load_library_index(lib)
+    wk1 = work_key("A/Alb1", "Work One", 1)
+
+    rules = [Rule("work", wk1, excluded=True),
+             Rule("track", "A/Alb1/02.flac")]
+    state = resolve_effective_state(index, rules, work_integrity="enforce")
+    assert state.expanded_track_ids == set()  # excluded work never expands
+
+    rules = [Rule("track", "A/Alb1/02.flac")]
+    state = resolve_effective_state(index, rules,
+                                    work_integrity="respect_selection")
+    assert state.expanded_track_ids == set()
+    state = resolve_effective_state(index, rules)  # integrity not passed
+    assert state.expanded_track_ids == set()
+
+
+def test_expansion_agrees_with_engine(lib):
+    """included | expanded must equal the enforce-mode engine output."""
+    from music_manager.core.engine import generate_playlist
+
+    make_album(lib, "A/Alb1", [("Work One", 4), ("Work Two", 2)])
+    index = load_library_index(lib)
+
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "track", "A/Alb1/02.flac")
+    add_sel(p, "track", "A/Alb1/04.flac", excluded=True)
+    add_sel(p, "album", "A/Alb1")
+    engine_ids = {rt.track_id for rt in generate_playlist(p).playlist}
+
+    state = resolve_effective_state(index, rules_from_profile(p),
+                                    work_integrity="enforce")
+    assert state.included_track_ids | state.expanded_track_ids == engine_ids
+
+
+# ---------------------------------------------------------------------------
 # Rule classification
 # ---------------------------------------------------------------------------
 

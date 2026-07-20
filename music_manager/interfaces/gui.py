@@ -1991,10 +1991,15 @@ class App:
     def _add_selection(self, level, key, excluded=False, pin_position=None,
                        track_paths=None, refresh=True):
         """Add a selection to the in-memory list."""
-        # Skip if this exact (level, key) already exists with the same excluded state
+        # At most one selection may exist per (level, key). Skip if this
+        # exact state already exists; otherwise remove the stale opposite-
+        # state entry so it doesn't linger and get picked up ahead of this
+        # one by _find_selection or disagree with resolve_selections.
         existing = self._find_selection(level, key)
-        if existing is not None and existing["excluded"] == excluded:
-            return
+        if existing is not None:
+            if existing["excluded"] == excluded:
+                return
+            self._current_selections.remove(existing)
 
         from music_manager.core.selection import display_name_for_selection
         display_name = display_name_for_selection(self.active_library, level, key)
@@ -3222,6 +3227,13 @@ class App:
                     # Direct add → remove it and clean up children
                     self._current_selections.remove(existing)
                     self._cascade_remove_children(level, key)
+                    # If still covered by a broader parent selection, one
+                    # toggle should hide it — add an exclusion rather than
+                    # leaving it visible via the parent (which would take a
+                    # second toggle to clear).
+                    if self._is_item_selected(level, key):
+                        self._add_selection(level, key, excluded=True,
+                                            refresh=False)
             elif self._is_item_selected(level, key):
                 # Included via parent — add exception
                 self._add_selection(level, key, excluded=True, refresh=False)
@@ -3292,8 +3304,11 @@ class App:
                 # Direct add — remove it and clean up children
                 self._current_selections.remove(existing)
                 self._cascade_remove_children(level, key)
-            elif not existing and self._is_item_selected(level, key):
-                # Included via parent — add exception
+            # After dropping any direct add, the item may still be covered by
+            # a broader parent selection (e.g. its album was added). Removing
+            # only the direct add would leave it visible via the parent, so
+            # add an explicit exclusion to actually take it out.
+            if self._is_item_selected(level, key):
                 self._add_selection(level, key, excluded=True, refresh=False)
 
         with self._busy():

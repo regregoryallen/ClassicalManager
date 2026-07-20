@@ -23,10 +23,11 @@ def test_album_add_selects_all_tracks(lib):
     p = make_profile(lib)
     add_sel(p, "album", "A/Alb1")
 
-    selected, admission, excluded_works = resolve_selections(p)
-    assert selected == track_ids(album)
-    assert all(v.startswith("album:") for v in admission.values())
-    assert excluded_works == set()
+    res = resolve_selections(p)
+    assert res.track_ids == track_ids(album)
+    assert all(v.startswith("album:") for v in res.admission_map.values())
+    assert res.excluded_work_keys == set()
+    assert res.excluded_track_paths == set()
 
 
 def test_album_add_with_work_except(lib):
@@ -35,9 +36,9 @@ def test_album_add_with_work_except(lib):
     add_sel(p, "album", "A/Alb1")
     add_sel(p, "work", work_key("A/Alb1", "Work Two", 2), excluded=True)
 
-    selected, _, excluded_works = resolve_selections(p)
-    assert selected == track_ids(album, "Work One")
-    assert excluded_works == {work_key("A/Alb1", "Work Two", 2)}
+    res = resolve_selections(p)
+    assert res.track_ids == track_ids(album, "Work One")
+    assert res.excluded_work_keys == {work_key("A/Alb1", "Work Two", 2)}
 
 
 def test_album_add_with_track_except(lib):
@@ -46,9 +47,10 @@ def test_album_add_with_track_except(lib):
     add_sel(p, "album", "A/Alb1")
     add_sel(p, "track", "A/Alb1/02.flac", excluded=True)
 
-    selected, _, _ = resolve_selections(p)
-    assert len(selected) == 2
-    assert selected < track_ids(album)
+    res = resolve_selections(p)
+    assert len(res.track_ids) == 2
+    assert res.track_ids < track_ids(album)
+    assert res.excluded_track_paths == {"A/Alb1/02.flac"}
 
 
 def test_track_add_inside_excluded_work(lib):
@@ -59,10 +61,10 @@ def test_track_add_inside_excluded_work(lib):
     add_sel(p, "work", work_key("A/Alb1", "Work One", 1), excluded=True)
     add_sel(p, "track", "A/Alb1/02.flac")
 
-    selected, admission, _ = resolve_selections(p)
-    assert len(selected) == 1
-    (tid,) = selected
-    assert admission[tid] == "track:A/Alb1/02.flac"
+    res = resolve_selections(p)
+    assert len(res.track_ids) == 1
+    (tid,) = res.track_ids
+    assert res.admission_map[tid] == "track:A/Alb1/02.flac"
 
 
 def test_track_add_inside_excluded_album_is_included_F2(lib):
@@ -76,8 +78,7 @@ def test_track_add_inside_excluded_album_is_included_F2(lib):
     add_sel(p, "album", "A/Alb1", excluded=True)
     add_sel(p, "track", "A/Alb1/03.flac")
 
-    selected, _, _ = resolve_selections(p)
-    assert len(selected) == 1
+    assert len(resolve_selections(p).track_ids) == 1
 
 
 def test_work_add_inside_excluded_album_is_included_F2(lib):
@@ -86,8 +87,7 @@ def test_work_add_inside_excluded_album_is_included_F2(lib):
     add_sel(p, "album", "A/Alb1", excluded=True)
     add_sel(p, "work", work_key("A/Alb1", "Work Two", 2))
 
-    selected, _, _ = resolve_selections(p)
-    assert selected == track_ids(album, "Work Two")
+    assert resolve_selections(p).track_ids == track_ids(album, "Work Two")
 
 
 def test_album_except_alone_is_noop_F5(lib):
@@ -95,18 +95,17 @@ def test_album_except_alone_is_noop_F5(lib):
     p = make_profile(lib)
     add_sel(p, "album", "A/Alb1", excluded=True)
 
-    selected, _, _ = resolve_selections(p)
-    assert selected == set()
+    assert resolve_selections(p).track_ids == set()
 
 
 def test_empty_selections_yield_empty_set_F4(lib):
     make_album(lib, "A/Alb1", [("Work One", 3)])
     p = make_profile(lib)
 
-    selected, admission, excluded_works = resolve_selections(p)
-    assert selected == set()
-    assert admission == {}
-    assert excluded_works == set()
+    res = resolve_selections(p)
+    assert res.track_ids == set()
+    assert res.admission_map == {}
+    assert res.excluded_work_keys == set()
 
 
 def test_unknown_keys_resolve_to_nothing(lib):
@@ -116,8 +115,7 @@ def test_unknown_keys_resolve_to_nothing(lib):
     add_sel(p, "work", work_key("A/Alb1", "No Such Work", 9))
     add_sel(p, "track", "A/Alb1/99.flac")
 
-    selected, _, _ = resolve_selections(p)
-    assert selected == set()
+    assert resolve_selections(p).track_ids == set()
 
 
 def test_resolve_key_to_track_ids_levels(lib):

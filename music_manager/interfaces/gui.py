@@ -1374,7 +1374,9 @@ class App:
         with self._busy():
             rows = []
             for prof in profiles:
-                selected_ids, _ = resolve_selections(prof)
+                # V2 bug: unpacked the old 3-tuple into 2 names (crashed
+                # for any profile with selections).
+                selected_ids = resolve_selections(prof).track_ids
 
                 albums_set = set()
                 works_set = set()
@@ -3618,7 +3620,7 @@ class App:
         if not profile:
             return set()
         try:
-            track_ids, _, _ = resolve_selections(profile)
+            track_ids = resolve_selections(profile).track_ids
         finally:
             profile.delete_instance(recursive=True)
         return track_ids

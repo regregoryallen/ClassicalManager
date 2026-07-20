@@ -3,10 +3,18 @@
 Provides stable text key generation for entities, resolves profile
 selections to track ID sets using specificity rules, and reconciles
 orphaned work-level selections after library rescans.
+
+V3 additions: this module is the single authority on selection
+semantics.  The per-track decision function (`_decide_track`) is shared
+by the engine-facing resolver (`resolve_selections`) and the GUI-facing
+bulk resolver (`resolve_effective_state`), so display and playlist
+output agree by construction.  `classify_selections` grades each rule
+(active / redundant / no_op / orphaned) for the Rules window.
 """
 
 import json
 import logging
+from dataclasses import dataclass, field
 
 from music_manager.core.database import (
     Album, Composer, ProfileSelection, Track, Work,
@@ -135,35 +143,46 @@ def resolve_key_to_track_ids(library, level, key):
 # Selection → track set resolution (specificity model)
 # ---------------------------------------------------------------------------
 
-def resolve_selections(profile):
-    """Resolve a profile's selections to a set of track IDs.
+@dataclass
+class SelectionResult:
+    """Result of resolving a profile's selections.
 
-    Algorithm:
-      1. Load all ProfileSelection rows.
-      2. Build lookup dicts by level.
-      3. Expand all adds (excluded=False) to candidate track IDs.
-      4. For each candidate, find the most specific selection.
-         Priority: track > work > album.
-      5. If most specific is excluded=True → track is OUT.
-         If most specific is excluded=False → track is IN.
-         If no selection matches → track is OUT (pure additive).
+    Attribute access only — V2's positional 3-tuple caused a silent
+    unpacking bug in Profile Summary.
+    """
+
+    track_ids: set[int] = field(default_factory=set)
+    admission_map: dict[int, str] = field(default_factory=dict)
+    excluded_work_keys: set[str] = field(default_factory=set)
+    excluded_track_paths: set[str] = field(default_factory=set)
+
+
+def _decide_track(rel_path, work_key, album_key,
+                  track_sel, work_sel, album_sel):
+    """The specificity rule: most specific matching selection wins.
+
+    Args:
+        rel_path/work_key/album_key: the track's own keys (work_key None
+            for workless tracks).
+        *_sel: dicts of key → excluded for each level.
 
     Returns:
-        (set of track IDs, dict mapping track_id → admission reason,
-         set of excluded work keys)
+        (included, governing) where included is True/False/None
+        (None = no selection matches → out, pure additive) and governing
+        is the (level, key) of the deciding selection, or None.
     """
-    library = profile.library
-    selections = list(
-        ProfileSelection.select().where(ProfileSelection.profile == profile)
-    )
-    if not selections:
-        return set(), {}, set()
+    if rel_path in track_sel:
+        return (not track_sel[rel_path]), ("track", rel_path)
+    if work_key is not None and work_key in work_sel:
+        return (not work_sel[work_key]), ("work", work_key)
+    if album_key in album_sel:
+        return (not album_sel[album_key]), ("album", album_key)
+    return None, None
 
-    # Build lookup dicts: key → excluded
-    album_sel = {}    # album_key → excluded
-    work_sel = {}     # composite_work_key → excluded
-    track_sel = {}    # relative_path → excluded
 
+def _selection_maps(selections):
+    """Split selections into per-level key → excluded dicts."""
+    album_sel, work_sel, track_sel = {}, {}, {}
     for s in selections:
         if s.level == "album":
             album_sel[s.key] = s.excluded
@@ -171,6 +190,28 @@ def resolve_selections(profile):
             work_sel[s.key] = s.excluded
         elif s.level == "track":
             track_sel[s.key] = s.excluded
+    return album_sel, work_sel, track_sel
+
+
+def resolve_selections(profile) -> SelectionResult:
+    """Resolve a profile's selections to a set of track IDs.
+
+    Algorithm:
+      1. Load all ProfileSelection rows.
+      2. Build lookup dicts by level.
+      3. Expand all adds (excluded=False) to candidate track IDs.
+      4. Decide each candidate via `_decide_track` (track > work > album).
+         No matching selection → OUT (pure additive; empty profile is an
+         empty playlist — decision D2).
+    """
+    library = profile.library
+    selections = list(
+        ProfileSelection.select().where(ProfileSelection.profile == profile)
+    )
+    if not selections:
+        return SelectionResult()
+
+    album_sel, work_sel, track_sel = _selection_maps(selections)
 
     # Expand all adds to candidate track IDs
     candidate_ids = set()
@@ -184,10 +225,13 @@ def resolve_selections(profile):
         if not excluded:
             candidate_ids |= _tracks_for_track_key(library, key)
 
-    excluded_work_keys = {k for k, exc in work_sel.items() if exc}
+    result = SelectionResult(
+        excluded_work_keys={k for k, exc in work_sel.items() if exc},
+        excluded_track_paths={k for k, exc in track_sel.items() if exc},
+    )
 
     if not candidate_ids:
-        return set(), {}, excluded_work_keys
+        return result
 
     # Batch-load all candidate tracks with relations for specificity checks
     tracks = list(
@@ -198,41 +242,22 @@ def resolve_selections(profile):
         .where(Track.id.in_(candidate_ids))
     )
 
-    selected = set()
-    admission_map = {}
-
     for t in tracks:
-        # Check from most specific to least specific
-        # Track level
-        if t.relative_path in track_sel:
-            if not track_sel[t.relative_path]:
-                selected.add(t.id)
-                admission_map[t.id] = f"track:{t.relative_path}"
-            continue
-
-        # Work level
+        wk = None
         if t.work_id:
             wk = COMPOSITE_SEP.join([
                 t.album.album_key,
                 t.work.work_name,
                 str(t.work.work_sequence) if t.work.work_sequence is not None else "",
             ])
-            if wk in work_sel:
-                if not work_sel[wk]:
-                    selected.add(t.id)
-                    admission_map[t.id] = f"work:{wk}"
-                continue
+        included, governing = _decide_track(
+            t.relative_path, wk, t.album.album_key,
+            track_sel, work_sel, album_sel)
+        if included:
+            result.track_ids.add(t.id)
+            result.admission_map[t.id] = f"{governing[0]}:{governing[1]}"
 
-        # Album level
-        if t.album.album_key in album_sel:
-            if not album_sel[t.album.album_key]:
-                selected.add(t.id)
-                admission_map[t.id] = f"album:{t.album.album_key}"
-            continue
-
-        # No matching selection — track stays out
-
-    return selected, admission_map, excluded_work_keys
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +289,318 @@ def display_name_for_selection(library, level, key):
         return track.title if track else f"(unknown track: {key})"
 
     return key
+
+
+# ---------------------------------------------------------------------------
+# Library index — bulk snapshot for GUI display and rule classification
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TrackInfo:
+    id: int
+    relative_path: str
+    title: str
+    disc_number: int
+    track_number: int
+    duration_ms: int
+    album_id: int
+    work_id: int | None
+    album_key: str
+    work_key: str | None
+    composer_name: str
+    genre: str
+    performer: str
+    conductor: str
+    ensemble: str
+
+
+@dataclass
+class WorkInfo:
+    id: int
+    key: str
+    name: str
+    sequence: int | None
+    source: str
+    album_id: int
+    composer_name: str
+    track_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class AlbumInfo:
+    id: int
+    key: str
+    title: str
+    album_artist: str
+    year: int | None
+    genre: str = ""  # representative: first non-empty track genre
+    work_ids: list[int] = field(default_factory=list)
+    track_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class LibraryIndex:
+    """In-memory snapshot of a library's entities and key lookups.
+
+    Built with four queries regardless of library size; everything else
+    downstream (effective state, tree display, rule classification) is
+    pure Python over this index.
+    """
+
+    albums: dict[int, AlbumInfo] = field(default_factory=dict)
+    works: dict[int, WorkInfo] = field(default_factory=dict)
+    tracks: dict[int, TrackInfo] = field(default_factory=dict)
+    album_id_by_key: dict[str, int] = field(default_factory=dict)
+    work_id_by_key: dict[str, int] = field(default_factory=dict)
+    track_id_by_path: dict[str, int] = field(default_factory=dict)
+
+    def track_ids_for_rule(self, level, key):
+        """Track IDs a rule's key covers, or None if the key is orphaned."""
+        if level == "album":
+            aid = self.album_id_by_key.get(key)
+            return list(self.albums[aid].track_ids) if aid is not None else None
+        if level == "work":
+            wid = self.work_id_by_key.get(key)
+            return list(self.works[wid].track_ids) if wid is not None else None
+        if level == "track":
+            tid = self.track_id_by_path.get(key)
+            return [tid] if tid is not None else None
+        return None
+
+
+def load_library_index(library) -> LibraryIndex:
+    """Build a LibraryIndex with four bulk queries."""
+    index = LibraryIndex()
+
+    composer_names = {
+        c.id: c.name
+        for c in Composer.select(Composer.id, Composer.name)
+        .where(Composer.library == library)
+    }
+
+    for a in Album.select().where(Album.library == library):
+        index.albums[a.id] = AlbumInfo(
+            id=a.id, key=a.album_key, title=a.title,
+            album_artist=a.album_artist or "", year=a.year)
+        index.album_id_by_key[a.album_key] = a.id
+
+    for w in (Work.select(Work, Album.id)
+              .join(Album)
+              .where(Album.library == library)):
+        album_info = index.albums[w.album_id]
+        wkey = COMPOSITE_SEP.join([
+            album_info.key, w.work_name,
+            str(w.work_sequence) if w.work_sequence is not None else "",
+        ])
+        index.works[w.id] = WorkInfo(
+            id=w.id, key=wkey, name=w.work_name,
+            sequence=w.work_sequence, source=w.work_source,
+            album_id=w.album_id,
+            composer_name=composer_names.get(w.composer_id, ""))
+        index.work_id_by_key[wkey] = w.id
+        album_info.work_ids.append(w.id)
+
+    for t in Track.select().where(Track.library == library):
+        album_info = index.albums[t.album_id]
+        work_info = index.works.get(t.work_id) if t.work_id else None
+        index.tracks[t.id] = TrackInfo(
+            id=t.id, relative_path=t.relative_path, title=t.title,
+            disc_number=t.disc_number, track_number=t.track_number,
+            duration_ms=t.duration_ms or 0,
+            album_id=t.album_id, work_id=t.work_id,
+            album_key=album_info.key,
+            work_key=work_info.key if work_info else None,
+            composer_name=composer_names.get(t.composer_id, ""),
+            genre=t.genre or "", performer=t.performer or "",
+            conductor=t.conductor or "", ensemble=t.ensemble or "")
+        index.track_id_by_path[t.relative_path] = t.id
+        album_info.track_ids.append(t.id)
+        if work_info:
+            work_info.track_ids.append(t.id)
+        if not album_info.genre and t.genre:
+            album_info.genre = t.genre
+
+    # Natural ordering within containers
+    def _order(tid):
+        ti = index.tracks[tid]
+        return (ti.disc_number, ti.track_number)
+
+    for a in index.albums.values():
+        a.track_ids.sort(key=_order)
+        a.work_ids.sort(key=lambda wid: (index.works[wid].sequence or 0))
+    for w in index.works.values():
+        w.track_ids.sort(key=_order)
+
+    return index
+
+
+# ---------------------------------------------------------------------------
+# Effective state — what the engine WILL do, per entity, for display
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Rule:
+    """A selection rule decoupled from storage (DB row or GUI dict)."""
+
+    level: str
+    key: str
+    excluded: bool = False
+    pin_position: int | None = None
+    track_paths: str | None = None
+
+
+def rules_from_profile(profile) -> list[Rule]:
+    return [
+        Rule(level=s.level, key=s.key, excluded=s.excluded,
+             pin_position=s.pin_position, track_paths=s.track_paths)
+        for s in ProfileSelection.select().where(
+            ProfileSelection.profile == profile)
+    ]
+
+
+@dataclass
+class EffectiveState:
+    """Per-entity effective inclusion, derived from the engine's own rules.
+
+    States: 'included' (every track in), 'partial' (some in),
+    'excluded' (explicit EXCEPT on the entity, nothing in),
+    'none' (untouched).  Track states have no 'partial'.
+    """
+
+    included_track_ids: set[int] = field(default_factory=set)
+    governing: dict[int, tuple[str, str]] = field(default_factory=dict)
+    track_states: dict[int, str] = field(default_factory=dict)
+    work_states: dict[int, str] = field(default_factory=dict)
+    album_states: dict[int, str] = field(default_factory=dict)
+
+
+def resolve_effective_state(index: LibraryIndex, rules) -> EffectiveState:
+    """Compute effective inclusion for every entity, in pure Python.
+
+    Uses the same `_decide_track` as `resolve_selections`, so tree
+    display and playlist membership cannot disagree (V3 fix for F1/F2).
+    """
+    album_sel, work_sel, track_sel = _selection_maps(rules)
+    state = EffectiveState()
+
+    for t in index.tracks.values():
+        included, governing = _decide_track(
+            t.relative_path, t.work_key, t.album_key,
+            track_sel, work_sel, album_sel)
+        if included:
+            state.included_track_ids.add(t.id)
+            state.governing[t.id] = governing
+            state.track_states[t.id] = "included"
+        elif t.relative_path in track_sel:  # explicit track EXCEPT
+            state.governing[t.id] = ("track", t.relative_path)
+            state.track_states[t.id] = "excluded"
+        else:
+            state.track_states[t.id] = "none"
+
+    def container_state(track_ids, explicit_except):
+        n_in = sum(1 for tid in track_ids
+                   if tid in state.included_track_ids)
+        if track_ids and n_in == len(track_ids):
+            return "included"
+        if n_in > 0:
+            return "partial"
+        if explicit_except:
+            return "excluded"
+        return "none"
+
+    for w in index.works.values():
+        state.work_states[w.id] = container_state(
+            w.track_ids, work_sel.get(w.key) is True)
+    for a in index.albums.values():
+        state.album_states[a.id] = container_state(
+            a.track_ids, album_sel.get(a.key) is True)
+
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Rule classification — feeds the Rules window / health strip
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RuleStatus:
+    """Classification of one rule against the current library index.
+
+    status:
+      'active'    — removing the rule would change the playlist (or it
+                    carries a pin).
+      'redundant' — an ADD whose removal changes nothing.
+      'no_op'     — an EXCEPT whose removal changes nothing (includes all
+                    album-level EXCEPTs with no covering ADD — F5).
+      'orphaned'  — the key resolves to nothing in this library.
+    """
+
+    rule: Rule
+    status: str
+    governs: int = 0            # tracks whose deciding rule is this one
+    covers: int = 0             # tracks the key resolves to
+    needs_breadcrumbs: bool = False  # work-level ADD without track_paths
+
+
+def classify_selections(index: LibraryIndex, rules) -> list[RuleStatus]:
+    """Grade every rule. Order of the input is preserved."""
+    album_sel, work_sel, track_sel = _selection_maps(rules)
+    maps_by_level = {"album": album_sel, "work": work_sel,
+                     "track": track_sel}
+
+    # One decision pass over all tracks: membership + governing rule.
+    included = set()
+    governs_count: dict[tuple[str, str], int] = {}
+    governed_tracks: dict[tuple[str, str], list[TrackInfo]] = {}
+    for t in index.tracks.values():
+        is_in, governing = _decide_track(
+            t.relative_path, t.work_key, t.album_key,
+            track_sel, work_sel, album_sel)
+        if is_in:
+            included.add(t.id)
+        if governing is not None:
+            governs_count[governing] = governs_count.get(governing, 0) + 1
+            governed_tracks.setdefault(governing, []).append(t)
+
+    results = []
+    for rule in rules:
+        ident = (rule.level, rule.key)
+        covered = index.track_ids_for_rule(rule.level, rule.key)
+
+        if covered is None:
+            results.append(RuleStatus(rule=rule, status="orphaned"))
+            continue
+
+        governs = governs_count.get(ident, 0)
+        needs_bc = (rule.level == "work" and not rule.excluded
+                    and not rule.track_paths)
+
+        # Would removing this rule change any track's membership?
+        # Only tracks it governs can change; re-decide those without it.
+        changes_outcome = False
+        if governs:
+            level_map = maps_by_level[rule.level]
+            saved = level_map.pop(rule.key)
+            for t in governed_tracks.get(ident, ()):
+                was_in = t.id in included
+                now_in, _ = _decide_track(
+                    t.relative_path, t.work_key, t.album_key,
+                    track_sel, work_sel, album_sel)
+                if bool(now_in) != was_in:
+                    changes_outcome = True
+                    break
+            level_map[rule.key] = saved
+
+        if changes_outcome or rule.pin_position is not None:
+            status = "active"
+        else:
+            status = "no_op" if rule.excluded else "redundant"
+
+        results.append(RuleStatus(
+            rule=rule, status=status, governs=governs,
+            covers=len(covered), needs_breadcrumbs=needs_bc))
+
+    return results
 
 
 # ---------------------------------------------------------------------------

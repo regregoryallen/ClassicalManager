@@ -1,10 +1,8 @@
-"""Characterization tests for the playlist engine (V3-PLAN Phase 0).
+"""Tests for the playlist engine.
 
-Pins CURRENT behavior, including:
-  - F3: work_integrity=enforce re-adds tracks carrying an explicit
-    track-level EXCEPT (expansion only checks membership, not exclusions).
-    This assertion is expected to FLIP in Phase 1 if decision D1 lands as
-    recommended — update the test deliberately at that point.
+Phase 0 pinned V2 behavior; Phase 1 deliberately changed one semantic:
+  - F3/D1: work_integrity=enforce now HONORS explicit track-level
+    EXCEPTs during expansion (V2 silently re-added them).
 """
 
 from music_manager.core.engine import (
@@ -57,11 +55,11 @@ def test_enforce_does_not_expand_explicitly_excluded_work(lib):
     assert len(result.playlist) == 1
 
 
-def test_enforce_readds_track_level_excepts_F3(lib):
-    """F3 characterization (CURRENT behavior — flips with D1 in Phase 1).
+def test_enforce_honors_track_level_excepts_D1(lib):
+    """D1 (Phase 1 behavior change; V2 re-added these tracks — F3).
 
-    A track EXCEPT inside an included work is silently re-added by
-    enforce-mode expansion.
+    A track EXCEPT inside an included work stays out even in enforce
+    mode: specificity wins over expansion.
     """
     album = make_album(lib, "A/Alb1", [("Work One", 4)])
     p = make_profile(lib, work_integrity="enforce")
@@ -69,7 +67,26 @@ def test_enforce_readds_track_level_excepts_F3(lib):
     add_sel(p, "track", "A/Alb1/02.flac", excluded=True)
 
     result = generate_playlist(p)
-    assert {rt.track_id for rt in result.playlist} == track_ids(album)
+    got = {rt.track_id for rt in result.playlist}
+    assert len(got) == 3
+    assert got < track_ids(album)
+    excluded_id = next(
+        iter(track_ids(album) - got))
+    assert excluded_id not in got
+
+
+def test_enforce_expansion_still_fills_unselected_tracks_D1(lib):
+    """D1 must not break normal expansion: a partial ADD still expands to
+    the full work; only explicit EXCEPTs are honored."""
+    album = make_album(lib, "A/Alb1", [("Work One", 4)])
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "track", "A/Alb1/02.flac")
+    add_sel(p, "track", "A/Alb1/04.flac", excluded=True)
+
+    result = generate_playlist(p)
+    got = {rt.track_id for rt in result.playlist}
+    assert len(got) == 3  # tracks 1-3; explicit EXCEPT on 4 holds
+    assert got < track_ids(album)
 
 
 def test_respect_selection_emits_exactly_what_was_selected(lib):

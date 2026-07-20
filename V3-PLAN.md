@@ -3,7 +3,16 @@
 ## Status (keep this section current)
 
 - Branch point: tag `v2.0` on `master` (2026-07-19). All V3 work happens on branch `v3`.
-- Pending decisions: **D1 and D2 must be answered by the user before Phase 1 step 2.**
+- Decisions resolved 2026-07-19: **D1 = enforce honors track-level EXCEPTs**
+  (behavior change). **D2 = empty selection → empty playlist** (fix labels, engine
+  unchanged). **D3 = duplicates are a hard stop**: report them and require a fix
+  before adding the unique index — do NOT fall back to a non-unique index.
+  **D4 = deferred**: present the Year/work_source relocation options in detail when
+  Phase 5 reaches that step, before acting.
+- Found during Phase 1: V2's Profile Summary is broken —
+  `gui.py:1377` unpacks `resolve_selections()`'s 3-tuple into 2 names
+  (ValueError for any profile with selections). Fixed by the Phase 1 switch to a
+  `SelectionResult` object.
 - [x] Phase 0 — Test safety net — **done 2026-07-19** (40 tests green:
   `tests/test_selection.py`, `test_engine.py`, `test_reconcile.py`,
   `test_overrides.py`; fixtures/factories in `tests/conftest.py`;
@@ -11,7 +20,22 @@
   `venv/bin/python -m pytest`). F2/F3/F4/F5 oddities are pinned as
   characterization tests with finding-ID markers — the F3 assertion in
   `test_enforce_readds_track_level_excepts_F3` flips when D1 lands.
-- [ ] Phase 1 — Core effective-state engine
+- [x] Phase 1 — Core effective-state engine — **done 2026-07-19** (49 tests green).
+  Delivered in `selection.py`: `SelectionResult` (attribute-based; retires the
+  positional tuple that broke Profile Summary), shared `_decide_track`,
+  `load_library_index` (4 bulk queries → `LibraryIndex`), `Rule` /
+  `rules_from_profile`, `resolve_effective_state` (per-entity
+  included/partial/excluded/none for Phase 4 trees), `classify_selections`
+  (active/redundant/no_op/orphaned + governs/covers counts + needs_breadcrumbs,
+  for Phase 5 Rules window). Engine: **D1 implemented** — enforce expansion now
+  skips explicit track EXCEPTs; `_apply_work_integrity` batched to 3 queries;
+  `work_sequence` carried on `ResolvedTrack` (album-mode N+1 gone);
+  `find_unused_tracks` bulk-grouped. GUI call sites updated
+  (`gui.py` Profile Summary bug fixed, similarity resolver). The
+  `overridden_by_integrity` status became unnecessary once D1 landed — enforce
+  no longer overrides track EXCEPTs, so classify has no such case.
+  Note for Phase 4: `resolve_effective_state`/`classify_selections` take `Rule`
+  objects — build them from the GUI's `_current_selections` dicts.
 - [ ] Phase 2 — Data layer hardening
 - [ ] Phase 3 — Mechanical GUI decomposition
 - [ ] Phase 4 — Builder performance + shared-state adoption

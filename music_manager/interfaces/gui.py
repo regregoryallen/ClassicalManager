@@ -3733,25 +3733,33 @@ class App:
 
         result_tree = ttk.Treeview(
             tree_frame,
-            columns=("composer", "album", "distance", "volatility"),
+            columns=("composer", "album", "match", "agreement", "volatility"),
             show="tree headings", selectmode="extended")
         result_tree.heading("#0", text="Title")
         result_tree.heading("composer", text="Composer")
         result_tree.heading("album", text="Album")
-        result_tree.heading("distance", text="Distance")
+        result_tree.heading("match", text="Match")
+        result_tree.heading("agreement", text="Agreement")
         result_tree.heading("volatility", text="Volatility")
         result_tree.column("#0", width=220)
         result_tree.column("composer", width=140)
-        result_tree.column("album", width=180)
-        result_tree.column("distance", width=70)
+        result_tree.column("album", width=160)
+        result_tree.column("match", width=60)
+        result_tree.column("agreement", width=70)
         result_tree.column("volatility", width=70)
         result_tree.pack(fill="both", expand=True)
+        result_tree.tag_configure("match_close", foreground="#2d7d46")
+        result_tree.tag_configure("match_loose", foreground="#c98a1f")
+        result_tree.tag_configure("match_weak", foreground="#a03a3a")
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical",
                                command=result_tree.yview)
         result_tree.configure(yscrollcommand=scroll.set)
         scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
                      in_=result_tree)
+
+        result_tree.bind("<Button-3>", lambda e: self._sim_result_context_menu(
+            e, result_tree, sim_state))
 
         # -- Bottom: action buttons + status --
         bot_frame = ctk.CTkFrame(popup, fg_color="transparent")
@@ -3824,12 +3832,23 @@ class App:
         result_tree.delete(*result_tree.get_children())
         sim_state["result_map"].clear()
         for r in results:
+            match_pct = r.get("match_pct")
+            if match_pct is None:
+                tag = "match_loose"
+            elif match_pct >= 70:
+                tag = "match_close"
+            elif match_pct >= 40:
+                tag = "match_loose"
+            else:
+                tag = "match_weak"
             iid = result_tree.insert(
                 "", "end", text=r["title"],
+                tags=(tag,),
                 values=(
                     r["composer"],
                     r["album"],
-                    f"{r['distance']:.3f}",
+                    f"{match_pct:.0f}%" if match_pct is not None else "",
+                    f"{r['agreement']}/{r['seed_count']}",
                     f"{r['volatility']:.3f}" if r["volatility"] is not None else "",
                 ))
             sim_state["result_map"][iid] = r
@@ -3876,6 +3895,29 @@ class App:
         remaining = len(result_tree.get_children())
         sim_state["status_label"].configure(
             text=f"{added} accepted, {remaining} remaining")
+
+    def _sim_result_context_menu(self, event, result_tree, sim_state):
+        """Right-click context menu on the Find Similar results tree."""
+        iid = result_tree.identify_row(event.y)
+        if not iid:
+            return
+        if iid not in result_tree.selection():
+            result_tree.selection_set(iid)
+
+        r = sim_state["result_map"].get(iid)
+        if not r:
+            return
+
+        from music_manager.core.database import Track
+        track = Track.get_by_id(r["track_id"])
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Play",
+                         command=lambda: self._play_track(track.id))
+        if track.work_id:
+            menu.add_command(label="Details...",
+                             command=lambda: self._show_work_details(track.work_id))
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _sim_re_search(self, result_tree, sim_state, limit_var, vol_var,
                        vol_enabled, blend_var):
@@ -4725,6 +4767,13 @@ class App:
                       .order_by(Track.disc_number, Track.track_number))
         composer_name = work.composer.name if work.composer_id else ""
 
+        from music_manager.core.similarity import TrackAnalysis
+        volatility_by_track = {
+            ta.track_id: ta.volatility for ta in
+            TrackAnalysis.select(TrackAnalysis.track, TrackAnalysis.volatility)
+            .where(TrackAnalysis.track.in_([t.id for t in tracks]))
+        }
+
         popup = tk.Toplevel(self.root)
         popup.title(f"Details: {work.work_name}")
         popup.transient(self.root)
@@ -4772,6 +4821,9 @@ class App:
             _add("    MB Recording", t.musicbrainz_recording_id or "")
             if t.movement_number is not None:
                 _add("    Movement #", t.movement_number)
+            volatility = volatility_by_track.get(t.id)
+            _add("    Volatility", f"{volatility:.3f}" if volatility is not None
+                 else "not analyzed")
 
         text.configure(state="disabled")
 

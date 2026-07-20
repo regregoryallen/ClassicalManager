@@ -121,19 +121,24 @@ class SimilarityPopup:
 
         self.result_tree = ttk.Treeview(
             right,
-            columns=("composer", "album", "distance", "volatility"),
+            columns=("composer", "album", "match", "agreement", "volatility"),
             show="tree headings", selectmode="extended")
         self.result_tree.heading("#0", text="Title")
         self.result_tree.heading("composer", text="Composer")
         self.result_tree.heading("album", text="Album")
-        self.result_tree.heading("distance", text="Distance")
+        self.result_tree.heading("match", text="Match")
+        self.result_tree.heading("agreement", text="Agreement")
         self.result_tree.heading("volatility", text="Volatility")
         self.result_tree.column("#0", width=220)
         self.result_tree.column("composer", width=140)
-        self.result_tree.column("album", width=150)
-        self.result_tree.column("distance", width=70)
+        self.result_tree.column("album", width=130)
+        self.result_tree.column("match", width=60)
+        self.result_tree.column("agreement", width=70)
         self.result_tree.column("volatility", width=70)
         self.result_tree.pack(fill="both", expand=True, padx=8, pady=2)
+        self.result_tree.tag_configure("match_close", foreground="#2d7d46")
+        self.result_tree.tag_configure("match_loose", foreground="#c98a1f")
+        self.result_tree.tag_configure("match_weak", foreground="#a03a3a")
 
         # Scrollbar
         scroll = ttk.Scrollbar(right, orient="vertical",
@@ -410,12 +415,23 @@ class SimilarityPopup:
         self._result_track_map.clear()
 
         for r in self.results:
+            match_pct = r.get("match_pct")
+            if match_pct is None:
+                tag = "match_loose"
+            elif match_pct >= 70:
+                tag = "match_close"
+            elif match_pct >= 40:
+                tag = "match_loose"
+            else:
+                tag = "match_weak"
             iid = self.result_tree.insert(
                 "", "end", text=r["title"],
+                tags=(tag,),
                 values=(
                     r["composer"],
                     r["album"],
-                    f"{r['distance']:.3f}",
+                    f"{match_pct:.0f}%" if match_pct is not None else "",
+                    f"{r['agreement']}/{r['seed_count']}",
                     f"{r['volatility']:.3f}" if r["volatility"] is not None else "",
                 ))
             self._result_track_map[iid] = r["track_id"]

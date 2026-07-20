@@ -355,6 +355,14 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
         agreement_norm = agreement / len(seed_vectors)
         score = (1.0 - blend) * nearest + blend * nearest * (1.0 - agreement_norm)
 
+        # Match %: nearest distance expressed relative to how tightly the
+        # seeds cluster among themselves (`threshold`). A candidate at or
+        # inside that spread scores 100; it decays smoothly past that, so
+        # the number stays meaningful across searches with looser or
+        # tighter seed sets instead of being a raw, uncalibrated distance.
+        ratio = nearest / threshold if threshold > 1e-9 else nearest
+        match_pct = round(100.0 * math.exp(-max(0.0, ratio - 1.0)), 1)
+
         track = a.track
         results.append({
             "track_id": track.id,
@@ -362,8 +370,10 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
             "composer": track.composer.name if track.composer else "",
             "album": track.album.title if track.album else "",
             "distance": round(nearest, 3),
+            "match_pct": match_pct,
             "volatility": round(a.volatility, 3) if a.volatility is not None else None,
             "agreement": agreement,
+            "seed_count": len(seed_vectors),
             "score": round(score, 3),
         })
 

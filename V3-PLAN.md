@@ -117,6 +117,24 @@
   Deliberately skipped (documented, not needed): DB uniqueness on
   profile names (GUI enforces a stricter global rule) and on Override match
   keys (code-enforced upsert).
+- **Incident 2026-07-20 (during Phase 7 verification):** overnight full rescan
+  on the prod DB; the workstation suspended ~02:30 (webhook poll gap proves it);
+  the CIFS `soft` mount returned disk-I/O errors on resume. Catalog rebuilt
+  fine (integrity ok, 5,902 tracks, profiles intact) but **all similarity
+  analyses were lost** — the F8 snapshot lived only in process RAM and the
+  restore step fell inside the crash window. No backup contains analyses
+  (db_bkp copy predates the table); user must re-run analysis (it is
+  resumable). Hardening landed same day:
+  (a) **durable snapshot** — `track_analysis_snapshot` table written before
+  the delete, consumed only on successful restore, retried by any later scan
+  (full or incremental); snapshot failure aborts the scan; restore failure is
+  non-fatal with the snapshot retained;
+  (b) **autosave resilience** — tick catches failures, logs once with
+  traceback then one line per retry, recycles the DB connection (peewee
+  auto-reconnects), reports recovery; `_on_close` can no longer be blocked by
+  a failing final autosave.
+  Reminder for the user: the installed copy at `~/.local/share/
+  classical-manager` is V2 vintage — refresh it after the v3 merge.
 - [~] Phase 7 — Verification & wrap-up — automated checks done 2026-07-20:
   full suite 80 green; py_compile sweep clean; pyflakes clean except
   pre-existing cosmetic f-strings in cli.py; no dead references to removed

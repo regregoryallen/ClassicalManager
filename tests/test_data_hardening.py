@@ -4,6 +4,10 @@ preservation across full rescans (F8).
 The scan itself needs real audio files, so the snapshot/restore helpers
 are tested directly against fabricated rows — the same code path
 scan_library runs before/after its delete-and-rebuild.
+
+The snapshot is DURABLE (a table in the same DB, consumed only on
+successful restore) after a production incident where an in-memory
+snapshot was lost to a suspend mid-rescan (2026-07-20).
 """
 
 import json
@@ -16,7 +20,9 @@ from music_manager.core.database import (
     find_duplicate_track_paths,
 )
 from music_manager.core.scanner import _restore_analyses, _snapshot_analyses
-from music_manager.core.similarity import FEATURE_VERSION, TrackAnalysis
+from music_manager.core.similarity import (
+    FEATURE_VERSION, AnalysisSnapshot, TrackAnalysis,
+)
 
 from tests.conftest import make_album
 
@@ -42,34 +48,38 @@ def _analyze_fake(track, features=None):
 # F8: analysis preservation
 # ---------------------------------------------------------------------------
 
+def _simulate_rescan(lib, album, specs):
+    """Delete the album's tracks and recreate them per (path, mtime, size)."""
+    Track.delete().where(Track.album == album).execute()
+    for i, (path, mtime, size) in enumerate(specs, start=1):
+        Track.create(
+            library=lib, folder=lib.test_folder, album=album,
+            title=f"rescanned {i}", relative_path=path,
+            disc_number=1, track_number=i, duration_ms=60_000,
+            file_mtime=mtime, file_size=size)
+
+
 def test_snapshot_and_restore_preserves_unchanged_analyses(lib):
     album = make_album(lib, "A/Alb1", [("Work One", 3)])
     _set_file_stats(album, mtime=1000.0, size=4096)
     for t in Track.select().where(Track.album == album):
         _analyze_fake(t, features=[float(t.id)] * 31)
 
-    snapshot = _snapshot_analyses(lib)
-    assert len(snapshot) == 3
+    assert _snapshot_analyses(lib) == 3
+    # The snapshot is durable — real rows in the DB, not process memory.
+    assert AnalysisSnapshot.select().count() == 3
 
-    # Simulate a full rescan: tracks deleted (CASCADE kills analyses),
-    # then recreated at the same paths with new IDs.
     old_paths = [t.relative_path for t in
                  Track.select().where(Track.album == album)]
-    Track.delete().where(Track.album == album).execute()
-    assert TrackAnalysis.select().count() == 0
+    _simulate_rescan(lib, album,
+                     [(p, 1000.0, 4096) for p in old_paths])
+    assert TrackAnalysis.select().count() == 0  # CASCADE took them
 
-    for i, path in enumerate(old_paths, start=1):
-        Track.create(
-            library=lib, folder=lib.test_folder, album=album,
-            title=f"rescanned {i}", relative_path=path,
-            disc_number=1, track_number=i, duration_ms=60_000,
-            file_mtime=1000.0, file_size=4096)
-
-    preserved = _restore_analyses(lib, snapshot)
-    assert preserved == 3
+    assert _restore_analyses(lib) == 3
     assert TrackAnalysis.select().count() == 3
+    # Consumed exactly once — on success.
+    assert AnalysisSnapshot.select().count() == 0
 
-    # Analyses are attached to the NEW track rows with features intact.
     for ta in TrackAnalysis.select():
         assert ta.track.title.startswith("rescanned")
         assert len(json.loads(ta.features)) == 31
@@ -82,25 +92,17 @@ def test_restore_skips_changed_and_unknown_files(lib):
     for t in Track.select().where(Track.album == album):
         _analyze_fake(t)
 
-    snapshot = _snapshot_analyses(lib)
+    _snapshot_analyses(lib)
     old_paths = sorted(t.relative_path for t in
                        Track.select().where(Track.album == album))
-    Track.delete().where(Track.album == album).execute()
-
     # Track 1: unchanged. Track 2: mtime changed. Track 3: size changed.
-    specs = [
+    _simulate_rescan(lib, album, [
         (old_paths[0], 1000.0, 4096),
         (old_paths[1], 2000.0, 4096),
         (old_paths[2], 1000.0, 9999),
-    ]
-    for i, (path, mtime, size) in enumerate(specs, start=1):
-        Track.create(
-            library=lib, folder=lib.test_folder, album=album,
-            title=f"t{i}", relative_path=path,
-            disc_number=1, track_number=i, duration_ms=60_000,
-            file_mtime=mtime, file_size=size)
+    ])
 
-    assert _restore_analyses(lib, snapshot) == 1
+    assert _restore_analyses(lib) == 1
     (ta,) = list(TrackAnalysis.select())
     assert ta.track.relative_path == old_paths[0]
 
@@ -111,19 +113,79 @@ def test_restore_skips_tracks_without_mtime(lib):
     (track,) = list(Track.select().where(Track.album == album))
     _analyze_fake(track)
 
-    snapshot = _snapshot_analyses(lib)
-    Track.delete().where(Track.album == album).execute()
-    Track.create(
-        library=lib, folder=lib.test_folder, album=album,
-        title="no stats", relative_path=track.relative_path,
-        disc_number=1, track_number=1, duration_ms=60_000,
-        file_mtime=None, file_size=None)
+    _snapshot_analyses(lib)
+    _simulate_rescan(lib, album, [(track.relative_path, None, None)])
 
-    assert _restore_analyses(lib, snapshot) == 0
+    assert _restore_analyses(lib) == 0
 
 
 def test_empty_snapshot_is_noop(lib):
-    assert _restore_analyses(lib, {}) == 0
+    assert _restore_analyses(lib) == 0
+
+
+def test_failed_restore_is_retried_by_the_next_scan(lib):
+    """The 2026-07-20 incident: restore never ran (crash), snapshot must
+    survive and be consumable by a later scan's restore attempt."""
+    album = make_album(lib, "A/Alb1", [("Work One", 2)])
+    _set_file_stats(album, mtime=1000.0, size=4096)
+    for t in Track.select().where(Track.album == album):
+        _analyze_fake(t)
+
+    old_paths = [t.relative_path for t in
+                 Track.select().where(Track.album == album)]
+    _snapshot_analyses(lib)
+    _simulate_rescan(lib, album,
+                     [(p, 1000.0, 4096) for p in old_paths])
+    # Crash here: no restore ran. Snapshot rows still present.
+    assert AnalysisSnapshot.select().count() == 2
+    assert TrackAnalysis.select().count() == 0
+
+    # ... time passes; a later scan (e.g. incremental) retries:
+    assert _restore_analyses(lib) == 2
+    assert AnalysisSnapshot.select().count() == 0
+
+
+def test_retry_skips_tracks_already_reanalyzed(lib):
+    """If the user re-analyzed some tracks between the crash and the
+    retry, the leftover snapshot must not collide with them."""
+    album = make_album(lib, "A/Alb1", [("Work One", 2)])
+    _set_file_stats(album, mtime=1000.0, size=4096)
+    for t in Track.select().where(Track.album == album):
+        _analyze_fake(t)
+
+    old_paths = sorted(t.relative_path for t in
+                       Track.select().where(Track.album == album))
+    _snapshot_analyses(lib)
+    _simulate_rescan(lib, album,
+                     [(p, 1000.0, 4096) for p in old_paths])
+
+    # User manually re-analyzed track 1 before the retry.
+    t1 = Track.get(Track.relative_path == old_paths[0])
+    _analyze_fake(t1, features=[9.9] * 31)
+
+    assert _restore_analyses(lib) == 1  # only track 2 restored
+    assert TrackAnalysis.select().count() == 2
+    ta1 = TrackAnalysis.get(TrackAnalysis.track == t1)
+    assert json.loads(ta1.features) == [9.9] * 31  # fresh one kept
+
+
+def test_resnapshot_updates_rows_without_losing_leftovers(lib):
+    """A new scan's snapshot upserts current analyses but keeps leftover
+    rows for paths it doesn't cover (pending restore from a crash)."""
+    album = make_album(lib, "A/Alb1", [("Work One", 1)])
+    _set_file_stats(album, mtime=1000.0, size=4096)
+    (track,) = list(Track.select().where(Track.album == album))
+    _analyze_fake(track)
+
+    # Leftover from an earlier crashed scan, different path.
+    AnalysisSnapshot.create(
+        library=lib, folder_id=lib.test_folder.id,
+        relative_path="A/Gone/01.flac", features="[1]",
+        volatility=None, analyzed_at=datetime.now(timezone.utc),
+        feature_version=FEATURE_VERSION, file_mtime=1.0, file_size=1)
+
+    assert _snapshot_analyses(lib) == 1
+    assert AnalysisSnapshot.select().count() == 2  # upsert + leftover
 
 
 # ---------------------------------------------------------------------------

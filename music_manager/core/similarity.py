@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 
 import peewee as pw
 
-from music_manager.core.database import BaseModel, Track, SourceFolder
+from music_manager.core.database import BaseModel, Library, Track, SourceFolder
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,38 @@ class TrackAnalysis(BaseModel):
         table_name = "track_analysis"
 
 
+class AnalysisSnapshot(BaseModel):
+    """Durable copy of analyses across a full rescan (V3).
+
+    Written to the database BEFORE the rescan deletes tracks (which
+    CASCADE-deletes track_analysis), keyed by stable file identity, and
+    consumed only after a successful restore.  If the restore step
+    crashes (e.g. the DB's network share goes away mid-scan), the
+    snapshot survives and the next scan — full or incremental — retries
+    the restore instead of losing hours of librosa work.
+    """
+
+    library = pw.ForeignKeyField(Library, on_delete="CASCADE")
+    folder_id = pw.IntegerField()
+    relative_path = pw.TextField()
+    features = pw.TextField()
+    volatility = pw.FloatField(null=True)
+    analyzed_at = pw.DateTimeField()
+    feature_version = pw.IntegerField(default=1)
+    file_mtime = pw.FloatField(null=True)
+    file_size = pw.IntegerField(null=True)
+
+    class Meta:
+        table_name = "track_analysis_snapshot"
+        indexes = (
+            (("folder_id", "relative_path"), True),
+        )
+
+
 def ensure_table():
-    """Create the TrackAnalysis table if it doesn't exist."""
+    """Create the similarity tables if they don't exist."""
     from music_manager.core.database import database
-    database.create_tables([TrackAnalysis])
+    database.create_tables([TrackAnalysis, AnalysisSnapshot])
     # Add feature_version column if missing (existing databases)
     from playhouse.migrate import SqliteMigrator, migrate as run_migrate
     migrator = SqliteMigrator(database)

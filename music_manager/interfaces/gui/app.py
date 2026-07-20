@@ -198,8 +198,15 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             logger.debug("Could not install .desktop file: %s", exc)
 
     def _on_close(self):
-        """Save window state, autosave, and exit."""
-        self._autosave()
+        """Save window state, autosave, and exit.
+
+        A failing autosave (dead network mount) must never prevent the
+        window from closing.
+        """
+        try:
+            self._autosave()
+        except Exception as exc:
+            logger.warning("Final autosave failed on close: %s", exc)
         self._prefs["window_geometry"] = self.root.geometry()
         _save_prefs(self._prefs)
         self.root.destroy()
@@ -215,12 +222,39 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         if not interval or interval <= 0:
             return
         interval_ms = int(interval) * 1000
+        self._autosave_failures = 0
 
         def tick():
-            self._autosave()
+            # A network-mounted DB can vanish mid-session (share stall,
+            # suspend/resume). One failed autosave must not spew a
+            # traceback per tick or poison the session: log, recycle the
+            # connection, and keep ticking — peewee reconnects on the
+            # next query once the mount is back.
+            try:
+                self._autosave()
+                if self._autosave_failures:
+                    logger.info("Autosave recovered after %d failure(s)",
+                                self._autosave_failures)
+                self._autosave_failures = 0
+            except Exception as exc:
+                self._autosave_failures += 1
+                logger.warning(
+                    "Autosave failed (%s) — attempt %d; will retry in %ds",
+                    exc, self._autosave_failures, interval_ms // 1000,
+                    exc_info=(self._autosave_failures == 1))
+                self._reset_db_connection()
             self._autosave_after_id = self.root.after(interval_ms, tick)
 
         self._autosave_after_id = self.root.after(interval_ms, tick)
+
+    def _reset_db_connection(self):
+        """Close a possibly-poisoned DB connection; peewee auto-reconnects
+        on the next query."""
+        from music_manager.core.database import database
+        try:
+            database.close()
+        except Exception:
+            pass
 
     def _autosave(self):
         """Silently save current builder state as an __autosave__ profile."""

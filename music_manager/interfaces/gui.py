@@ -2678,32 +2678,34 @@ class App:
             # album_has_child_exception: a child is explicitly excluded
             #   → album is "partial" when it's added (not everything included)
             # album_has_child_add: a child is explicitly added
-            #   → album is "partial" when it's NOT added (some content selected)
+            #   → album is "partial" when it's NOT added, UNLESS every track is
+            #     effectively included (then it's fully "included", not partial)
             album_has_child_exception = False
             album_has_child_add = False
+            album_all_tracks_included = True
             for work in works:
                 w_key = key_for_work(work)
                 w_sel = sel_by_key.get(("work", w_key))
+                work_add = w_sel is not None and not w_sel["excluded"]
                 if w_sel:
                     if w_sel["excluded"]:
                         album_has_child_exception = True
                     else:
                         album_has_child_add = True
-                    if album_has_child_exception and album_has_child_add:
-                        break
                 tracks_for_work = list(Track.select(Track.relative_path).where(
                     Track.work == work))
                 for t in tracks_for_work:
                     t_sel = sel_by_key.get(("track", t.relative_path))
+                    t_add = t_sel is not None and not t_sel["excluded"]
+                    t_exc = t_sel is not None and t_sel["excluded"]
                     if t_sel:
-                        if t_sel["excluded"]:
+                        if t_exc:
                             album_has_child_exception = True
                         else:
                             album_has_child_add = True
-                        if album_has_child_exception and album_has_child_add:
-                            break
-                if album_has_child_exception and album_has_child_add:
-                    break
+                    # Effectively included (album itself not directly added here)
+                    if not (t_add or (work_add and not t_exc)):
+                        album_all_tracks_included = False
 
             # Filter works for display when hiding single-track works
             visible_works = works
@@ -2720,7 +2722,9 @@ class App:
             elif album_is_add:
                 album_tag = "included"
             elif album_has_child_add:
-                album_tag = "partial"  # not added but some children are
+                # Every track covered by child adds → fully included, else partial
+                album_tag = ("included" if album_all_tracks_included
+                             else "partial")
             else:
                 album_tag = ""
 
@@ -2753,9 +2757,11 @@ class App:
                     (work_is_add or album_is_add) and not work_is_except
                 )
 
-                # Check if any child track has an exception or add
+                # Check if any child track has an exception or add, and whether
+                # every track is directly added (→ fully included, not partial)
                 work_has_child_exception = False
                 work_has_child_add = False
+                work_all_tracks_added = bool(tracks)
                 for t in tracks:
                     t_sel = sel_by_key.get(("track", t.relative_path))
                     if t_sel:
@@ -2763,8 +2769,8 @@ class App:
                             work_has_child_exception = True
                         else:
                             work_has_child_add = True
-                        if work_has_child_exception and work_has_child_add:
-                            break
+                    if not (t_sel is not None and not t_sel["excluded"]):
+                        work_all_tracks_added = False
 
                 if work_is_except:
                     if work_has_child_add:
@@ -2778,7 +2784,8 @@ class App:
                 elif work_is_add:
                     work_tag = "included"
                 elif work_has_child_add:
-                    work_tag = "partial"  # not included but some tracks are
+                    # All tracks added → fully included, otherwise partial
+                    work_tag = "included" if work_all_tracks_added else "partial"
                 else:
                     work_tag = ""
 

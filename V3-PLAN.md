@@ -4,7 +4,13 @@
 
 - Branch point: tag `v2.0` on `master` (2026-07-19). All V3 work happens on branch `v3`.
 - Pending decisions: **D1 and D2 must be answered by the user before Phase 1 step 2.**
-- [ ] Phase 0 — Test safety net
+- [x] Phase 0 — Test safety net — **done 2026-07-19** (40 tests green:
+  `tests/test_selection.py`, `test_engine.py`, `test_reconcile.py`,
+  `test_overrides.py`; fixtures/factories in `tests/conftest.py`;
+  `pytest==9.1.1` in `requirements-dev.txt`; run with
+  `venv/bin/python -m pytest`). F2/F3/F4/F5 oddities are pinned as
+  characterization tests with finding-ID markers — the F3 assertion in
+  `test_enforce_readds_track_level_excepts_F3` flips when D1 lands.
 - [ ] Phase 1 — Core effective-state engine
 - [ ] Phase 2 — Data layer hardening
 - [ ] Phase 3 — Mechanical GUI decomposition

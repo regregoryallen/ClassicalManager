@@ -222,7 +222,9 @@ def _push_m3u_handoff(
 
     # Write a temporary M3U with Plex-matched paths
     m3u_serializer = M3USerializer()
-    tmp_path = Path(tempfile.mktemp(suffix=".m3u", prefix="plex_"))
+    with tempfile.NamedTemporaryFile(suffix=".m3u", prefix="plex_",
+                                     delete=False) as tmp:
+        tmp_path = Path(tmp.name)
 
     m3u_config = {
         "output_path": str(tmp_path),

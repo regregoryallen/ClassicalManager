@@ -108,8 +108,22 @@
   column, dimmed integrity tracks toggling with the Integrity setting,
   health strip counts, Rules window (remove/reveal/clean up), and a
   save→load round trip.
-- [ ] Phase 6 — Minor findings sweep
-- [ ] Phase 7 — Verification & wrap-up
+- [x] Phase 6 — Minor findings sweep — **done 2026-07-20** (80 tests green).
+  `plex.py` uses `NamedTemporaryFile` (mktemp retired); webhook m3u filenames
+  allowlist-sanitized (`[A-Za-z0-9._ -]`, leading dots stripped, fallback name;
+  traversal-tested); autosave delete+recreate wrapped in `database.atomic()`;
+  dead `assigned` local removed from `redetect_works`; CLAUDE.MD rewritten for
+  the V3 architecture; USERGUIDE gained a "What's New in Version 3" section.
+  Deliberately skipped (documented, not needed): DB uniqueness on
+  profile names (GUI enforces a stricter global rule) and on Override match
+  keys (code-enforced upsert).
+- [~] Phase 7 — Verification & wrap-up — automated checks done 2026-07-20:
+  full suite 80 green; py_compile sweep clean; pyflakes clean except
+  pre-existing cosmetic f-strings in cli.py; no dead references to removed
+  symbols. **Remaining user checkpoints:** (1) full rescan + Find Similar on
+  the real library at scale, (2) a Plex push and an M3U export of an existing
+  profile, (3) a normal building session with the new Rules surface. After
+  sign-off: merge `v3` → `master`, tag `v3.0`.
 
 Target consumer: Claude Code. Each phase is independently completable and committable;
 finish a phase, run its checkpoint, commit+push with a descriptive message, then stop or

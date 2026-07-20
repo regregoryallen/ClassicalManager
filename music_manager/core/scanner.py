@@ -928,7 +928,6 @@ def redetect_works(library: Library,
             # Build PendingTrack list with tags reconstructed from DB
             all_tracks = list(Track.select().where(Track.album == album)
                               .order_by(Track.disc_number, Track.track_number))
-            assigned: set[int] = set()
             pending: list[PendingTrack] = []
             for t in all_tracks:
                 tags = RawTags(

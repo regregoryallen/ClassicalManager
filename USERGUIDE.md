@@ -2,6 +2,26 @@
 
 ## Table of Contents
 
+## What's New in Version 3
+
+- **Explorer & Rules tab retired** — the Playlist Builder's library pane (now
+  with a sortable Year column) covers browsing; work-detection auditing lives in
+  the Cleanup tab's Works Browser.
+- **Rules health strip and Rules window** — the Builder's status line grades
+  your rules (active / redundant / no-op / orphaned) and counts the resulting
+  tracks; click it to inspect, surgically remove, reveal, or clean up rules.
+- **Playlist pane shows engine reality** — movements pulled in by
+  Integrity=enforce appear in dimmed blue and update live when you change the
+  setting; removing an album or work removes everything beneath it.
+- **Integrity honors your exclusions** — an explicitly excluded track or work is
+  never re-added by enforce mode (it silently was in V2).
+- **Empty profile = empty playlist** — the old "(empty = all tracks)" label was
+  wrong and is gone.
+- **Full rescans keep your similarity analyses** for unchanged files, and the
+  scan status reports how many were preserved.
+- Much faster Builder: include/exclude toggles no longer freeze on large
+  libraries.
+
 1. [Overview](#overview)
 2. [Installation](#installation)
 3. [Initial Setup](#initial-setup)

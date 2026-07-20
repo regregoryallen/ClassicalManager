@@ -228,41 +228,44 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             return
         from music_manager.core.database import PlaylistProfile, ProfileSelection
 
-        # Delete existing autosave for this library (CASCADE deletes selections)
-        for existing in PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (PlaylistProfile.name == "__autosave__")
-        ):
-            existing.delete_instance()
-
         # Capture current UI state
         length_val = self.length_value.get().strip()
         seed_val = self.seed_entry.get().strip()
         profile_name = self.profile_name_entry.get().strip()
 
-        profile = PlaylistProfile.create(
-            library=self.active_library,
-            name="__autosave__",
-            shuffle_mode=self.shuffle_mode.get(),
-            work_integrity=self.work_integrity.get(),
-            length_mode=self.length_mode.get(),
-            length_value=self._parse_length_value(length_val),
-            seed=int(seed_val) if seed_val else None,
-            no_repeat_tracks=self.no_repeat_var.get() == 1,
-            separate_composers=self.sep_composer_var.get() == 1,
-            separate_albums=self.sep_album_var.get() == 1,
-            separate_forms=self.sep_form_var.get() == 1,
-        )
+        # Atomic delete+recreate: a kill mid-autosave must not lose the
+        # previous autosave (V3 Phase 6).
+        from music_manager.core.database import database
+        with database.atomic():
+            for existing in PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library) &
+                (PlaylistProfile.name == "__autosave__")
+            ):
+                existing.delete_instance()  # CASCADE deletes selections
 
-        for sel in self._current_selections:
-            ProfileSelection.create(
-                profile=profile,
-                level=sel["level"],
-                key=sel["key"],
-                excluded=sel["excluded"],
-                pin_position=sel.get("pin_position"),
-                track_paths=sel.get("track_paths"),
+            profile = PlaylistProfile.create(
+                library=self.active_library,
+                name="__autosave__",
+                shuffle_mode=self.shuffle_mode.get(),
+                work_integrity=self.work_integrity.get(),
+                length_mode=self.length_mode.get(),
+                length_value=self._parse_length_value(length_val),
+                seed=int(seed_val) if seed_val else None,
+                no_repeat_tracks=self.no_repeat_var.get() == 1,
+                separate_composers=self.sep_composer_var.get() == 1,
+                separate_albums=self.sep_album_var.get() == 1,
+                separate_forms=self.sep_form_var.get() == 1,
             )
+
+            for sel in self._current_selections:
+                ProfileSelection.create(
+                    profile=profile,
+                    level=sel["level"],
+                    key=sel["key"],
+                    excluded=sel["excluded"],
+                    pin_position=sel.get("pin_position"),
+                    track_paths=sel.get("track_paths"),
+                )
 
         # Remember the profile name entry text separately
         self._prefs["autosave_profile_name"] = profile_name

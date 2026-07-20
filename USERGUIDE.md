@@ -282,6 +282,9 @@ migrating from a simpler playlist system.
 
 - **Library Integrity Check**: Checks for orphaned tracks, unscanned files,
   duplicates, and cross-folder works
+- **Track Similarity**: Opens the standalone Track Similarity Finder, where you pick
+  seed tracks directly and browse audio-similar matches (see
+  [Find Similar Tracks](#find-similar-tracks))
 - **Profile Summary**: Sortable table of all profiles with counts and durations
 - **Settings**: Opens the configuration dialog (see [Settings](#settings))
 - **View Logs**: Shows application log output for the current session
@@ -388,7 +391,10 @@ These are best-effort: if the playlist is dominated by one composer, album, or f
 Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
 - **Columns**: Name, Composer, Genre, Info (track count or duration)
-- **Color coding**: Blue = included, Amber = partially included, Gray = excluded
+- **Color coding**: Blue = included, Amber = partially included, Gray = excluded.
+  A container (album or work) is blue when *every* track under it is included —
+  including when you have added all of its children individually — and amber only
+  when some, but not all, of its content is included.
 - **Filter**: Type to narrow the view (case-insensitive, live filtering). Matches
   against name, composer, genre, performer, conductor, and ensemble at any level.
   Parents and children of matching items stay visible.
@@ -425,6 +431,48 @@ and scroll position are preserved when items are added or removed.
 | **Export JSON** | Save as a JSON file with full metadata |
 | **Push to Plex** | Create or update a playlist on your Plex server (updates in place, preserving the playlist ID) |
 | **Find Unused** | Populate the builder with all tracks not included in any saved profile. Creates an unnamed profile so you can browse, preview, and decide where items belong. |
+| **Find Similar** | Find tracks that sound similar to your current selections (see below). Requires an audio analysis pass the first time. |
+
+### Find Similar Tracks
+
+**Find Similar** builds a Pandora-style search from your current selections. Every
+track you have selected acts as a *seed*; the tool ranks the rest of the library by
+audio similarity and lets you accept the matches you like back into the profile.
+Accepting tracks widens the seed set, so the search broadens as you go.
+
+The first time you run it, the library must be analyzed (a one-time audio pass per
+track; the app prompts and shows progress). Analysis results are cached, so later
+searches are fast.
+
+Results appear in a popup with these controls:
+
+- **Max results**: How many matches to return.
+- **Volatility max**: Optional filter. Volatility measures how much a track varies
+  internally (soft-to-loud, sparse-to-dense). Tick the checkbox next to the slider to
+  *enable* the filter — moving the slider alone does nothing until it is enabled.
+  Lower values keep more even, consistent tracks.
+- **Blend**: Slides between *nearest* (rank by the single closest seed) and *consensus*
+  (favor tracks that many seeds agree are close).
+
+Each result row shows:
+
+- **Match**: A percentage that is high when a track is as close to your seeds as your
+  seeds already are to one another, decaying as it gets looser. It is self-calibrating
+  per search, so it stays meaningful regardless of how broad your seed set is.
+  Color-coded green (strong), amber (loose), red (weak).
+- **Agreement**: How many of your seeds consider the track a close match (e.g. `12/31`).
+- **Volatility**: The track's internal-variation score.
+
+Actions:
+
+- **Accept Selected / Accept All**: Add result tracks to the profile as track-level
+  selections.
+- **Re-search (include accepted)**: Re-run using the widened seed set.
+- **Right-click** a result for **Play** or **Details** (metadata popup) to audition and
+  inspect before accepting.
+
+A standalone **Track Similarity Finder** is also available from the sidebar, where you
+pick seed tracks directly rather than from the current profile.
 
 ### Pin to Position
 
@@ -467,7 +515,7 @@ Album, Tracks, Composer.
 
 - **Play** (tracks only): Opens the audio file in your system's default player
 - **Details**: Read-only popup showing all work and track metadata (names, paths,
-  MB IDs, durations) with copy buttons
+  MB IDs, durations, and per-track volatility once analyzed) with copy buttons
 - **Show Album**: Opens the album popup (see below)
 - **Set Work Name / Group Key / Composer**: Focuses the corresponding edit field
 - **Make Standalone**: Sets `__standalone__` group key for all tracks in the selected

@@ -26,6 +26,67 @@ DATABASE_PATH = PROJECT_ROOT / "music_manager.db"
 database = pw.SqliteDatabase(None)
 
 
+class DuplicateTracksError(Exception):
+    """Raised at startup when duplicate (folder, relative_path) track rows
+    exist — decision D3: report them and refuse to proceed until fixed."""
+
+
+def find_duplicate_track_paths() -> list[tuple[int, str, int]]:
+    """Return (folder_id, relative_path, count) for paths stored more
+    than once. Under the album-is-a-folder design this should be
+    impossible; rows here indicate a scan bug or manual DB edits."""
+    cursor = database.execute_sql(
+        "SELECT folder_id, relative_path, COUNT(*) AS c FROM tracks "
+        "GROUP BY folder_id, relative_path HAVING c > 1 ORDER BY c DESC"
+    )
+    return list(cursor.fetchall())
+
+
+def _ensure_track_indexes() -> None:
+    """Create the track path indexes (V3, F9).
+
+    - (library_id, relative_path): plain index — this is the lookup key
+      for track-level selections and override matching.
+    - (folder_id, relative_path): UNIQUE — guarded by a duplicate check.
+      Duplicates are a hard stop (D3): raise with the offending rows so
+      the user can fix the underlying files/DB and restart.
+    """
+    database.execute_sql(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_library_relpath "
+        "ON tracks (library_id, relative_path)"
+    )
+
+    index_names = {
+        row[1] for row in
+        database.execute_sql("PRAGMA index_list('tracks')").fetchall()
+    }
+    if "uq_tracks_folder_relpath" in index_names:
+        return  # uniqueness already enforced; no duplicates possible
+
+    dups = find_duplicate_track_paths()
+    if dups:
+        listing = "\n".join(
+            f"  folder {folder_id}: {rel_path} (x{count})"
+            for folder_id, rel_path, count in dups[:20]
+        )
+        more = f"\n  ... and {len(dups) - 20} more" if len(dups) > 20 else ""
+        raise DuplicateTracksError(
+            f"Found {len(dups)} duplicate track path(s) in the database. "
+            f"The same file is stored more than once, which corrupts "
+            f"selection resolution.\n\n{listing}{more}\n\n"
+            f"Fix the underlying cause (duplicate files, overlapping "
+            f"source folders, or manual DB edits), run a full rescan of "
+            f"the affected library, and restart. The app will not "
+            f"proceed while duplicates exist."
+        )
+
+    database.execute_sql(
+        "CREATE UNIQUE INDEX uq_tracks_folder_relpath "
+        "ON tracks (folder_id, relative_path)"
+    )
+    logger.info("Created unique index on tracks (folder_id, relative_path)")
+
+
 def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
     """Initialize the database connection and create tables.
 
@@ -104,6 +165,8 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
 
     from music_manager.core.similarity import ensure_table
     ensure_table()
+
+    _ensure_track_indexes()
 
     logger.info("Database tables created/verified")
     return database

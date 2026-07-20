@@ -36,7 +36,20 @@
   no longer overrides track EXCEPTs, so classify has no such case.
   Note for Phase 4: `resolve_effective_state`/`classify_selections` take `Rule`
   objects — build them from the GUI's `_current_selections` dicts.
-- [ ] Phase 2 — Data layer hardening
+- [x] Phase 2 — Data layer hardening — **code done 2026-07-19** (56 tests green).
+  `database.py`: `idx_tracks_library_relpath` + UNIQUE
+  `uq_tracks_folder_relpath`, gated by `find_duplicate_track_paths()`;
+  duplicates raise `DuplicateTracksError` at startup with the offending rows
+  (D3 hard stop — surfaces in the GUI's existing DB-error dialog).
+  Verified read-only against both real DBs: local dev (0 tracks) and prod
+  `/mnt/MediaLib/music_manager.db` (5,902 tracks) have **zero duplicates** —
+  index will create cleanly on next launch. `scanner.py`:
+  `_snapshot_analyses`/`_restore_analyses` carry TrackAnalysis across full
+  rescans keyed on (folder_id, relative_path) with mtime/size match;
+  `ScanStats.analyses_preserved` reported in scan-complete status.
+  `similarity.py` timestamps now UTC-aware.
+  **Remaining user checkpoint:** run a full rescan on a real/test library and
+  confirm the "N analyses kept" count is nonzero and Find Similar still works.
 - [ ] Phase 3 — Mechanical GUI decomposition
 - [ ] Phase 4 — Builder performance + shared-state adoption
 - [ ] Phase 5 — Rules surface + retire Explorer

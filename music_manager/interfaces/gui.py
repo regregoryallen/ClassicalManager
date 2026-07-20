@@ -1235,6 +1235,8 @@ class App:
             msg = (f"Done: {stats.tracks_created} tracks, "
                    f"{stats.albums_created} albums, "
                    f"{stats.works_created} works")
+            if stats.analyses_preserved:
+                msg += f", {stats.analyses_preserved} analyses kept"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
         except _ScanCancelled:

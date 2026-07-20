@@ -23,7 +23,7 @@ import os
 import sys
 import warnings
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 import peewee as pw
 
@@ -201,14 +201,14 @@ def analyze_track(track: Track) -> TrackAnalysis:
         defaults={
             "features": json.dumps(features),
             "volatility": volatility,
-            "analyzed_at": datetime.now(),
+            "analyzed_at": datetime.now(timezone.utc),
             "feature_version": FEATURE_VERSION,
         },
     )
     if not created:
         analysis.features = json.dumps(features)
         analysis.volatility = volatility
-        analysis.analyzed_at = datetime.now()
+        analysis.analyzed_at = datetime.now(timezone.utc)
         analysis.feature_version = FEATURE_VERSION
         analysis.save()
 

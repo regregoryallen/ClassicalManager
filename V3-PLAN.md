@@ -143,6 +143,25 @@
   profile, (3) a normal building session with the new Rules surface. After
   sign-off: merge `v3` → `master`, tag `v3.0`.
 
+## Backlog (post-v3.0, user-proposed 2026-07-20)
+
+- **Merge Rescan + Scan Changes** into one "Scan Library…" button → dialog:
+  radio Quick scan (changes only, default) / Full rebuild (warning: re-reads
+  every file, rebuilds catalog, hours on large libraries). Auto-select Full
+  when the library lacks mtime data (replaces incremental's silent refusal).
+  CLI keeps both verbs. Candidate third option later: "Deep" — re-read all
+  tags but update rows in place (no scrub/ID churn); covers
+  retagged-without-mtime-change and new-tag-column backfills, demoting Full
+  rebuild to disaster recovery.
+- **Retire the Track Similarity popup** (`similarity_popup.py`) — vestigial
+  first home of the similarity feature; Builder's Find Similar supersedes its
+  seed/browse role. Keep its one load-bearing job as a sidebar
+  **"Analyze Audio"** button: scan-button-style batch analysis with
+  missing-count, progress, cancel, and summary (mirrors CLI
+  `analyze-similarity`). Find Similar keeps auto-top-up for small gaps but
+  prompts before large ones (hundreds of unanalyzed tracks ⇒ hours) instead
+  of silently launching the marathon.
+
 Target consumer: Claude Code. Each phase is independently completable and committable;
 finish a phase, run its checkpoint, commit+push with a descriptive message, then stop or
 continue. Phases are ordered by dependency — do not reorder 0 → 1 → 2; 3–6 have limited

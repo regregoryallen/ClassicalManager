@@ -863,23 +863,32 @@ class BuilderTabMixin:
                 entries.append(entry)
 
         for level, entity_id, key in entries:
-            existing = self._find_selection(level, key)
-            if existing and not existing["excluded"]:
-                # Direct add — remove it and clean up children
-                self._current_selections.remove(existing)
-                self._cascade_remove_children(level, key)
-            # After dropping any direct add, the item may still be covered by
-            # a broader parent selection (e.g. its album was added). Removing
-            # only the direct add would leave it visible via the parent, so
-            # add an explicit exclusion to actually take it out.
-            if self._is_item_selected(level, key):
-                self._add_selection(level, key, excluded=True, refresh=False)
+            self._remove_item_selection(level, key)
 
         with self._busy():
             view_state = self._save_builder_view_state()
             self._refresh_rules_display()
             self._restore_builder_view_state(view_state)
         return "break"
+
+    def _remove_item_selection(self, level, key):
+        """Remove an item from the playlist, container semantics included.
+
+        Removing a container takes out everything beneath it, regardless
+        of sub-selections: drop the item's own ADD (if any), cascade away
+        ALL descendant rules, and if a broader parent ADD still covers
+        the item, record an exclusion so it actually disappears.
+
+        V2 only cascaded when the item had a direct ADD, so removing an
+        album that was covered purely by child rules (e.g. one added
+        work) silently did nothing.
+        """
+        existing = self._find_selection(level, key)
+        if existing and not existing["excluded"]:
+            self._current_selections.remove(existing)
+        self._cascade_remove_children(level, key)
+        if self._is_item_selected(level, key):
+            self._add_selection(level, key, excluded=True, refresh=False)
 
     def _cascade_remove_children(self, level, key):
         """Remove all child selections when a parent selection is removed."""

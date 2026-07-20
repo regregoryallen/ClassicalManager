@@ -191,6 +191,64 @@ def test_is_item_selected_matrix(lib):
     assert app._is_item_selected("track", "Z/Missing/01.flac") is False
 
 
+def test_remove_container_with_only_child_rules(lib):
+    """Removing an album covered purely by child rules must clear them.
+
+    V2 regression: with no direct album ADD, remove did nothing at all.
+    """
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    wk1 = work_key("A/Alb1", "Work One", 1)
+
+    app = _FakeApp(index)
+    app.add("work", wk1)
+    app.add("track", "A/Alb1/03.flac")
+
+    app._remove_item_selection("album", "A/Alb1")
+    assert app._current_selections == []  # no rules left, no stray EXCEPT
+
+
+def test_remove_container_with_direct_add_and_subselections(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+
+    app = _FakeApp(index)
+    app.add("album", "A/Alb1")
+    app.add("track", "A/Alb1/01.flac", excluded=True)
+
+    app._remove_item_selection("album", "A/Alb1")
+    assert app._current_selections == []
+
+
+def test_remove_work_still_covered_by_album_records_except(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    wk1 = work_key("A/Alb1", "Work One", 1)
+
+    app = _FakeApp(index)
+    app.add("album", "A/Alb1")
+    app.add("track", "A/Alb1/01.flac")  # redundant child add
+
+    app._remove_item_selection("work", wk1)
+    remaining = {(s["level"], s["key"], s["excluded"])
+                 for s in app._current_selections}
+    # Child add cleared; the album ADD stays; work is now excepted.
+    assert remaining == {("album", "A/Alb1", False), ("work", wk1, True)}
+
+
+def test_remove_track_covered_by_album_records_except(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    index = load_library_index(lib)
+
+    app = _FakeApp(index)
+    app.add("album", "A/Alb1")
+
+    app._remove_item_selection("track", "A/Alb1/02.flac")
+    remaining = {(s["level"], s["key"], s["excluded"])
+                 for s in app._current_selections}
+    assert ("track", "A/Alb1/02.flac", True) in remaining
+
+
 def test_cascade_remove_children_uses_index(lib):
     make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
     index = load_library_index(lib)

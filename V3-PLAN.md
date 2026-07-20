@@ -77,10 +77,18 @@
   cleanup/override/redetect actions funnel there); selection-only changes
   reuse the cache via `_refresh_rules_display`. Remaining DB use in
   builder_tab is click-time actions only.
-  **Remaining user checkpoint:** exercise the Builder against the real
-  library — toggles should feel instant; colors must match playlist output
-  (spot-check F2: exclude an album, ADD one of its tracks, confirm the
-  track shows in the right pane AND in Preview).
+  **User checkpoint passed 2026-07-19:** refresh is fast. Two findings from
+  the walkthrough, both addressed:
+  (a) container-remove bug fixed same day — removing an album/work covered
+  purely by child rules did nothing in V2; `_remove_item_selection` now
+  always cascades descendants and records an EXCEPT only if a broader ADD
+  still covers the item (regression-tested);
+  (b) **carried into Phase 5:** the playlist pane must also show
+  work-integrity expansion — extend `resolve_effective_state` with an
+  "included via work integrity" track state, render it visually distinct
+  (dimmed variant), count it in the header/strip ("8 selected + 4 via work
+  integrity"), and update live when the Integrity dropdown changes. Help
+  must state explicitly that integrity applies to works only, never albums.
 - [ ] Phase 5 — Rules surface + retire Explorer
 - [ ] Phase 6 — Minor findings sweep
 - [ ] Phase 7 — Verification & wrap-up

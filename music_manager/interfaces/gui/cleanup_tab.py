@@ -196,6 +196,10 @@ class CleanupTabMixin:
 
     def _refresh_works_list(self):
         """Reload the works treeview based on source filter and search."""
+        # Every data-changing cleanup action (overrides, work renames,
+        # redetect) funnels through here — drop the builder's cached
+        # library index so its next rebuild sees the changes (V3 Phase 4).
+        self._invalidate_library_index()
         self._clear_tree_sort(self.works_tree)
         self.works_tree.delete(*self.works_tree.get_children())
         self._cleanup_work_map.clear()

@@ -110,6 +110,7 @@ class App(DialogsMixin, ExplorerTabMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.root.geometry(self._prefs.get("window_geometry", "1280x800"))
 
         self.active_library = None
+        self._lib_index = None  # cached LibraryIndex (V3 Phase 4)
         self._current_selections = []  # in-memory selections: [{level, key, excluded, pin_position, track_paths, display}]
         self._profile_picker_open = False
         self._lib_tree_snapshot = []  # snapshot for filter/detach

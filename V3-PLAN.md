@@ -62,9 +62,25 @@
   verbatim except: `__add_with_breadcrumbs` de-mangled to
   `_add_with_breadcrumbs`, and `Path(__file__).*parent*3` replaced with
   `PROJECT_ROOT` (package is one level deeper).
-  **Remaining user checkpoint:** launch the GUI and click through each tab
-  once (builder toggles, a popup or two, help window).
-- [ ] Phase 4 — Builder performance + shared-state adoption
+  **User checkpoint passed 2026-07-19:** GUI behaves as before across tabs.
+- [x] Phase 4 — Builder performance + shared-state adoption — **code done
+  2026-07-19** (67 tests green, pyflakes clean). New pure viewmodel
+  `music_manager/core/viewmodel.py` (`library_tree_rows`/`playlist_tree_rows`
+  → `TreeRow` specs; no Tk, no SQL). `builder_tab.py`: cached `LibraryIndex`
+  (`_get_library_index`/`_invalidate_library_index`), rebuilds consume
+  index + `resolve_effective_state` — **zero SQL in rebuild loops**; V2's
+  ~150 lines of hand-derived tag logic deleted; **F2 display bug fixed**
+  (playlist pane now shows ADDs inside an excluded album, regression-tested).
+  `_is_item_selected`/`_cascade_remove_children`/`_add_with_breadcrumbs`
+  answered from the index (no per-call queries). Invalidation: data-changed
+  entry `_refresh_builder_tree` + `_refresh_works_list` choke point (all
+  cleanup/override/redetect actions funnel there); selection-only changes
+  reuse the cache via `_refresh_rules_display`. Remaining DB use in
+  builder_tab is click-time actions only.
+  **Remaining user checkpoint:** exercise the Builder against the real
+  library — toggles should feel instant; colors must match playlist output
+  (spot-check F2: exclude an album, ADD one of its tracks, confirm the
+  track shows in the right pane AND in Preview).
 - [ ] Phase 5 — Rules surface + retire Explorer
 - [ ] Phase 6 — Minor findings sweep
 - [ ] Phase 7 — Verification & wrap-up

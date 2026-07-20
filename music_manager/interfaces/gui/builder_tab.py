@@ -25,6 +25,63 @@ logger = logging.getLogger(__name__)
 
 
 class BuilderTabMixin:
+    # ------------------------------------------------------------------
+    # Library index cache (V3 Phase 4)
+    #
+    # One LibraryIndex snapshot serves every tree rebuild; selection
+    # changes only recompute the (cheap, pure-Python) effective state.
+    # Data-changing paths call _invalidate_library_index().
+    # ------------------------------------------------------------------
+
+    def _get_library_index(self):
+        from music_manager.core.selection import load_library_index
+        if getattr(self, "_lib_index", None) is None:
+            self._lib_index = load_library_index(self.active_library)
+        return self._lib_index
+
+    def _invalidate_library_index(self):
+        self._lib_index = None
+
+    def _current_rules(self):
+        """Adapt _current_selections dicts to core Rule objects."""
+        from music_manager.core.selection import Rule
+        return [Rule(level=s["level"], key=s["key"], excluded=s["excluded"],
+                     pin_position=s.get("pin_position"),
+                     track_paths=s.get("track_paths"))
+                for s in self._current_selections]
+
+    def _current_effective_state(self, index):
+        from music_manager.core.selection import resolve_effective_state
+        return resolve_effective_state(index, self._current_rules())
+
+    def _selection_maps(self):
+        """Per-level key → excluded dicts from the in-memory selections."""
+        album_sel, work_sel, track_sel = {}, {}, {}
+        for s in self._current_selections:
+            {"album": album_sel, "work": work_sel,
+             "track": track_sel}[s["level"]][s["key"]] = s["excluded"]
+        return album_sel, work_sel, track_sel
+
+    def _display_name(self, level, key):
+        """Resolve a display name from the index (no DB); fall back to
+        the core resolver for keys the index doesn't know (orphans)."""
+        index = self._get_library_index() if self.active_library else None
+        if index is not None:
+            if level == "album":
+                aid = index.album_id_by_key.get(key)
+                if aid is not None:
+                    return index.albums[aid].title
+            elif level == "work":
+                wid = index.work_id_by_key.get(key)
+                if wid is not None:
+                    return index.works[wid].name
+            elif level == "track":
+                tid = index.track_id_by_path.get(key)
+                if tid is not None:
+                    return index.tracks[tid].title
+        from music_manager.core.selection import display_name_for_selection
+        return display_name_for_selection(self.active_library, level, key)
+
     def _add_selection(self, level, key, excluded=False, pin_position=None,
                        track_paths=None, refresh=True):
         """Add a selection to the in-memory list."""
@@ -38,8 +95,7 @@ class BuilderTabMixin:
                 return
             self._current_selections.remove(existing)
 
-        from music_manager.core.selection import display_name_for_selection
-        display_name = display_name_for_selection(self.active_library, level, key)
+        display_name = self._display_name(level, key)
         prefix = "EXCEPT" if excluded else "ADD"
         pin_str = f"[#{pin_position}] " if pin_position else ""
 
@@ -61,45 +117,32 @@ class BuilderTabMixin:
                      if s["level"] == level and s["key"] == key), None)
 
     def _is_item_selected(self, level, key):
-        """Check if item is selected (directly or via parent, respecting specificity)."""
-        from music_manager.core.selection import parse_work_key, COMPOSITE_SEP
+        """Check if item is selected (directly or via parent, respecting
+        specificity).  V3: answered from the library index and the shared
+        decision function — zero queries (V2 walked the DB per call)."""
+        from music_manager.core.selection import _decide_track, parse_work_key
+
+        album_sel, work_sel, track_sel = self._selection_maps()
+        index = self._get_library_index()
+
+        if level == "track":
+            tid = index.track_id_by_path.get(key)
+            if tid is None:
+                sel = self._find_selection(level, key)
+                return sel is not None and not sel["excluded"]
+            t = index.tracks[tid]
+            included, _ = _decide_track(
+                t.relative_path, t.work_key, t.album_key,
+                track_sel, work_sel, album_sel)
+            return bool(included)
+
         sel = self._find_selection(level, key)
         if sel is not None:
             return not sel["excluded"]
-        # Walk up hierarchy
-        if level == "track":
-            # Find the work and album this track belongs to
-            from music_manager.core.database import Track
-            track = Track.select(Track.work, Track.album).where(
-                (Track.library == self.active_library) &
-                (Track.relative_path == key)
-            ).first()
-            if track and track.work_id:
-                from music_manager.core.selection import key_for_work
-                from music_manager.core.database import Work
-                work = Work.get_by_id(track.work_id)
-                work_key = key_for_work(work)
-                work_sel = self._find_selection("work", work_key)
-                if work_sel is not None:
-                    return not work_sel["excluded"]
-                # Check album level
-                album_sel = self._find_selection("album", work.album.album_key)
-                if album_sel is not None:
-                    return not album_sel["excluded"]
-            elif track:
-                from music_manager.core.database import Album
-                album = Album.get_by_id(track.album_id)
-                album_sel = self._find_selection("album", album.album_key)
-                if album_sel is not None:
-                    return not album_sel["excluded"]
-        elif level == "work":
-            # Extract album_key from work key
+        if level == "work":
             parsed = parse_work_key(key)
-            if parsed:
-                album_key = parsed[0]
-                album_sel = self._find_selection("album", album_key)
-                if album_sel is not None:
-                    return not album_sel["excluded"]
+            if parsed and parsed[0] in album_sel:
+                return not album_sel[parsed[0]]
         return False
 
     def _remove_selection(self):
@@ -384,13 +427,40 @@ class BuilderTabMixin:
             self._refresh_builder_tree()
 
     def _refresh_builder_tree(self):
-        """Populate the library tree and refresh the playlist tree."""
-        self._builder_lib_data = {}   # entity_id → {level, album_id, work_id, ...}
+        """Reload library data and rebuild both builder trees.
+
+        This is the data-changed entry point (library switch, scan,
+        redetect, overrides) — it drops the cached index.  Pure
+        selection changes go through _refresh_rules_display instead,
+        which reuses the cache.
+        """
+        self._invalidate_library_index()
         self._rebuild_library_tree()
         self._rebuild_playlist_tree()
 
+    def _insert_tree_rows(self, tree, rows, iid_map, search_meta,
+                          parent="", open_top=False):
+        """Insert viewmodel TreeRows into a Treeview (recursively)."""
+        for row in rows:
+            iid = tree.insert(parent, "end", text=row.text,
+                              values=row.values,
+                              tags=(row.tag,) if row.tag else ())
+            iid_map[iid] = (row.level, row.entity_id, row.key)
+            search_meta[iid] = row.search
+            if row.children:
+                self._insert_tree_rows(tree, row.children, iid_map,
+                                       search_meta, parent=iid)
+            if open_top:
+                tree.item(iid, open=True)
+
     def _rebuild_library_tree(self):
-        """Rebuild the left (library) tree with visual clues for included/excluded."""
+        """Rebuild the left (library) tree with visual state tags.
+
+        V3 Phase 4: rows come from the pure viewmodel over the cached
+        LibraryIndex + EffectiveState — zero SQL here.  Tags now derive
+        from the engine's own decision function, so colors cannot
+        disagree with playlist output (F1).
+        """
         self._clear_tree_sort(self.builder_lib_tree)
         # Reattach any filter-detached items so delete catches everything
         for iid, parent, idx, txt, opn in self._lib_tree_snapshot:
@@ -406,190 +476,14 @@ class BuilderTabMixin:
         if not self.active_library:
             return
 
-        from music_manager.core.database import Album, Work, Track
-        from music_manager.core.selection import (
-            key_for_album, key_for_work, key_for_track, COMPOSITE_SEP,
-        )
-
-        # Build selection lookup dicts for quick matching
-        sel_by_key = {}  # (level, key) → selection dict
-        for s in self._current_selections:
-            sel_by_key[(s["level"], s["key"])] = s
-
-        hide_single = self.builder_hide_single.get()
-
-        albums = (Album.select()
-                  .where(Album.library == self.active_library)
-                  .order_by(Album.title))
-
-        for album in albums:
-            a_key = key_for_album(album)
-            album_sel = sel_by_key.get(("album", a_key))
-            album_is_add = album_sel is not None and not album_sel["excluded"]
-            album_is_except = album_sel is not None and album_sel["excluded"]
-
-            works = list(Work.select()
-                         .where(Work.album == album)
-                         .order_by(Work.work_sequence))
-
-            # Pre-load track counts per work for hide-single filtering
-            work_track_counts = {}
-            for work in works:
-                work_track_counts[work.id] = Track.select().where(
-                    Track.work == work).count()
-
-            # Pre-scan children to detect partial state.
-            # album_has_child_exception: a child is explicitly excluded
-            #   → album is "partial" when it's added (not everything included)
-            # album_has_child_add: a child is explicitly added
-            #   → album is "partial" when it's NOT added, UNLESS every track is
-            #     effectively included (then it's fully "included", not partial)
-            album_has_child_exception = False
-            album_has_child_add = False
-            album_all_tracks_included = True
-            for work in works:
-                w_key = key_for_work(work)
-                w_sel = sel_by_key.get(("work", w_key))
-                work_add = w_sel is not None and not w_sel["excluded"]
-                if w_sel:
-                    if w_sel["excluded"]:
-                        album_has_child_exception = True
-                    else:
-                        album_has_child_add = True
-                tracks_for_work = list(Track.select(Track.relative_path).where(
-                    Track.work == work))
-                for t in tracks_for_work:
-                    t_sel = sel_by_key.get(("track", t.relative_path))
-                    t_add = t_sel is not None and not t_sel["excluded"]
-                    t_exc = t_sel is not None and t_sel["excluded"]
-                    if t_sel:
-                        if t_exc:
-                            album_has_child_exception = True
-                        else:
-                            album_has_child_add = True
-                    # Effectively included (album itself not directly added here)
-                    if not (t_add or (work_add and not t_exc)):
-                        album_all_tracks_included = False
-
-            # Filter works for display when hiding single-track works
-            visible_works = works
-            if hide_single:
-                visible_works = [w for w in works if work_track_counts[w.id] > 1]
-                if not visible_works:
-                    continue
-
-            # Determine album tag
-            if album_is_except:
-                album_tag = "excluded"
-            elif album_is_add and album_has_child_exception:
-                album_tag = "partial"  # added but some children excluded
-            elif album_is_add:
-                album_tag = "included"
-            elif album_has_child_add:
-                # Every track covered by child adds → fully included, else partial
-                album_tag = ("included" if album_all_tracks_included
-                             else "partial")
-            else:
-                album_tag = ""
-
-            track_count = Track.select().where(Track.album == album).count()
-            album_artist = album.album_artist or ""
-            # Get representative genre from first track with one
-            album_genre = ""
-            first_genre_track = (Track.select(Track.genre)
-                                 .where((Track.album == album) & Track.genre.is_null(False))
-                                 .limit(1).first())
-            if first_genre_track:
-                album_genre = first_genre_track.genre or ""
-            album_iid = self.builder_lib_tree.insert(
-                "", "end", text=album.title,
-                values=(album_artist, album_genre, f"{track_count} trk"),
-                tags=(album_tag,) if album_tag else ())
-            self._builder_lib_iid_map[album_iid] = ("album", album.id, a_key)
-            self._lib_search_meta[album_iid] = " ".join(filter(None, [
-                album.title, album_artist, album_genre]))
-
-            for work in visible_works:
-                w_key = key_for_work(work)
-                tracks = list(Track.select().where(Track.work == work)
-                              .order_by(Track.disc_number, Track.track_number))
-
-                work_sel = sel_by_key.get(("work", w_key))
-                work_is_add = work_sel is not None and not work_sel["excluded"]
-                work_is_except = work_sel is not None and work_sel["excluded"]
-                work_effectively_included = (
-                    (work_is_add or album_is_add) and not work_is_except
-                )
-
-                # Check if any child track has an exception or add, and whether
-                # every track is directly added (→ fully included, not partial)
-                work_has_child_exception = False
-                work_has_child_add = False
-                work_all_tracks_added = bool(tracks)
-                for t in tracks:
-                    t_sel = sel_by_key.get(("track", t.relative_path))
-                    if t_sel:
-                        if t_sel["excluded"]:
-                            work_has_child_exception = True
-                        else:
-                            work_has_child_add = True
-                    if not (t_sel is not None and not t_sel["excluded"]):
-                        work_all_tracks_added = False
-
-                if work_is_except:
-                    if work_has_child_add:
-                        work_tag = "partial"  # excluded but some tracks added back
-                    else:
-                        work_tag = "excluded"
-                elif work_effectively_included and work_has_child_exception:
-                    work_tag = "partial"  # included but some tracks excluded
-                elif work_effectively_included:
-                    work_tag = "included"
-                elif work_is_add:
-                    work_tag = "included"
-                elif work_has_child_add:
-                    # All tracks added → fully included, otherwise partial
-                    work_tag = "included" if work_all_tracks_added else "partial"
-                else:
-                    work_tag = ""
-
-                work_composer = work.composer.name if work.composer_id else ""
-                work_genre = tracks[0].genre if tracks and tracks[0].genre else ""
-                work_iid = self.builder_lib_tree.insert(
-                    album_iid, "end", text=work.work_name,
-                    values=(work_composer, work_genre, f"{len(tracks)} trk"),
-                    tags=(work_tag,) if work_tag else ())
-                self._builder_lib_iid_map[work_iid] = ("work", work.id, w_key)
-                self._lib_search_meta[work_iid] = " ".join(filter(None, [
-                    work.work_name, work_composer, work_genre]))
-
-                for t in tracks:
-                    t_key = key_for_track(t)
-                    dur_s = (t.duration_ms or 0) // 1000
-                    dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-
-                    track_sel = sel_by_key.get(("track", t_key))
-                    track_is_except = track_sel is not None and track_sel["excluded"]
-                    track_is_add = track_sel is not None and not track_sel["excluded"]
-
-                    if track_is_except:
-                        t_tag = "excluded"
-                    elif track_is_add or work_effectively_included:
-                        t_tag = "included"
-                    else:
-                        t_tag = ""
-
-                    t_composer = t.composer.name if t.composer_id else ""
-                    t_genre = t.genre or ""
-                    t_iid = self.builder_lib_tree.insert(
-                        work_iid, "end",
-                        text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(t_composer, t_genre, dur_str),
-                        tags=(t_tag,) if t_tag else ())
-                    self._builder_lib_iid_map[t_iid] = ("track", t.id, t_key)
-                    self._lib_search_meta[t_iid] = " ".join(filter(None, [
-                        t.title, t_composer, t_genre,
-                        t.performer or "", t.conductor or "", t.ensemble or ""]))
+        from music_manager.core.viewmodel import library_tree_rows
+        index = self._get_library_index()
+        state = self._current_effective_state(index)
+        rows = library_tree_rows(
+            index, state, hide_single=bool(self.builder_hide_single.get()))
+        self._insert_tree_rows(self.builder_lib_tree, rows,
+                               self._builder_lib_iid_map,
+                               self._lib_search_meta)
 
         self._lib_tree_snapshot = self._snapshot_tree(self.builder_lib_tree)
         # Re-apply active filter if any
@@ -597,7 +491,12 @@ class BuilderTabMixin:
             self._apply_tree_filter("lib")
 
     def _rebuild_playlist_tree(self):
-        """Rebuild the right (playlist) tree showing effectively-included items."""
+        """Rebuild the right (playlist) tree of effectively-included items.
+
+        V3 Phase 4: membership comes from the shared effective state, so
+        a track/work ADD inside an album EXCEPT now appears exactly as
+        the engine will play it (F2 fix — V2 hid the whole album).
+        """
         self._clear_tree_sort(self.builder_pl_tree)
         # Reattach any filter-detached items so delete catches everything
         for iid, parent, idx, txt, opn in self._pl_tree_snapshot:
@@ -613,126 +512,20 @@ class BuilderTabMixin:
         if not self.active_library:
             return
         if not self._current_selections:
-            return  # empty selections = all tracks (shown via label)
+            return  # no selections = empty playlist (D2)
 
-        from music_manager.core.database import Album, Work, Track
-        from music_manager.core.selection import (
-            key_for_album, key_for_work, key_for_track, COMPOSITE_SEP,
-        )
-
-        hide_single = self.builder_hide_single.get()
-
-        # Build selection lookup dicts
-        sel_by_key = {}
-        for s in self._current_selections:
-            sel_by_key[(s["level"], s["key"])] = s
-
-        albums = (Album.select()
-                  .where(Album.library == self.active_library)
-                  .order_by(Album.title))
-
-        for album in albums:
-            a_key = key_for_album(album)
-            album_sel = sel_by_key.get(("album", a_key))
-            album_is_add = album_sel is not None and not album_sel["excluded"]
-            album_is_except = album_sel is not None and album_sel["excluded"]
-            if album_is_except:
-                continue
-
-            works = list(Work.select()
-                         .where(Work.album == album)
-                         .order_by(Work.work_sequence))
-
-            # Collect works that should appear
-            album_has_content = False
-            work_entries = []
-            for work in works:
-                w_key = key_for_work(work)
-                work_sel = sel_by_key.get(("work", w_key))
-                work_is_add = work_sel is not None and not work_sel["excluded"]
-                work_is_except = work_sel is not None and work_sel["excluded"]
-                # Don't skip excluded works entirely — track-level adds
-                # within them must still appear (specificity model).
-                if work_is_except:
-                    work_included = False
-                else:
-                    work_included = work_is_add or album_is_add
-
-                tracks = list(Track.select().where(Track.work == work)
-                              .order_by(Track.disc_number, Track.track_number))
-
-                visible_tracks = []
-                for t in tracks:
-                    t_key = key_for_track(t)
-                    track_sel = sel_by_key.get(("track", t_key))
-                    track_is_except = track_sel is not None and track_sel["excluded"]
-                    track_is_add = track_sel is not None and not track_sel["excluded"]
-                    if track_is_except:
-                        continue
-                    if track_is_add or work_included:
-                        visible_tracks.append(t)
-
-                if visible_tracks:
-                    if hide_single and len(visible_tracks) <= 1:
-                        continue
-                    work_entries.append((work, visible_tracks))
-                    album_has_content = True
-
-            if not album_has_content:
-                continue
-
-            total_tracks = sum(len(ts) for _, ts in work_entries)
-            album_artist = album.album_artist or ""
-            # Get representative genre from first track
-            album_genre = ""
-            for _, vts in work_entries:
-                for vt in vts:
-                    if vt.genre:
-                        album_genre = vt.genre
-                        break
-                if album_genre:
-                    break
-            album_iid = self.builder_pl_tree.insert(
-                "", "end", text=album.title,
-                values=(album_artist, album_genre, f"{total_tracks} trk"))
-            self._builder_pl_iid_map[album_iid] = ("album", album.id, a_key)
-            self._pl_search_meta[album_iid] = " ".join(filter(None, [
-                album.title, album_artist, album_genre]))
-
-            for work, vis_tracks in work_entries:
-                w_key = key_for_work(work)
-                work_composer = work.composer.name if work.composer_id else ""
-                work_genre = vis_tracks[0].genre if vis_tracks and vis_tracks[0].genre else ""
-                # Check if this work is pinned (via selection pin_position)
-                work_sel = sel_by_key.get(("work", w_key))
-                pin_pos = work_sel.get("pin_position") if work_sel else None
-                work_text = (f"[#{pin_pos}] {work.work_name}"
-                             if pin_pos else work.work_name)
-                work_iid = self.builder_pl_tree.insert(
-                    album_iid, "end", text=work_text,
-                    values=(work_composer, work_genre, f"{len(vis_tracks)} trk"),
-                    tags=("pinned",) if pin_pos else ())
-                self._builder_pl_iid_map[work_iid] = ("work", work.id, w_key)
-                self._pl_search_meta[work_iid] = " ".join(filter(None, [
-                    work.work_name, work_composer, work_genre]))
-
-                for t in vis_tracks:
-                    t_key = key_for_track(t)
-                    dur_s = (t.duration_ms or 0) // 1000
-                    dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-                    t_composer = t.composer.name if t.composer_id else ""
-                    t_genre = t.genre or ""
-                    t_iid = self.builder_pl_tree.insert(
-                        work_iid, "end",
-                        text=f"{t.disc_number}-{t.track_number:02d}: {t.title}",
-                        values=(t_composer, t_genre, dur_str))
-                    self._builder_pl_iid_map[t_iid] = ("track", t.id, t_key)
-                    self._pl_search_meta[t_iid] = " ".join(filter(None, [
-                        t.title, t_composer, t_genre,
-                        t.performer or "", t.conductor or "", t.ensemble or ""]))
-
-            # Auto-expand albums in playlist view
-            self.builder_pl_tree.item(album_iid, open=True)
+        from music_manager.core.viewmodel import playlist_tree_rows
+        index = self._get_library_index()
+        state = self._current_effective_state(index)
+        pins = {s["key"]: s["pin_position"]
+                for s in self._current_selections
+                if s["level"] == "work" and s.get("pin_position")}
+        rows = playlist_tree_rows(
+            index, state, pins=pins,
+            hide_single=bool(self.builder_hide_single.get()))
+        self._insert_tree_rows(self.builder_pl_tree, rows,
+                               self._builder_pl_iid_map,
+                               self._pl_search_meta, open_top=True)
 
         self._pl_tree_snapshot = self._snapshot_tree(self.builder_pl_tree)
         # Re-apply active filter if any
@@ -1102,43 +895,31 @@ class BuilderTabMixin:
                 )
             ]
         elif level == "work":
-            # Remove track-level selections for tracks belonging to this work
-            from music_manager.core.selection import parse_work_key
-            from music_manager.core.database import Work, Track, Album
-            parsed = parse_work_key(key)
-            if parsed:
-                album_key, work_name, work_seq = parsed
-                album = Album.select().where(
-                    (Album.library == self.active_library) &
-                    (Album.album_key == album_key)
-                ).first()
-                if album:
-                    query = Work.select().where(
-                        (Work.album == album) & (Work.work_name == work_name)
-                    )
-                    if work_seq is not None:
-                        query = query.where(Work.work_sequence == work_seq)
-                    work = query.first()
-                    if work:
-                        track_paths = {
-                            t.relative_path for t in
-                            Track.select(Track.relative_path).where(Track.work == work)
-                        }
-                        self._current_selections = [
-                            s for s in self._current_selections
-                            if not (s["level"] == "track" and s["key"] in track_paths)
-                        ]
+            # Remove track-level selections for tracks belonging to this
+            # work (resolved from the index — no queries)
+            index = self._get_library_index()
+            wid = index.work_id_by_key.get(key)
+            if wid is not None:
+                track_paths = {
+                    index.tracks[tid].relative_path
+                    for tid in index.works[wid].track_ids
+                }
+                self._current_selections = [
+                    s for s in self._current_selections
+                    if not (s["level"] == "track" and s["key"] in track_paths)
+                ]
 
     def _add_with_breadcrumbs(self, level, key, entity_id):
         """Add a selection, including track_paths breadcrumbs for work-level."""
-        import json
         track_paths = None
         if level == "work":
-            from music_manager.core.database import Track
-            track_paths = json.dumps([
-                t.relative_path for t in
-                Track.select(Track.relative_path).where(Track.work == entity_id)
-            ])
+            index = self._get_library_index()
+            work = index.works.get(entity_id)
+            if work is not None:
+                track_paths = json.dumps([
+                    index.tracks[tid].relative_path
+                    for tid in work.track_ids
+                ])
         self._add_selection(level, key, excluded=False,
                             track_paths=track_paths, refresh=False)
 

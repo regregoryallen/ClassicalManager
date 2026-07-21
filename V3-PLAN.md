@@ -158,9 +158,29 @@
   strip; settings widgets refresh it via `_on_setting_changed`. Note:
   `_new_profile` returns bool — callers that populate afterwards (Find
   Unused) must abort on False or they merge two playlists.
-- [ ] Merged scan dialog
-- [ ] Analyze Audio button (retire similarity_popup.py)
-- [ ] Thumbs-down webhook
+- [x] **Merged scan dialog** — done 2026-07-21. One "Scan Library..." button →
+  `_ask_scan_mode` (Quick default / Full rebuild with cost stated); Quick is
+  disabled with an explanation when `can_scan_incremental()` is False (new
+  core helper), replacing the incremental scanner's silent refusal.
+  `_scan_changes` wrapper removed; both `_run_scan*` workers unchanged.
+  CLI keeps `scan` and `scan-changes` verbs.
+- [x] **Analyze Audio button** — done 2026-07-21. `similarity_popup.py`
+  deleted (556 lines); sidebar button is now batch analysis with gap count,
+  time estimate, progress, cancel, and summary (`_analyze_audio`,
+  `_analysis_gap`, `_analysis_estimate`; `_run_sim_analysis(None)` = analyze
+  only). Find Similar keeps auto-top-up but warns loudly above
+  `_LARGE_ANALYSIS_GAP` (100) unanalyzed tracks.
+- [x] **Thumbs-down webhook** — done 2026-07-21. Core: `find_track`
+  (case-insensitive title + album/artist narrowing, or exact path; raises
+  `TrackNotFound`/`AmbiguousTrack` — never guesses) and
+  `exclude_track_from_profile` (idempotent; converts a conflicting ADD;
+  scope=track|work). CLI `exclude-track` (exit 2 ambiguous/invalid, 3 not
+  found). Webhook command `exclude-track` with a `track` object, plus an
+  optional shared secret (`webhook.token`/`token_env`, `X-Auth-Token`,
+  constant-time compare) since this is the first op that writes to profiles.
+  Verified end-to-end against a scratch DB under enforce integrity.
+  Documented in help, USERGUIDE (with a Music Assistant HA snippet),
+  main.py usage, and config.example.json.
 
 ## Backlog (post-v3.0, user-proposed 2026-07-20)
 

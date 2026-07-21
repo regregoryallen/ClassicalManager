@@ -852,7 +852,6 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         dialog says why — replacing the old silent "run a full scan
         first" refusal deep inside the incremental scanner.
         """
-        ctk = self.ctk
         dialog = tk.Toplevel(self.root)
         dialog.title("Scan Library")
         dialog.transient(self.root)

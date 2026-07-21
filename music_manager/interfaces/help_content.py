@@ -458,6 +458,25 @@ def build_help_content(text: tk.Text) -> None:
     bullet("-h / --help \u2014 print usage summary")
 
     # ── Usage Patterns ──
+    subheading("Thumbs Down (webhook)")
+    body(
+        "A running webhook can exclude the currently playing track from a "
+        "profile, so a disliked track stops appearing after the next "
+        "regenerate. Wire it to a Home Assistant button:\n"
+    )
+    code(
+        '  POST /api/jobs\n'
+        '  {"command": "exclude-track", "profile": "Morning Mix",\n'
+        '   "track": {"title": "...", "album": "...", "scope": "track"}}\n'
+    )
+    body(
+        "Add \"exclude-track\" to webhook.allowed_commands. Because this "
+        "writes to your saved profiles, set webhook.token (or token_env) "
+        "and send it as the X-Auth-Token header. Use scope \"work\" to "
+        "drop the entire work instead of one movement. The exclusion "
+        "appears in the Rules window, where it can be undone.\n"
+    )
+
     heading("patterns", "Usage Patterns")
 
     subheading("All-Composer Playlist")

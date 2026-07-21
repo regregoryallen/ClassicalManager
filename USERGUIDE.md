@@ -955,7 +955,13 @@ Use `--config` to point at different config files for different schedules:
 
 The webhook service is a lightweight HTTP server that accepts remote commands to
 trigger playlist operations. It is designed for Home Assistant integration but
-works with any HTTP client. No authentication is required (local network use).
+works with any HTTP client.
+
+Authentication is optional and off by default (local network use). Set
+`webhook.token` in config.json — or `webhook.token_env` naming an environment
+variable that holds it — and every POST must then carry a matching
+`X-Auth-Token` header. Enabling it is recommended once you allow
+`exclude-track`, which modifies saved profiles.
 
 > **Linux only.** The webhook service and its systemd integration require Linux.
 > It is not supported on Windows or macOS.
@@ -1045,13 +1051,60 @@ curl -X POST http://localhost:5588/api/jobs \
   -d '{"command": "plex", "profile": "Morning Mix"}'
 ```
 
-**Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes).
+**Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes),
+plus `exclude-track` (see below). Each must be listed in
+`webhook.allowed_commands` to be accepted.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `command` | string | yes | One of the commands listed above. |
-| `profile` | string | no | Run for a single profile instead of all profiles. |
+| `profile` | string | no | Run for a single profile instead of all profiles. Required for `exclude-track`. |
 | `quiet` | boolean | no | Suppress progress output (default: `false`). |
+| `track` | object | no | Track identifiers for `exclude-track` (see below). |
+
+#### Thumbs Down: `exclude-track`
+
+Excludes the track you are listening to from a profile, so it stops appearing
+after the next playlist regeneration. The exclusion is an ordinary rule — it
+shows up in the Rules window and can be undone there.
+
+```bash
+curl -X POST http://localhost:5588/api/jobs \
+  -H 'Content-Type: application/json' \
+  -H 'X-Auth-Token: your-token' \
+  -d '{"command": "exclude-track", "profile": "Morning Mix",
+       "track": {"title": "Adagio", "album": "Spartacus"}}'
+```
+
+The `track` object accepts:
+
+| Field | Description |
+|-------|-------------|
+| `title` | Track title as tagged. Required unless `path` is given. |
+| `album` | Album title — use when the same title appears on several albums. |
+| `artist` | Performer, conductor, or ensemble — another disambiguator. |
+| `path` | Exact relative path; skips matching entirely. |
+| `scope` | `track` (default) or `work` to drop the entire work. |
+
+Matching is case-insensitive. If more than one track matches, the job fails
+rather than guessing — add `album` or `artist` to narrow it.
+
+**Home Assistant example.** Because playback goes through Music Assistant, the
+button reads the MA media player's attributes:
+
+```yaml
+rest_command:
+  thumbs_down:
+    url: "http://your-host:5588/api/jobs"
+    method: POST
+    headers:
+      X-Auth-Token: !secret cm_webhook_token
+    content_type: "application/json"
+    payload: >
+      {"command": "exclude-track", "profile": "Morning Mix",
+       "track": {"title": "{{ state_attr('media_player.music_assistant', 'media_title') }}",
+                 "album": "{{ state_attr('media_player.music_assistant', 'media_album_name') }}"}}
+```
 
 **Responses:**
 

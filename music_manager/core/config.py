@@ -228,6 +228,10 @@ def _validate_webhook(webhook: dict, path: Path) -> None:
     if "host" in webhook and not isinstance(webhook["host"], str):
         raise ConfigError(f"{path}: 'webhook.host' must be a string")
 
+    for key in ("token", "token_env", "library"):
+        if key in webhook and not isinstance(webhook[key], str):
+            raise ConfigError(f"{path}: 'webhook.{key}' must be a string")
+
     if "port" in webhook:
         port = webhook["port"]
         if not isinstance(port, int) or port < 1 or port > 65535:

@@ -16,6 +16,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from peewee import fn
+
 from music_manager.core.database import (
     Album, Composer, ProfileSelection, Track, Work,
 )
@@ -628,6 +630,122 @@ def classify_selections(index: LibraryIndex, rules) -> list[RuleStatus]:
             covers=len(covered), needs_breadcrumbs=needs_bc))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Thumbs-down: exclude a single track from a profile (v3.1)
+# ---------------------------------------------------------------------------
+
+class TrackNotFound(Exception):
+    """No track matched the supplied identifiers."""
+
+
+class AmbiguousTrack(Exception):
+    """Several tracks matched — refuse rather than guess wrong."""
+
+    def __init__(self, matches):
+        self.matches = matches
+        super().__init__(
+            f"{len(matches)} tracks match: "
+            + "; ".join(m.relative_path for m in matches[:5])
+            + (" ..." if len(matches) > 5 else ""))
+
+
+def find_track(library, title=None, album=None, artist=None,
+               relative_path=None):
+    """Locate one track from human-supplied metadata.
+
+    Used by the thumbs-down path, where the caller (Home Assistant via
+    Music Assistant) knows what is playing but not our internal IDs.
+    Matching is case-insensitive and narrows by album/artist when given.
+
+    Raises TrackNotFound or AmbiguousTrack — never guesses.
+    """
+    if relative_path:
+        track = Track.get_or_none(
+            (Track.library == library)
+            & (Track.relative_path == relative_path))
+        if track is None:
+            raise TrackNotFound(f"No track with path {relative_path!r}")
+        return track
+
+    if not title:
+        raise TrackNotFound("Provide either a title or a relative path")
+
+    query = (Track.select(Track, Album)
+             .join(Album)
+             .where((Track.library == library)
+                    & (fn.LOWER(Track.title) == title.strip().lower())))
+    if album:
+        query = query.where(fn.LOWER(Album.title) == album.strip().lower())
+    if artist:
+        needle = artist.strip().lower()
+        query = query.where(
+            (fn.LOWER(Track.performer) == needle)
+            | (fn.LOWER(Track.conductor) == needle)
+            | (fn.LOWER(Track.ensemble) == needle)
+            | (fn.LOWER(Album.album_artist) == needle))
+
+    matches = list(query)
+    if not matches:
+        raise TrackNotFound(
+            f"No track titled {title!r}"
+            + (f" on album {album!r}" if album else ""))
+    if len(matches) > 1:
+        # Same recording duplicated across albums is still ambiguous for
+        # exclusion purposes: the caller must disambiguate.
+        raise AmbiguousTrack(matches)
+    return matches[0]
+
+
+def exclude_track_from_profile(profile, track, scope="track"):
+    """Add an EXCEPT rule so a track (or its whole work) stops playing.
+
+    This is the entire thumbs-down feature: specificity guarantees the
+    rule beats whatever ADD currently admits the track, work-integrity
+    enforcement honors it (D1), and the unique (profile, level, key)
+    index makes repeated presses idempotent.
+
+    Returns a dict describing what happened (for CLI/webhook output).
+    """
+    if scope == "work":
+        if not track.work_id:
+            raise ValueError(
+                f"Track {track.relative_path!r} has no work to exclude")
+        level = "work"
+        key = key_for_work(track.work)
+        label = track.work.work_name
+    elif scope == "track":
+        level = "track"
+        key = key_for_track(track)
+        label = track.title
+    else:
+        raise ValueError(f"Invalid scope: {scope!r}")
+
+    existing = ProfileSelection.get_or_none(
+        (ProfileSelection.profile == profile)
+        & (ProfileSelection.level == level)
+        & (ProfileSelection.key == key))
+
+    if existing is not None and existing.excluded:
+        action = "already_excluded"
+    elif existing is not None:
+        # There was an explicit ADD for this exact item — flip it, since
+        # leaving it would contradict the exclusion.
+        existing.excluded = True
+        existing.pin_position = None
+        existing.save()
+        action = "converted_add_to_exclude"
+    else:
+        ProfileSelection.create(profile=profile, level=level, key=key,
+                                excluded=True)
+        action = "excluded"
+
+    logger.info("Thumbs-down: %s %s %r in profile '%s'",
+                action, level, label, profile.name)
+    return {"action": action, "level": level, "key": key, "label": label,
+            "profile": profile.name, "track_id": track.id,
+            "relative_path": track.relative_path}
 
 
 # ---------------------------------------------------------------------------

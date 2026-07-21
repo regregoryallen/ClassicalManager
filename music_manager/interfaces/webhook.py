@@ -45,7 +45,7 @@ class JobManager:
     def allowed_commands(self):
         return sorted(self._allowed)
 
-    def submit(self, command, quiet=False, profile=None):
+    def submit(self, command, quiet=False, profile=None, track=None):
         """Submit a job. Returns job dict on success, None if busy.
 
         Raises ValueError if command is not allowed.
@@ -69,6 +69,8 @@ class JobManager:
             }
             if profile:
                 job["profile"] = profile
+            if track:
+                job["track"] = dict(track)
             self._current = job
 
         thread = threading.Thread(target=self._run_job, args=(job,),
@@ -85,7 +87,8 @@ class JobManager:
         try:
             steps = self._build_steps(command,
                                         quiet=job.get("quiet", False),
-                                        profile=job.get("profile"))
+                                        profile=job.get("profile"),
+                                        track=job.get("track"))
             for args in steps:
                 logger.info("Running: %s", " ".join(args))
                 result = subprocess.run(
@@ -117,10 +120,28 @@ class JobManager:
         status = "OK" if exit_code == 0 else f"FAILED (exit {exit_code})"
         logger.info("Job %s [%s] %s", job["id"], command, status)
 
-    def _build_steps(self, command, quiet=False, profile=None):
+    def _build_steps(self, command, quiet=False, profile=None, track=None):
         """Return list of argv lists for the given command."""
         base = [self._python, self._main] + self._config_arg + ["--cli"]
         q = ["-q"] if quiet else []
+
+        if command == "exclude-track":
+            if not profile:
+                raise ValueError("exclude-track requires 'profile'")
+            track = track or {}
+            args = base + ["exclude-track", "--profile", profile]
+            for flag, value in (("--title", track.get("title")),
+                                ("--album", track.get("album")),
+                                ("--artist", track.get("artist")),
+                                ("--path", track.get("path"))):
+                if value:
+                    args += [flag, str(value)]
+            if track.get("scope"):
+                args += ["--scope", str(track["scope"])]
+            if not (track.get("title") or track.get("path")):
+                raise ValueError(
+                    "exclude-track requires track.title or track.path")
+            return [args]
 
         scan_args = base + ["scan-changes", "--library", self._library] + q
 
@@ -189,6 +210,10 @@ class WebhookHandler(BaseHTTPRequestHandler):
                                 {"error": "not found"})
 
     def do_POST(self):
+        if not self._authorized():
+            self._json_response(HTTPStatus.UNAUTHORIZED,
+                                {"error": "invalid or missing token"})
+            return
         if self.path == "/api/jobs":
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
@@ -211,10 +236,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
             quiet = bool(body.get("quiet", False))
             profile = body.get("profile")
+            track = body.get("track")
+            if track is not None and not isinstance(track, dict):
+                self._json_response(HTTPStatus.BAD_REQUEST,
+                                    {"error": "'track' must be an object"})
+                return
 
             try:
                 job = self.server.job_manager.submit(command, quiet=quiet,
-                                                     profile=profile)
+                                                     profile=profile,
+                                                     track=track)
             except ValueError as exc:
                 self._json_response(HTTPStatus.BAD_REQUEST,
                                     {"error": str(exc)})
@@ -230,6 +261,21 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._json_response(HTTPStatus.NOT_FOUND,
                                 {"error": "not found"})
 
+    def _authorized(self):
+        """Check the shared secret, when one is configured.
+
+        Job submission can now MODIFY saved profiles (exclude-track), so
+        an optional token guards writes. Absent config = open, matching
+        prior behavior on a trusted LAN.
+        """
+        expected = getattr(self.server, "auth_token", None)
+        if not expected:
+            return True
+        supplied = self.headers.get("X-Auth-Token", "")
+        # Constant-time compare to avoid leaking the token by timing.
+        import hmac
+        return hmac.compare_digest(str(supplied), str(expected))
+
     def _json_response(self, status, data):
         body = json.dumps(data, indent=2).encode("utf-8")
         self.send_response(status)
@@ -243,7 +289,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 
 def start_server(host, port, library_name, allowed_commands, config_arg,
-                 m3u_output_dir, log_file=None):
+                 m3u_output_dir, log_file=None, auth_token=None):
     """Start the webhook HTTP server."""
     if log_file:
         handler = logging.FileHandler(log_file)
@@ -272,10 +318,12 @@ def start_server(host, port, library_name, allowed_commands, config_arg,
 
     server = HTTPServer((host, port), WebhookHandler)
     server.job_manager = manager
+    server.auth_token = auth_token
 
     logger.info("Webhook service starting on %s:%d", host, port)
     logger.info("Library: %s", library_name)
     logger.info("Allowed commands: %s", ", ".join(sorted(allowed_commands)))
+    logger.info("Auth token: %s", "required" if auth_token else "not set")
     print(f"Webhook service listening on http://{host}:{port}", file=sys.stderr)
 
     try:

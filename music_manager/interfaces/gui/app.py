@@ -101,7 +101,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.ctk = ctk
         self._log_handler = log_handler
         self.root = ctk.CTk(className="classical-manager")
-        self.root.title("Classical Music Playlist Manager")
+        self.root.title(self._window_title())
 
         # Set window / taskbar icon (platform-specific)
         self._setup_app_icon()
@@ -130,6 +130,23 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._start_autosave_timer()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    @staticmethod
+    def _window_title():
+        """Title naming the open database, and flagging a dev checkout.
+
+        Running several databases (production, test, scratch) makes
+        "which one am I looking at?" a real question; answering it in the
+        title beats discovering the answer later.
+        """
+        base = "Classical Music Playlist Manager"
+        try:
+            from music_manager.core.config import get_db_path
+            db_name = Path(get_db_path()).name
+        except Exception:
+            return base
+        suffix = " [dev]" if (PROJECT_ROOT / ".git").exists() else ""
+        return f"{base} — {db_name}{suffix}"
 
     def _setup_app_icon(self):
         """Set the app icon for the window titlebar and taskbar.
@@ -171,7 +188,17 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._install_desktop_entry(icon_path)
 
     def _install_desktop_entry(self, icon_path):
-        """Create/update a .desktop file for taskbar icon and tooltip on Linux."""
+        """Create/update a .desktop file for taskbar icon and tooltip on Linux.
+
+        Skipped when running from a git checkout: this runs on every
+        startup, so a development copy would otherwise silently re-point
+        the menu entry at itself and the installed app would launch dev
+        code (with dev config and dev database) from then on.
+        """
+        if (PROJECT_ROOT / ".git").exists():
+            logger.debug("Dev checkout — leaving the desktop entry alone")
+            return
+
         desktop_dir = Path.home() / ".local" / "share" / "applications"
         desktop_file = desktop_dir / "classical-manager.desktop"
         main_py = PROJECT_ROOT / "main.py"

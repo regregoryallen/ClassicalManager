@@ -1036,6 +1036,21 @@ def check_source_folders(library: Library) -> dict:
     }
 
 
+def can_scan_incremental(library: Library) -> bool:
+    """True when an incremental scan is possible for this library.
+
+    Incremental scanning compares stored mtime/size against disk, so it
+    needs at least one track carrying that data — a library that has
+    never been fully scanned (or was scanned before those columns
+    existed) must be rebuilt first.
+    """
+    if not Track.select().where(Track.library == library).exists():
+        return False
+    return Track.select().where(
+        (Track.library == library) & Track.file_mtime.is_null(False)
+    ).exists()
+
+
 def scan_library(library: Library, progress_callback=None) -> ScanStats:
     """Perform a full scan of all source folders in a library.
 

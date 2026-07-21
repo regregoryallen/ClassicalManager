@@ -487,7 +487,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.lbl_composers.pack(padx=20, anchor="w")
 
         # Scan button + progress
-        self.scan_btn = ctk.CTkButton(self.sidebar, text="Rescan Library",
+        self.scan_btn = ctk.CTkButton(self.sidebar, text="Scan Library...",
                                       command=self._start_scan)
         self.scan_btn.pack(padx=15, pady=(12, 3), fill="x")
 
@@ -497,10 +497,6 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
 
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
-
-        ctk.CTkButton(self.sidebar, text="Scan Changes",
-                      command=self._scan_changes).pack(
-            padx=15, pady=(3, 0), fill="x")
 
         ctk.CTkButton(self.sidebar, text="Re-detect Works",
                       command=self._redetect_works).pack(
@@ -514,8 +510,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                       command=self._show_profile_summary).pack(
             padx=15, pady=(3, 0), fill="x")
 
-        ctk.CTkButton(self.sidebar, text="Track Similarity",
-                      command=self._show_similarity).pack(
+        ctk.CTkButton(self.sidebar, text="Analyze Audio",
+                      command=self._analyze_audio).pack(
             padx=15, pady=(3, 0), fill="x")
 
         # Source folders
@@ -817,7 +813,12 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         return messagebox.askyesno("Missing Folders", msg)
 
     def _start_scan(self):
-        """Start a library scan on a background thread."""
+        """Ask what kind of scan to run, then start it (v3.1).
+
+        Quick and Full are the same operation at different trust levels,
+        so they share one button and one dialog instead of two sidebar
+        entries whose difference was never obvious.
+        """
         if not self.active_library:
             messagebox.showwarning("No Library", "Select or create a library first.")
             return
@@ -825,22 +826,97 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         if not self._check_folders_before_scan():
             return
 
-        if not messagebox.askyesno(
-                "Full Scan",
-                f"Run a full scan of '{self.active_library.name}'?\n\n"
-                "This re-reads all audio files and may take a while\n"
-                "for large libraries."):
+        from music_manager.core.scanner import can_scan_incremental
+        quick_ok = can_scan_incremental(self.active_library)
+
+        mode = self._ask_scan_mode(quick_ok)
+        if mode is None:
             return
 
         self._scan_cancel = threading.Event()
         self.scan_btn.configure(state="normal", text="Cancel Scan",
                                 command=self._cancel_scan)
         self.scan_progress.set(0)
-        self.scan_status.configure(text="Starting scan...")
+        self.scan_status.configure(
+            text="Checking for changes..." if mode == "quick"
+            else "Starting full rebuild...")
 
         lib = self.active_library
-        thread = threading.Thread(target=self._run_scan, args=(lib,), daemon=True)
-        thread.start()
+        target = self._run_scan_changes if mode == "quick" else self._run_scan
+        threading.Thread(target=target, args=(lib,), daemon=True).start()
+
+    def _ask_scan_mode(self, quick_ok):
+        """Scan-mode chooser. Returns 'quick', 'full', or None if cancelled.
+
+        When the library has no mtime data, Quick is unavailable and the
+        dialog says why — replacing the old silent "run a full scan
+        first" refusal deep inside the incremental scanner.
+        """
+        ctk = self.ctk
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Scan Library")
+        dialog.transient(self.root)
+        dialog.configure(bg="#2b2b2b")
+        self._center_on_main(dialog, 520, 330)
+        dialog.wait_visibility()
+        dialog.grab_set()
+
+        tk.Label(dialog, text=f"Scan '{self.active_library.name}'",
+                 bg="#2b2b2b", fg="white",
+                 font=("Segoe UI", 13, "bold")).pack(anchor="w",
+                                                     padx=16, pady=(14, 8))
+
+        choice = tk.StringVar(value="quick" if quick_ok else "full")
+
+        quick_frame = tk.Frame(dialog, bg="#2b2b2b")
+        quick_frame.pack(fill="x", padx=16, pady=(0, 4))
+        tk.Radiobutton(
+            quick_frame, text="Quick scan  (recommended)", value="quick",
+            variable=choice, bg="#2b2b2b", fg="white",
+            selectcolor="#2b2b2b", activebackground="#2b2b2b",
+            activeforeground="white", state="normal" if quick_ok else "disabled",
+            font=("Segoe UI", 11)).pack(anchor="w")
+        quick_detail = ("Processes only new, changed, and deleted files.\n"
+                        "Fast — minutes at most."
+                        if quick_ok else
+                        "Unavailable: this library has no file timestamps\n"
+                        "yet, so a full rebuild must run first.")
+        tk.Label(quick_frame, text=quick_detail, bg="#2b2b2b", fg="gray70",
+                 justify="left", font=("Segoe UI", 10)).pack(anchor="w",
+                                                             padx=(24, 0))
+
+        full_frame = tk.Frame(dialog, bg="#2b2b2b")
+        full_frame.pack(fill="x", padx=16, pady=(10, 4))
+        tk.Radiobutton(
+            full_frame, text="Full rebuild", value="full",
+            variable=choice, bg="#2b2b2b", fg="white",
+            selectcolor="#2b2b2b", activebackground="#2b2b2b",
+            activeforeground="white",
+            font=("Segoe UI", 11)).pack(anchor="w")
+        tk.Label(
+            full_frame,
+            text=("Re-reads every audio file and rebuilds the catalog from\n"
+                  "scratch. Hours on a large library. Playlists, overrides,\n"
+                  "and audio analyses are preserved."),
+            bg="#2b2b2b", fg="#b08830", justify="left",
+            font=("Segoe UI", 10)).pack(anchor="w", padx=(24, 0))
+
+        result = {"mode": None}
+
+        def start():
+            result["mode"] = choice.get()
+            dialog.destroy()
+
+        btns = tk.Frame(dialog, bg="#2b2b2b")
+        btns.pack(fill="x", padx=16, pady=14, side="bottom")
+        tk.Button(btns, text="Start Scan", bg="#2d7d46", fg="white",
+                  font=("Segoe UI", 11), command=start).pack(side="left")
+        tk.Button(btns, text="Cancel", bg="#3b3b3b", fg="white",
+                  font=("Segoe UI", 11),
+                  command=dialog.destroy).pack(side="right")
+
+        dialog.wait_window()
+        return result["mode"]
 
     def _cancel_scan(self):
         """Signal the running scan to stop."""
@@ -880,39 +956,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         def finish():
             self.scan_status.configure(text=msg)
             self.scan_progress.set(1 if not self._scan_cancel.is_set() else 0)
-            self.scan_btn.configure(state="normal", text="Rescan Library",
+            self.scan_btn.configure(state="normal", text="Scan Library...",
                                     command=self._start_scan)
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
 
         self.root.after(0, finish)
-
-    def _scan_changes(self):
-        """Run an incremental scan (only new/changed/deleted files)."""
-        if not self.active_library:
-            messagebox.showwarning("No Library", "Select a library first.")
-            return
-
-        if not self._check_folders_before_scan():
-            return
-
-        if not messagebox.askyesno(
-                "Incremental Scan",
-                f"Scan '{self.active_library.name}' for new, changed,\n"
-                "or deleted files?"):
-            return
-
-        self._scan_cancel = threading.Event()
-        self.scan_btn.configure(state="normal", text="Cancel Scan",
-                                command=self._cancel_scan)
-        self.scan_progress.set(0)
-        self.scan_status.configure(text="Checking for changes...")
-
-        lib = self.active_library
-        thread = threading.Thread(target=self._run_scan_changes,
-                                  args=(lib,), daemon=True)
-        thread.start()
 
     def _run_scan_changes(self, library):
         """Run incremental scan in a background thread."""
@@ -946,7 +996,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         def finish():
             self.scan_status.configure(text=msg)
             self.scan_progress.set(1 if not self._scan_cancel.is_set() else 0)
-            self.scan_btn.configure(state="normal", text="Rescan Library",
+            self.scan_btn.configure(state="normal", text="Scan Library...",
                                     command=self._start_scan)
             self._refresh_metrics()
             self._refresh_builder_tree()

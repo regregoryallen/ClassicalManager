@@ -50,6 +50,83 @@ class BuilderTabMixin:
                      track_paths=s.get("track_paths"))
                 for s in self._current_selections]
 
+    # ------------------------------------------------------------------
+    # Dirty tracking (v3.1)
+    #
+    # Baseline diff rather than a mutation flag: a flag accumulates false
+    # positives (toggle on, toggle off — flag says dirty, state is
+    # identical) and is easy to miss a mutation path.  The baseline is
+    # captured whenever builder state becomes "saved" (new / save / load)
+    # and compared on demand.  A crash-restored autosave therefore reads
+    # as dirty automatically, which is exactly true.
+    # ------------------------------------------------------------------
+
+    def _builder_snapshot(self):
+        """Canonical, comparable snapshot of all builder state."""
+        return {
+            "name": self.profile_name_entry.get().strip(),
+            "shuffle": self.shuffle_mode.get(),
+            "integrity": self.work_integrity.get(),
+            "length_mode": self.length_mode.get(),
+            "length_value": self.length_value.get().strip(),
+            "seed": self.seed_entry.get().strip(),
+            "no_repeat": bool(self.no_repeat_var.get()),
+            "sep_composer": bool(self.sep_composer_var.get()),
+            "sep_album": bool(self.sep_album_var.get()),
+            "sep_form": bool(self.sep_form_var.get()),
+            "rules": sorted(
+                (s["level"], s["key"], bool(s["excluded"]),
+                 s.get("pin_position"))
+                for s in self._current_selections
+            ),
+        }
+
+    def _on_setting_changed(self, *_args):
+        """A playlist setting changed: refresh the dirty marker (cheap —
+        no tree rebuild; membership is unaffected by these widgets)."""
+        if hasattr(self, "rules_strip"):
+            self.rules_strip.configure(text=self._rules_strip_text())
+
+    def _mark_builder_clean(self):
+        """Record the current state as the saved baseline."""
+        self._builder_baseline = self._builder_snapshot()
+        if hasattr(self, "rules_strip"):
+            self.rules_strip.configure(text=self._rules_strip_text())
+
+    def _is_builder_dirty(self):
+        baseline = getattr(self, "_builder_baseline", None)
+        if baseline is None:
+            return False
+        return self._builder_snapshot() != baseline
+
+    def _confirm_discard_changes(self, action="continue"):
+        """Prompt to save unsaved builder changes before a state-clobbering
+        action (New / Load / library switch / close / import).
+
+        Returns True if the caller may proceed, False to abort.
+        """
+        if not self._is_builder_dirty():
+            return True
+
+        name = self.profile_name_entry.get().strip()
+        label = f"Profile '{name}'" if name else "This unsaved playlist"
+        answer = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            f"{label} has unsaved changes.\n\n"
+            f"Save before you {action}?\n\n"
+            f"Yes — save    No — discard    Cancel — stay here")
+        if answer is None:
+            return False
+        if answer:
+            if not self._save_profile():
+                return False  # save failed or was cancelled — stay put
+        else:
+            # Discard: the autosave still holds the discarded state and
+            # would resurrect it on next launch. Clear it now.
+            self._clear_autosave()
+        self._mark_builder_clean()
+        return True
+
     def _current_effective_state(self, index):
         from music_manager.core.selection import resolve_effective_state
         integrity = (self.work_integrity.get()
@@ -163,8 +240,9 @@ class BuilderTabMixin:
         the effective (selected + integrity-expanded) track counts."""
         if not self.active_library:
             return ""
+        dirty = " • unsaved" if self._is_builder_dirty() else ""
         if not self._current_selections:
-            return "Rules: 0 — playlist is empty"
+            return f"Rules: 0 — playlist is empty{dirty}"
 
         from music_manager.core.selection import classify_selections
         index = self._get_library_index()
@@ -191,8 +269,8 @@ class BuilderTabMixin:
         else:
             trk = f"{n_sel} trk"
 
-        return (f"Rules: {len(results)} ({', '.join(parts)}) — {trk}"
-                if parts else f"Rules: {len(results)} — {trk}")
+        return (f"Rules: {len(results)} ({', '.join(parts)}) — {trk}{dirty}"
+                if parts else f"Rules: {len(results)} — {trk}{dirty}")
 
     def _backfill_breadcrumbs(self):
         """Regenerate missing track_paths on work-level ADD rules.
@@ -229,6 +307,7 @@ class BuilderTabMixin:
         self.profile_name_entry = ctk.CTkEntry(row0, width=200,
                                                placeholder_text="e.g. Sunday Classical")
         self.profile_name_entry.pack(side="left", padx=3)
+        self.profile_name_entry.bind("<KeyRelease>", self._on_setting_changed)
         ctk.CTkButton(row0, text="New", width=60,
                       command=self._new_profile).pack(side="left", padx=3)
         ctk.CTkButton(row0, text="Load", width=60,
@@ -249,7 +328,8 @@ class BuilderTabMixin:
 
         ctk.CTkLabel(row1, text="Shuffle:").pack(side="left", padx=(0, 2))
         self.shuffle_mode = ctk.CTkComboBox(row1, values=["track", "work", "album"],
-                                            width=90)
+                                            width=90,
+                                            command=self._on_setting_changed)
         self.shuffle_mode.pack(side="left", padx=(0, 8))
         self.shuffle_mode.set("work")
 
@@ -262,17 +342,21 @@ class BuilderTabMixin:
 
         ctk.CTkLabel(row1, text="Length:").pack(side="left", padx=(0, 2))
         self.length_mode = ctk.CTkComboBox(row1, values=["all", "count", "duration"],
-                                           width=90)
+                                           width=90,
+                                           command=self._on_setting_changed)
         self.length_mode.pack(side="left", padx=(0, 2))
         self.length_mode.set("all")
         self.length_value = ctk.CTkEntry(row1, width=55, placeholder_text="H:MM")
         self.length_value.pack(side="left", padx=(0, 8))
+        self.length_value.bind("<KeyRelease>", self._on_setting_changed)
 
         ctk.CTkLabel(row1, text="Seed:").pack(side="left", padx=(0, 2))
         self.seed_entry = ctk.CTkEntry(row1, width=55, placeholder_text="rnd")
         self.seed_entry.pack(side="left", padx=(0, 8))
+        self.seed_entry.bind("<KeyRelease>", self._on_setting_changed)
 
-        self.no_repeat_var = ctk.CTkCheckBox(row1, text="No repeats", width=30)
+        self.no_repeat_var = ctk.CTkCheckBox(row1, text="No repeats", width=30,
+                                             command=self._on_setting_changed)
         self.no_repeat_var.pack(side="left", padx=(0, 4))
         self.no_repeat_var.select()
 
@@ -281,11 +365,14 @@ class BuilderTabMixin:
         row1b.pack(fill="x", padx=10, pady=0)
 
         ctk.CTkLabel(row1b, text="Avoid adjacent:").pack(side="left", padx=(0, 2))
-        self.sep_composer_var = ctk.CTkCheckBox(row1b, text="Same Composer", width=30)
+        self.sep_composer_var = ctk.CTkCheckBox(row1b, text="Same Composer", width=30,
+                                        command=self._on_setting_changed)
         self.sep_composer_var.pack(side="left", padx=(0, 8))
-        self.sep_album_var = ctk.CTkCheckBox(row1b, text="Same Album", width=30)
+        self.sep_album_var = ctk.CTkCheckBox(row1b, text="Same Album", width=30,
+                                        command=self._on_setting_changed)
         self.sep_album_var.pack(side="left", padx=(0, 8))
-        self.sep_form_var = ctk.CTkCheckBox(row1b, text="Same Form", width=30)
+        self.sep_form_var = ctk.CTkCheckBox(row1b, text="Same Form", width=30,
+                                        command=self._on_setting_changed)
         self.sep_form_var.pack(side="left", padx=(0, 8))
 
         # -- Main area: library pane | buttons | playlist pane --
@@ -1162,8 +1249,11 @@ class BuilderTabMixin:
                 "All tracks are used by at least one profile.")
             return
 
-        # Clear builder and populate with unused items
-        self._new_profile()
+        # Clear builder and populate with unused items. If the user
+        # cancels the unsaved-changes prompt, abort — populating on top
+        # of the existing rules would silently merge two playlists.
+        if not self._new_profile():
+            return
         from music_manager.core.database import Album, Work, Track
         from music_manager.core.selection import key_for_album, key_for_work, key_for_track
         for target_id, name in albums:
@@ -1368,8 +1458,15 @@ class BuilderTabMixin:
             finally:
                 self._delete_temp_profile(profile)
 
-    def _new_profile(self):
-        """Clear the builder to start a fresh playlist profile."""
+    def _new_profile(self, check_dirty=True):
+        """Clear the builder to start a fresh playlist profile.
+
+        check_dirty=False is for callers that already prompted (e.g. the
+        library switch) or that must not prompt (startup).
+        """
+        if check_dirty and not self._confirm_discard_changes(
+                "start a new playlist"):
+            return False
         self.profile_name_entry.delete(0, "end")
         self.shuffle_mode.set("work")
         self.work_integrity.set("enforce")
@@ -1383,17 +1480,29 @@ class BuilderTabMixin:
         self._current_selections.clear()
         self._refresh_rules_display()
         self._refresh_builder_tree()
+        self._mark_builder_clean()
+        return True
 
     def _save_profile(self):
-        """Save current settings as a named profile in the DB."""
+        """Save current settings as a named profile in the DB.
+
+        Returns True when the profile was saved, False otherwise (no
+        library, no name, name conflict, or the user cancelled) — the
+        unsaved-changes prompt relies on this to decide whether the
+        pending navigation may proceed.
+        """
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
-            return
+            return False
 
         name = self.profile_name_entry.get().strip()
         if not name:
-            messagebox.showwarning("No Name", "Enter a profile name.")
-            return
+            # Unnamed profile: ask for a name rather than dead-ending.
+            name = self._ask_profile_name()
+            if not name:
+                return False
+            self.profile_name_entry.delete(0, "end")
+            self.profile_name_entry.insert(0, name)
 
         from music_manager.core.database import PlaylistProfile, ProfileSelection
 
@@ -1412,7 +1521,7 @@ class BuilderTabMixin:
                 f"A profile named '{name}' already exists in library "
                 f"'{conflict.library.name}'. Profile names must be unique "
                 f"across all libraries.")
-            return
+            return False
 
         # Delete existing profile with same name in this library (CASCADE handles selections)
         for existing in PlaylistProfile.select().where(
@@ -1449,7 +1558,44 @@ class BuilderTabMixin:
             )
 
         self._clear_autosave()
+        self._mark_builder_clean()
         messagebox.showinfo("Saved", f"Profile '{name}' saved.")
+        return True
+
+    def _ask_profile_name(self):
+        """Modal prompt for a profile name. Returns the name or None."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Save Playlist")
+        dialog.transient(self.root)
+        dialog.configure(bg="#2b2b2b")
+        self._center_on_main(dialog, 340, 130)
+        dialog.wait_visibility()
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Profile name:", bg="#2b2b2b",
+                 fg="white").pack(anchor="w", padx=12, pady=(12, 2))
+        entry = tk.Entry(dialog, bg="#3b3b3b", fg="white",
+                         insertbackground="white")
+        entry.pack(fill="x", padx=12)
+        entry.focus_set()
+
+        result = {"name": None}
+
+        def ok():
+            value = entry.get().strip()
+            if value:
+                result["name"] = value
+                dialog.destroy()
+
+        btns = tk.Frame(dialog, bg="#2b2b2b")
+        btns.pack(fill="x", padx=12, pady=10)
+        tk.Button(btns, text="Save", bg="#2d7d46", fg="white",
+                  command=ok).pack(side="left")
+        tk.Button(btns, text="Cancel", bg="#3b3b3b", fg="white",
+                  command=dialog.destroy).pack(side="right")
+        entry.bind("<Return>", lambda _e: ok())
+        dialog.wait_window()
+        return result["name"]
 
     def _delete_profile(self):
         """Show a profile picker, then delete the selected profile after confirmation."""
@@ -1534,6 +1680,8 @@ class BuilderTabMixin:
             messagebox.showwarning("No Library", "Select a library first.")
             return
         if self._profile_picker_open:
+            return
+        if not self._confirm_discard_changes("load another playlist"):
             return
         self._profile_picker_open = True
 
@@ -1655,4 +1803,8 @@ class BuilderTabMixin:
         self._backfill_breadcrumbs()
 
         self._refresh_rules_display()
+        # A freshly loaded profile is the new clean baseline — except for
+        # the autosave restore, whose whole point is unsaved work.
+        if name != "__autosave__":
+            self._mark_builder_clean()
         self.root.config(cursor="")

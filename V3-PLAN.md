@@ -144,6 +144,24 @@
   install at `~/.local/share/classical-manager`; audio re-analysis running
   (resumable). v3.1 work starts from the Backlog section above.
 
+## v3.1 progress (branch `v3.1`, started 2026-07-21)
+
+- [x] **Dirty-state tracking with save prompts** — done 2026-07-21 (91 tests
+  green). `_builder_snapshot`/`_mark_builder_clean`/`_is_builder_dirty`/
+  `_confirm_discard_changes` in `builder_tab.py`; baseline captured on
+  new/save/load (NOT on autosave restore — restored work is genuinely
+  unsaved). Prompts on New, Load, library switch (reverts the combobox on
+  Cancel), Find Unused, and window close. `_save_profile` now returns
+  bool and prompts for a name when the profile is unnamed
+  (`_ask_profile_name`). Discard clears the autosave so discarded work
+  cannot be resurrected next launch. "• unsaved" marker in the health
+  strip; settings widgets refresh it via `_on_setting_changed`. Note:
+  `_new_profile` returns bool — callers that populate afterwards (Find
+  Unused) must abort on False or they merge two playlists.
+- [ ] Merged scan dialog
+- [ ] Analyze Audio button (retire similarity_popup.py)
+- [ ] Thumbs-down webhook
+
 ## Backlog (post-v3.0, user-proposed 2026-07-20)
 
 - **Merge Rescan + Scan Changes** into one "Scan Library…" button → dialog:

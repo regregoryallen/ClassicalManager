@@ -165,6 +165,11 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Profile Management")
     bullet("Profile name \u2014 enter a name for your playlist profile")
+    bullet("Unsaved changes \u2014 the status strip shows \"\u2022 unsaved\" "
+           "whenever the playlist differs from its saved version. New, Load, "
+           "switching libraries, Find Unused, and quitting all prompt you to "
+           "Save, Discard, or Cancel first, so work is never lost by "
+           "navigating away")
     bullet("Load \u2014 restore a saved profile's settings and selections")
     bullet("Save \u2014 save current settings and selections")
     bullet("Delete \u2014 remove saved profiles")

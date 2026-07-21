@@ -114,6 +114,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._current_selections = []  # in-memory selections: [{level, key, excluded, pin_position, track_paths, display}]
         self._profile_picker_open = False
         self._rules_window = None      # singleton Rules window (Phase 5)
+        self._builder_baseline = None  # saved-state snapshot (v3.1 dirty)
         self._lib_tree_snapshot = []  # snapshot for filter/detach
         self._pl_tree_snapshot = []
         self._lib_search_meta = {}   # iid → searchable text for builder lib tree
@@ -203,6 +204,11 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         A failing autosave (dead network mount) must never prevent the
         window from closing.
         """
+        try:
+            if not self._confirm_discard_changes("quit"):
+                return
+        except Exception as exc:
+            logger.warning("Unsaved-changes check failed on close: %s", exc)
         try:
             self._autosave()
         except Exception as exc:
@@ -592,6 +598,15 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.active_library = None
             self.plex_section_entry.delete(0, "end")
             return
+
+        # Switching libraries clobbers the builder — offer to save first,
+        # and put the combobox back if the user cancels (v3.1).
+        previous = self.active_library.name if self.active_library else None
+        if previous and previous != name:
+            if not self._confirm_discard_changes("switch libraries"):
+                self.lib_combo.set(previous)
+                return
+
         try:
             self.active_library = Library.get(Library.name == name)
         except Library.DoesNotExist:
@@ -607,7 +622,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         if self.active_library.plex_section:
             self.plex_section_entry.insert(0, self.active_library.plex_section)
         with self._busy():
-            self._new_profile()
+            self._new_profile(check_dirty=False)  # already prompted above
             self._refresh_metrics()
             self._refresh_source_folders()
             self._refresh_builder_tree()

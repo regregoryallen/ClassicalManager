@@ -306,6 +306,21 @@ bar at the top of the help window lets you jump between all sections.
 
 The main workspace for creating playlists.
 
+### Unsaved Changes
+
+The status strip at the bottom right shows **• unsaved** whenever the current
+playlist differs from its saved version. Any action that would replace the
+builder's contents — **New**, **Load**, switching libraries, **Find Unused**,
+or quitting — prompts first:
+
+- **Yes** saves the profile (asking for a name if it doesn't have one yet)
+- **No** discards the changes
+- **Cancel** stays where you are, changes intact
+
+Autosave continues to run in the background as crash protection. If the app
+exits unexpectedly, your in-progress work is restored on next launch and
+correctly shows as unsaved.
+
 ### Profile Management (top row)
 
 - **Profile name**: Enter a name for your playlist profile

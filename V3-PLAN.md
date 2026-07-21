@@ -184,13 +184,20 @@
   ADD, D1 keeps enforce-integrity from re-adding it, the unique
   (profile, level, key) index makes repeats idempotent, and the Rules window
   shows/undoes it. No engine changes. The work is identification + plumbing:
-  new CLI verb `exclude-track --profile NAME` accepting `--rating-key`
-  (resolve via Plex → file path → reverse path rules → relative_path;
-  preferred, HA exposes it) or `--title/--album` (exact match, error on
-  ambiguity — never guess); webhook gains an endpoint/command invoking it as
-  a job (keeps the webhook process DB-free). Optional variant: scope=work to
-  thumb down the whole work. Since this is the first webhook op that
-  MODIFIES profiles, add the optional shared-secret header in the same pass.
+  new CLI verb `exclude-track --profile NAME`. **Playback context (2026-07-21):
+  HA plays via Music Assistant, not Plex directly** (chain: CM → Plex push
+  nightly → HA script syncs MA playlists from Plex nightly → MA plays; Plex
+  is used directly on the phone/externally). So the HA button captures an MA
+  media_player whose media_content_id is an MA URI, not a Plex ratingKey —
+  primary resolution is `--title/--album` (+artist) exact match, error on
+  ambiguity, never guess; investigate at build time whether MA's content ID
+  embeds a usable Plex provider key as a bonus `--rating-key` path. Webhook
+  gains an endpoint/command invoking the verb as a job (keeps the webhook
+  process DB-free). Optional variant: scope=work to thumb down the whole
+  work. Since this is the first webhook op that MODIFIES profiles, add the
+  optional shared-secret header in the same pass. Note: the Plex
+  serializer's update-in-place (playlist-ID preservation) is load-bearing
+  for the MA sync — do not regress it.
 
 Target consumer: Claude Code. Each phase is independently completable and committable;
 finish a phase, run its checkpoint, commit+push with a descriptive message, then stop or

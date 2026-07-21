@@ -196,6 +196,23 @@
   z-scoring largely absorbs. Changing features requires a FEATURE_VERSION
   bump + full re-analysis, so bundle it with this work rather than doing it
   piecemeal.
+- **Scan parallelism — MEASURED, NOT WORTH DOING** (2026-07-21). Unlike the
+  similarity analysis, scanning is I/O-latency bound, not CPU bound:
+  `extract_tags` costs **1.4 ms/file locally vs ~158 ms/file over the CIFS
+  mount** (113x). Thread-pool trials with distinct cold batches, alternating
+  1-vs-8 workers across three rounds to cancel network drift, gave a median
+  **1.14x** (158 → 139 ms/file; 16 min → 14 min for 5,902 files); 32 threads
+  regressed to 0.89x. Pre-reading each file into BytesIO before handing it to
+  mutagen was *worse* (0.79x) — mutagen often needs only the header, so bulk
+  reads transfer 14 MB needlessly. The SMB session/server is the
+  serialization point and one stream already saturates it. Verdict: adding
+  thread-safe progress, cancellation, and parent-only DB writes to buy ~10%
+  is a bad trade on a mount that has already caused one data incident.
+  Better levers if full-rescan time ever matters: (a) run the scan **on the
+  NAS** (files local there ⇒ ~1.4 ms/file, potentially ~100x), (b) relax the
+  mount's `actimeo=1`/`closetimeo=1` for a mostly-static library, (c) nothing
+  — Quick scan already skips unchanged files and `stat()` is effectively free
+  once the directory walk has run, which is why routine updates are fast.
 - **Analysis speed** (measured 2026-07-21 on 24-core Ultra 9 275HX):
   ~12s/track today (HPSS 6-10s, other features ~2s, double file decode
   ~0.5s — `_extract_features` and `compute_volatility` each call

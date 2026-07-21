@@ -173,7 +173,8 @@ under these folders will be discovered during scanning.
 
 ### Step 3: Scan the Library
 
-Click **Rescan Library**. The scanner will:
+Click **Scan Library...** and choose **Full rebuild** (the only option for a
+brand-new library). The scanner will:
 
 - Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC, etc.)
 - Extract metadata: title, artist, album, composer, genre, conductor, ensemble,
@@ -238,19 +239,23 @@ tabs.
 Displays live counts for the active library: Albums, Works, Tracks, Composers.
 Updated automatically after scans.
 
-### Rescan Library
+### Scan Library...
 
-Rescans all source folders, rebuilding albums, works, and tracks from file metadata.
-Overrides are preserved across rescans. During scanning, the button changes to
+Opens a dialog offering two scan modes. During scanning, the button changes to
 **Cancel Scan**.
 
-### Scan Changes
+**Quick scan** (recommended, the default) processes only new, changed, and deleted
+files by comparing each file's modification time and size against stored values.
+Minutes at most; work detection re-runs only on albums that changed. This is the
+right choice for day-to-day updates.
 
-Runs an incremental scan that only processes new, changed, or deleted files by
-comparing each file's modification time and size against stored values. Much faster
-than a full rescan for day-to-day updates.
+**Full rebuild** re-reads every audio file and rebuilds the catalog from scratch —
+hours on a large library. Playlists, overrides, and audio analyses are all
+preserved. Use it for the first scan of a library, or to recover from suspected
+metadata drift.
 
-Requires one prior full scan. Work detection re-runs only on albums that had changes.
+Quick scan is unavailable until one full rebuild has run, since it needs stored
+file timestamps; the dialog explains this rather than failing later.
 
 ### Re-detect Works
 
@@ -281,9 +286,10 @@ migrating from a simpler playlist system.
 
 - **Library Integrity Check**: Checks for orphaned tracks, unscanned files,
   duplicates, and cross-folder works
-- **Track Similarity**: Opens the standalone Track Similarity Finder, where you pick
-  seed tracks directly and browse audio-similar matches (see
-  [Find Similar Tracks](#find-similar-tracks))
+- **Analyze Audio**: Runs the one-time audio analysis that
+  [Find Similar Tracks](#find-similar-tracks) depends on. Reports how many tracks
+  still need analysis, shows progress, and can be cancelled and resumed later —
+  already-analyzed tracks are skipped
 - **Profile Summary**: Sortable table of all profiles with counts and durations
 - **Settings**: Opens the configuration dialog (see [Settings](#settings))
 - **View Logs**: Shows application log output for the current session
@@ -305,6 +311,21 @@ bar at the top of the help window lets you jump between all sections.
 ## Playlist Builder Tab
 
 The main workspace for creating playlists.
+
+### Unsaved Changes
+
+The status strip at the bottom right shows **• unsaved** whenever the current
+playlist differs from its saved version. Any action that would replace the
+builder's contents — **New**, **Load**, switching libraries, **Find Unused**,
+or quitting — prompts first:
+
+- **Yes** saves the profile (asking for a name if it doesn't have one yet)
+- **No** discards the changes
+- **Cancel** stays where you are, changes intact
+
+Autosave continues to run in the background as crash protection. If the app
+exits unexpectedly, your in-progress work is restored on next launch and
+correctly shows as unsaved.
 
 ### Profile Management (top row)
 
@@ -443,8 +464,10 @@ Actions:
 - **Right-click** a result for **Play** or **Details** (metadata popup) to audition and
   inspect before accepting.
 
-A standalone **Track Similarity Finder** is also available from the sidebar, where you
-pick seed tracks directly rather than from the current profile.
+Find Similar analyzes any tracks that still need it before searching. For a small
+number it just runs; for a large backlog it warns with a time estimate first, so a
+search click never silently starts a multi-hour job. To do that work deliberately,
+use **Analyze Audio** in the sidebar.
 
 ### Pin to Position
 
@@ -932,7 +955,13 @@ Use `--config` to point at different config files for different schedules:
 
 The webhook service is a lightweight HTTP server that accepts remote commands to
 trigger playlist operations. It is designed for Home Assistant integration but
-works with any HTTP client. No authentication is required (local network use).
+works with any HTTP client.
+
+Authentication is optional and off by default (local network use). Set
+`webhook.token` in config.json — or `webhook.token_env` naming an environment
+variable that holds it — and every POST must then carry a matching
+`X-Auth-Token` header. Enabling it is recommended once you allow
+`exclude-track`, which modifies saved profiles.
 
 > **Linux only.** The webhook service and its systemd integration require Linux.
 > It is not supported on Windows or macOS.
@@ -1022,13 +1051,60 @@ curl -X POST http://localhost:5588/api/jobs \
   -d '{"command": "plex", "profile": "Morning Mix"}'
 ```
 
-**Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes).
+**Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes),
+plus `exclude-track` (see below). Each must be listed in
+`webhook.allowed_commands` to be accepted.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `command` | string | yes | One of the commands listed above. |
-| `profile` | string | no | Run for a single profile instead of all profiles. |
+| `profile` | string | no | Run for a single profile instead of all profiles. Required for `exclude-track`. |
 | `quiet` | boolean | no | Suppress progress output (default: `false`). |
+| `track` | object | no | Track identifiers for `exclude-track` (see below). |
+
+#### Thumbs Down: `exclude-track`
+
+Excludes the track you are listening to from a profile, so it stops appearing
+after the next playlist regeneration. The exclusion is an ordinary rule — it
+shows up in the Rules window and can be undone there.
+
+```bash
+curl -X POST http://localhost:5588/api/jobs \
+  -H 'Content-Type: application/json' \
+  -H 'X-Auth-Token: your-token' \
+  -d '{"command": "exclude-track", "profile": "Morning Mix",
+       "track": {"title": "Adagio", "album": "Spartacus"}}'
+```
+
+The `track` object accepts:
+
+| Field | Description |
+|-------|-------------|
+| `title` | Track title as tagged. Required unless `path` is given. |
+| `album` | Album title — use when the same title appears on several albums. |
+| `artist` | Performer, conductor, or ensemble — another disambiguator. |
+| `path` | Exact relative path; skips matching entirely. |
+| `scope` | `track` (default) or `work` to drop the entire work. |
+
+Matching is case-insensitive. If more than one track matches, the job fails
+rather than guessing — add `album` or `artist` to narrow it.
+
+**Home Assistant example.** Because playback goes through Music Assistant, the
+button reads the MA media player's attributes:
+
+```yaml
+rest_command:
+  thumbs_down:
+    url: "http://your-host:5588/api/jobs"
+    method: POST
+    headers:
+      X-Auth-Token: !secret cm_webhook_token
+    content_type: "application/json"
+    payload: >
+      {"command": "exclude-track", "profile": "Morning Mix",
+       "track": {"title": "{{ state_attr('media_player.music_assistant', 'media_title') }}",
+                 "album": "{{ state_attr('media_player.music_assistant', 'media_album_name') }}"}}
+```
 
 **Responses:**
 
@@ -1208,7 +1284,7 @@ Use **Set Group Key** to merge tracks, or **Make Standalone** to split them. Cli
 
 ### Scan takes too long
 
-Large collections may take several minutes for a full scan. Use **Scan Changes** for
+Large collections may take hours for a full rebuild. Use **Quick scan** for
 routine updates — it only processes new, changed, or deleted files. Either scan type
 can be cancelled mid-operation.
 

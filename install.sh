@@ -876,11 +876,24 @@ setup_webhook_service() {
     local wh_port
     ask "Webhook port" wh_port "5588"
 
+    echo ""
+    echo "  Allow \"thumbs down\" (exclude-track)? This lets a remote button"
+    echo "  remove the playing track from a playlist profile — the only"
+    echo "  webhook command that modifies saved data."
+    local wh_thumbs="false" wh_token=""
+    if ask_yn "Allow exclude-track?" "y"; then
+        wh_thumbs="true"
+        echo ""
+        echo "  A shared token is recommended when writes are allowed."
+        echo "  Leave blank for none (trusted LAN only)."
+        ask "Webhook token (optional)" wh_token ""
+    fi
+
     # Write webhook section to config.json
     local config_file="$INSTALL_DIR/config.json"
     local venv_python="$INSTALL_DIR/venv/bin/python"
 
-    WH_PORT="$wh_port" \
+    WH_PORT="$wh_port" WH_THUMBS="$wh_thumbs" WH_TOKEN="${wh_token:-}" \
     "$venv_python" -c "
 import json, os
 
@@ -888,11 +901,19 @@ config_file = '$config_file'
 with open(config_file) as f:
     config = json.load(f)
 
-config['webhook'] = {
+commands = ['plex', 'scan', 'scan+plex', 'scan+m3u', 'm3u']
+if os.environ.get('WH_THUMBS') == 'true':
+    commands.append('exclude-track')
+
+webhook = {
     'host': '0.0.0.0',
     'port': int(os.environ.get('WH_PORT', '5588')),
-    'allowed_commands': ['plex', 'scan', 'scan+plex', 'scan+m3u', 'm3u']
+    'allowed_commands': commands,
 }
+token = os.environ.get('WH_TOKEN', '').strip()
+if token:
+    webhook['token'] = token
+config['webhook'] = webhook
 
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
@@ -906,22 +927,61 @@ with open(config_file, 'w') as f:
         > "$systemd_dir/classical-manager-webhook.service"
 
     systemctl --user daemon-reload 2>/dev/null || true
-    if systemctl --user enable --now classical-manager-webhook 2>/dev/null; then
-        success "Webhook service installed and started on port $wh_port"
+    systemctl --user enable classical-manager-webhook 2>/dev/null || true
+
+    # 'restart' rather than 'enable --now': the latter is a no-op when the
+    # service is already running, so upgrades would silently keep serving
+    # the previous code and config until a manual restart.
+    WEBHOOK_RESTARTED=1
+    if systemctl --user restart classical-manager-webhook 2>/dev/null; then
+        sleep 1
+        if systemctl --user is-active --quiet classical-manager-webhook; then
+            success "Webhook service running on port $wh_port (restarted to pick up this version)"
+        else
+            warn "Webhook service was restarted but is not active."
+            echo "  Check the log:"
+            echo "    journalctl --user -u classical-manager-webhook -n 30"
+        fi
     else
         warn "Could not start service automatically."
         echo "  You can start it manually:"
         echo "    systemctl --user start classical-manager-webhook"
     fi
 
+    local wh_host
+    wh_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$wh_host" ] || wh_host="THIS_HOST"
+
+    echo ""
+    echo "  Verify with:"
+    echo "    curl -s http://localhost:${wh_port}/api/health"
     echo ""
     echo -e "${BOLD}Home Assistant configuration.yaml:${RESET}"
     echo "  rest_command:"
     echo "    classical_manager_plex:"
-    echo "      url: \"http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'THIS_HOST'):${wh_port}/api/jobs\""
+    echo "      url: \"http://${wh_host}:${wh_port}/api/jobs\""
     echo "      method: POST"
+    if [ -n "$wh_token" ]; then
+        echo "      headers:"
+        echo "        X-Auth-Token: !secret cm_webhook_token"
+    fi
     echo "      content_type: \"application/json\""
     echo "      payload: '{\"command\": \"plex\"}'"
+    if [ "$wh_thumbs" = "true" ]; then
+        echo ""
+        echo "    classical_manager_thumbs_down:"
+        echo "      url: \"http://${wh_host}:${wh_port}/api/jobs\""
+        echo "      method: POST"
+        if [ -n "$wh_token" ]; then
+            echo "      headers:"
+            echo "        X-Auth-Token: !secret cm_webhook_token"
+        fi
+        echo "      content_type: \"application/json\""
+        echo "      payload: >"
+        echo "        {\"command\": \"exclude-track\", \"profile\": \"YOUR PROFILE\","
+        echo "         \"track\": {\"title\": \"{{ state_attr('media_player.YOUR_PLAYER', 'media_title') }}\","
+        echo "                   \"album\": \"{{ state_attr('media_player.YOUR_PLAYER', 'media_album_name') }}\"}}"
+    fi
     echo ""
 }
 
@@ -1063,10 +1123,12 @@ main() {
     # Step 8: Optional webhook service
     setup_webhook_service
 
-    # Step 9: Restart webhook service if already running (picks up new code)
-    if systemctl --user is-active classical-manager-webhook &>/dev/null; then
+    # Step 9: Restart the webhook service so it picks up this version.
+    # Skipped when setup_webhook_service already restarted it above.
+    if [ -z "${WEBHOOK_RESTARTED:-}" ] && \
+       systemctl --user is-active classical-manager-webhook &>/dev/null; then
         systemctl --user restart classical-manager-webhook 2>/dev/null && \
-            success "Webhook service restarted" || \
+            success "Webhook service restarted (running the new code)" || \
             warn "Could not restart webhook service"
     fi
 

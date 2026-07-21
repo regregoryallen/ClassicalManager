@@ -43,6 +43,12 @@ CLI commands:
       Pre-compute audio similarity features (librosa) for all
       tracks in a library. Useful before using the GUI similarity finder.
 
+  exclude-track --profile NAME (--title T [--album A] [--artist X] | --path P)
+                [--scope track|work] [-v] [-q]
+      "Thumbs down": exclude a track (or its whole work) from a profile.
+      Takes effect on the next generate. Also available via the webhook
+      for Home Assistant buttons.
+
   integrity --library NAME [-v]
       Check for orphaned tracks, unscanned files, duplicates, and
       cross-folder works.

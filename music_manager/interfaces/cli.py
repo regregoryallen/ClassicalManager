@@ -526,9 +526,16 @@ def webhook(
     config_dir = (_config_path_override or DEFAULT_CONFIG_PATH).parent
     log_file = config_dir / "webhook.log"
 
+    # Optional shared secret; env var wins so the token need not sit in
+    # config.json. Required for exclude-track, which modifies profiles.
+    import os
+    auth_token = os.environ.get(wh.get("token_env", "CM_WEBHOOK_TOKEN")) \
+        or wh.get("token")
+
     from music_manager.interfaces.webhook import start_server
     start_server(resolved_host, resolved_port, lib_name, allowed,
-                 config_arg, m3u_dir, log_file=str(log_file))
+                 config_arg, m3u_dir, log_file=str(log_file),
+                 auth_token=auth_token)
 
 
 @app.command("analyze-similarity")
@@ -556,6 +563,59 @@ def analyze_similarity(
         typer.echo(f"Already done:   {stats['skipped']}")
         typer.echo(f"Analyzed now:   {stats['analyzed']}")
         typer.echo(f"Failed:         {stats['failed']}")
+
+
+@app.command("exclude-track")
+def exclude_track(
+    profile: str = typer.Option(..., help="Profile to exclude the track from"),
+    title: str = typer.Option(None, help="Track title (as tagged)"),
+    album: str = typer.Option(None, help="Album title, to disambiguate"),
+    artist: str = typer.Option(None, help="Performer/conductor/ensemble, to disambiguate"),
+    path: str = typer.Option(None, help="Relative path (exact, skips matching)"),
+    scope: str = typer.Option("track", help="'track' or 'work' (exclude the whole work)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+):
+    """Exclude a track from a profile ("thumbs down").
+
+    Adds an exclusion rule that takes effect on the next generate, so a
+    disliked track stops appearing without editing the playlist by hand.
+    Intended for automation: a Home Assistant button posting the
+    currently playing track to the webhook.
+    """
+    _setup_logging(verbose)
+
+    from music_manager.core.selection import (
+        AmbiguousTrack, TrackNotFound, exclude_track_from_profile, find_track,
+    )
+
+    prof = _get_profile(profile)
+    try:
+        track = find_track(prof.library, title=title, album=album,
+                           artist=artist, relative_path=path)
+    except AmbiguousTrack as exc:
+        typer.echo(f"Error: ambiguous track — {exc}", err=True)
+        typer.echo("Narrow it with --album/--artist, or pass --path.",
+                   err=True)
+        raise typer.Exit(2)
+    except TrackNotFound as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(3)
+
+    try:
+        result = exclude_track_from_profile(prof, track, scope=scope)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(2)
+
+    if not quiet:
+        if result["action"] == "already_excluded":
+            typer.echo(f"Already excluded from '{prof.name}': "
+                       f"{result['label']}")
+        else:
+            typer.echo(f"Excluded from '{prof.name}': {result['label']} "
+                       f"({result['level']})")
+            typer.echo("Takes effect on the next playlist generation.")
 
 
 @app.command("export-library")

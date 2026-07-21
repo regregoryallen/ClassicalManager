@@ -90,7 +90,8 @@ def build_help_content(text: tk.Text) -> None:
     )
 
     subheading("3. Scan the Library")
-    body("Click Rescan Library. The scanner will:\n")
+    body("Click Scan Library... and choose Full rebuild (the only option "
+         "for a new library). The scanner will:\n")
     bullet("Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, etc.)")
     bullet("Extract metadata: title, artist, album, composer, genre, conductor, ensemble")
     bullet("Read MusicBrainz identifiers if present")
@@ -135,12 +136,22 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Import Lib \u2014 load a library from a JSON file")
 
     subheading("Scanning")
-    bold("Rescan Library")
-    body(" \u2014 full rescan of all source folders. Overrides are preserved.\n")
-    bold("Scan Changes")
+    bold("Scan Library...")
     body(
-        " \u2014 incremental scan; only processes new, changed, or deleted "
-        "files. Much faster. Requires one prior full scan.\n"
+        " \u2014 opens a dialog with two modes:\n"
+    )
+    bullet("Quick scan (recommended) \u2014 processes only new, changed, and "
+           "deleted files by comparing modification time and size. Minutes "
+           "at most; work detection re-runs only on affected albums")
+    bullet("Full rebuild \u2014 re-reads every audio file and rebuilds the "
+           "catalog from scratch. Hours on a large library. Playlists, "
+           "overrides, and audio analyses are all preserved. Needed for the "
+           "first scan, after adding source folders you want fully indexed, "
+           "or to recover from suspected drift")
+    body(
+        "Quick scan is unavailable (and the dialog says so) until one full "
+        "rebuild has run, because it needs stored file timestamps. Either "
+        "mode can be cancelled while running.\n"
     )
     bold("Re-detect Works")
     body(
@@ -153,8 +164,10 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Plex Section \u2014 map this library to a specific Plex music section")
     bullet("Import Old Playlists \u2014 import text files as profiles")
     bullet("Library Integrity Check \u2014 find orphans, duplicates, cross-folder works")
-    bullet("Track Similarity \u2014 standalone finder: pick seed tracks and browse "
-           "audio-similar matches (see Playlist Builder \u2192 Find Similar)")
+    bullet("Analyze Audio \u2014 runs the one-time audio analysis needed by "
+           "Find Similar. Reports how many tracks still need it, shows "
+           "progress, and can be cancelled and resumed later (already "
+           "analyzed tracks are skipped)")
     bullet("Profile Summary \u2014 sortable table of all profiles with stats")
     bullet("Settings \u2014 application-wide configuration")
     bullet("View Logs \u2014 log output for the current session")
@@ -165,6 +178,11 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Profile Management")
     bullet("Profile name \u2014 enter a name for your playlist profile")
+    bullet("Unsaved changes \u2014 the status strip shows \"\u2022 unsaved\" "
+           "whenever the playlist differs from its saved version. New, Load, "
+           "switching libraries, Find Unused, and quitting all prompt you to "
+           "Save, Discard, or Cancel first, so work is never lost by "
+           "navigating away")
     bullet("Load \u2014 restore a saved profile's settings and selections")
     bullet("Save \u2014 save current settings and selections")
     bullet("Delete \u2014 remove saved profiles")
@@ -440,6 +458,25 @@ def build_help_content(text: tk.Text) -> None:
     bullet("-h / --help \u2014 print usage summary")
 
     # ── Usage Patterns ──
+    subheading("Thumbs Down (webhook)")
+    body(
+        "A running webhook can exclude the currently playing track from a "
+        "profile, so a disliked track stops appearing after the next "
+        "regenerate. Wire it to a Home Assistant button:\n"
+    )
+    code(
+        '  POST /api/jobs\n'
+        '  {"command": "exclude-track", "profile": "Morning Mix",\n'
+        '   "track": {"title": "...", "album": "...", "scope": "track"}}\n'
+    )
+    body(
+        "Add \"exclude-track\" to webhook.allowed_commands. Because this "
+        "writes to your saved profiles, set webhook.token (or token_env) "
+        "and send it as the X-Auth-Token header. Use scope \"work\" to "
+        "drop the entire work instead of one movement. The exclusion "
+        "appears in the Rules window, where it can be undone.\n"
+    )
+
     heading("patterns", "Usage Patterns")
 
     subheading("All-Composer Playlist")
@@ -513,7 +550,7 @@ def build_help_content(text: tk.Text) -> None:
     bold("Works grouped incorrectly")
     body(" \u2014 Use Cleanup tab. Set Group Key to merge, Make Standalone to split. Re-detect Works to apply.\n")
     bold("Scan takes too long")
-    body(" \u2014 Use Scan Changes for routine updates. Either scan type can be cancelled.\n")
+    body(" \u2014 Use Scan Library... \u2192 Quick scan for routine updates; reserve Full rebuild for first scans and recovery. Either mode can be cancelled.\n")
     bold("\"Cannot open database\"")
     body(" \u2014 Database likely locked by another instance or network share unmounted. GUI offers local fallback.\n")
     bold("Database path change not taking effect")

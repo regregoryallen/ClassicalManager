@@ -23,16 +23,67 @@ from music_manager.interfaces.gui.common import (
 
 logger = logging.getLogger(__name__)
 
+# Above this many unanalyzed tracks, Find Similar warns loudly rather
+# than quietly launching hours of librosa work.
+_LARGE_ANALYSIS_GAP = 100
+
 
 class SimilarityUIMixin:
-    def _show_similarity(self):
-        """Open the Track Similarity Finder popup."""
+    def _analysis_gap(self):
+        """(unanalyzed_count, total_tracks) for the active library."""
+        from music_manager.core.similarity import TrackAnalysis, FEATURE_VERSION
+        from music_manager.core.database import Track
+        current = TrackAnalysis.select().join(Track).where(
+            (Track.library == self.active_library) &
+            (TrackAnalysis.feature_version == FEATURE_VERSION)).count()
+        total = Track.select().where(
+            Track.library == self.active_library).count()
+        return max(0, total - current), total
+
+    def _analyze_audio(self):
+        """Deliberate batch audio analysis (v3.1).
+
+        Replaces the old Track Similarity popup, whose seed/browse UI was
+        superseded by the Builder's Find Similar. What remains valuable
+        is starting the long librosa pass on purpose, with progress and
+        cancel — the same shape as the scan button.
+        """
         if not self.active_library:
             messagebox.showwarning("No Library", "Select a library first.")
             return
-        from music_manager.interfaces.similarity_popup import SimilarityPopup
-        SimilarityPopup(self.root, self.active_library, self.ctk,
-                        self._center_on_main)
+
+        missing, total = self._analysis_gap()
+        if not total:
+            messagebox.showinfo("Analyze Audio",
+                                "This library has no tracks to analyze.")
+            return
+        if not missing:
+            messagebox.showinfo(
+                "Analyze Audio",
+                f"All {total} tracks are already analyzed.\n\n"
+                f"Use Find Similar in the Playlist Builder to search by "
+                f"audio similarity.")
+            return
+
+        if not messagebox.askyesno(
+                "Analyze Audio",
+                f"{missing} of {total} tracks need audio analysis.\n\n"
+                f"{self._analysis_estimate(missing)}\n"
+                f"Progress is saved as it goes — you can cancel and resume "
+                f"later.\n\nStart now?"):
+            return
+
+        self._run_sim_analysis(None)
+
+    @staticmethod
+    def _analysis_estimate(count):
+        """Human-scale expectation for a librosa batch (~2s/track)."""
+        seconds = count * 2
+        if seconds < 120:
+            return "This takes under a minute."
+        if seconds < 5400:
+            return f"This takes roughly {max(1, round(seconds / 60))} minutes."
+        return f"This takes roughly {seconds / 3600:.1f} hours."
 
     def _find_similar_tracks(self):
         """Find tracks similar to the current profile selections."""
@@ -54,25 +105,26 @@ class SimilarityUIMixin:
                 "Current selections don't match any tracks.")
             return
 
-        # Check for unanalyzed or stale-version tracks
-        from music_manager.core.similarity import TrackAnalysis, FEATURE_VERSION
-        from music_manager.core.database import Track
-        current = set(
-            ta.track_id for ta in
-            TrackAnalysis.select(TrackAnalysis.track)
-            .join(Track)
-            .where((Track.library == self.active_library) &
-                   (TrackAnalysis.feature_version == FEATURE_VERSION))
-        )
-        total_tracks = Track.select().where(
-            Track.library == self.active_library).count()
-        unanalyzed = total_tracks - len(current)
+        # Top up any missing analyses first. Small gaps just run; a large
+        # gap gets an explicit warning with a time estimate, so clicking
+        # a search button never silently starts a multi-hour job.
+        unanalyzed, total_tracks = self._analysis_gap()
 
         if unanalyzed > 0:
-            if not messagebox.askyesno(
-                "Analysis Required",
-                f"{unanalyzed} tracks need analysis before similarity "
-                f"search.\nThis may take a while. Proceed?"):
+            if unanalyzed >= _LARGE_ANALYSIS_GAP:
+                proceed = messagebox.askyesno(
+                    "Analysis Required",
+                    f"{unanalyzed} of {total_tracks} tracks still need audio "
+                    f"analysis.\n\n{self._analysis_estimate(unanalyzed)}\n"
+                    f"You can cancel partway and resume later, or run "
+                    f"Analyze Audio from the sidebar when convenient.\n\n"
+                    f"Start the analysis now?")
+            else:
+                proceed = messagebox.askyesno(
+                    "Analysis Required",
+                    f"{unanalyzed} track(s) need analysis first. "
+                    f"{self._analysis_estimate(unanalyzed)}\n\nProceed?")
+            if not proceed:
                 return
             self._run_sim_analysis(seed_ids)
         else:
@@ -142,7 +194,15 @@ class SimilarityUIMixin:
 
         def _done(stats):
             popup.destroy()
-            self._show_sim_results(seed_ids)
+            if seed_ids is None:
+                messagebox.showinfo(
+                    "Analyze Audio",
+                    f"Analyzed {stats['analyzed']} track(s); "
+                    f"{stats['skipped']} already current"
+                    + (f"; {stats['failed']} failed"
+                       if stats["failed"] else "") + ".")
+            else:
+                self._show_sim_results(seed_ids)
 
         def _cancelled():
             popup.destroy()

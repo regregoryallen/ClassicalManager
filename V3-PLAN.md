@@ -144,6 +144,88 @@
   install at `~/.local/share/classical-manager`; audio re-analysis running
   (resumable). v3.1 work starts from the Backlog section above.
 
+## v3.1 progress (branch `v3.1`, started 2026-07-21)
+
+- [x] **Dirty-state tracking with save prompts** — done 2026-07-21 (91 tests
+  green). `_builder_snapshot`/`_mark_builder_clean`/`_is_builder_dirty`/
+  `_confirm_discard_changes` in `builder_tab.py`; baseline captured on
+  new/save/load (NOT on autosave restore — restored work is genuinely
+  unsaved). Prompts on New, Load, library switch (reverts the combobox on
+  Cancel), Find Unused, and window close. `_save_profile` now returns
+  bool and prompts for a name when the profile is unnamed
+  (`_ask_profile_name`). Discard clears the autosave so discarded work
+  cannot be resurrected next launch. "• unsaved" marker in the health
+  strip; settings widgets refresh it via `_on_setting_changed`. Note:
+  `_new_profile` returns bool — callers that populate afterwards (Find
+  Unused) must abort on False or they merge two playlists.
+- [x] **Merged scan dialog** — done 2026-07-21. One "Scan Library..." button →
+  `_ask_scan_mode` (Quick default / Full rebuild with cost stated); Quick is
+  disabled with an explanation when `can_scan_incremental()` is False (new
+  core helper), replacing the incremental scanner's silent refusal.
+  `_scan_changes` wrapper removed; both `_run_scan*` workers unchanged.
+  CLI keeps `scan` and `scan-changes` verbs.
+- [x] **Analyze Audio button** — done 2026-07-21. `similarity_popup.py`
+  deleted (556 lines); sidebar button is now batch analysis with gap count,
+  time estimate, progress, cancel, and summary (`_analyze_audio`,
+  `_analysis_gap`, `_analysis_estimate`; `_run_sim_analysis(None)` = analyze
+  only). Find Similar keeps auto-top-up but warns loudly above
+  `_LARGE_ANALYSIS_GAP` (100) unanalyzed tracks.
+- [x] **Thumbs-down webhook** — done 2026-07-21. Core: `find_track`
+  (case-insensitive title + album/artist narrowing, or exact path; raises
+  `TrackNotFound`/`AmbiguousTrack` — never guesses) and
+  `exclude_track_from_profile` (idempotent; converts a conflicting ADD;
+  scope=track|work). CLI `exclude-track` (exit 2 ambiguous/invalid, 3 not
+  found). Webhook command `exclude-track` with a `track` object, plus an
+  optional shared secret (`webhook.token`/`token_env`, `X-Auth-Token`,
+  constant-time compare) since this is the first op that writes to profiles.
+  Verified end-to-end against a scratch DB under enforce integrity.
+  Documented in help, USERGUIDE (with a Music Assistant HA snippet),
+  main.py usage, and config.example.json.
+
+## v3.2 backlog
+
+- **Sortable column headers in the Find Similar results dialog** (user,
+  2026-07-21) — the Builder trees already have `_setup_tree_sort`; the
+  similarity results tree does not.
+- **Similarity/volatility quality pass** (user, 2026-07-21) — similarity is
+  "rough at best"; volatility does not track the actual soft/loud contrast
+  it is meant to represent. Profiling done 2026-07-21 (see below) is the
+  natural entry point: `librosa.effects.harmonic` (HPSS) is ~75% of analysis
+  runtime and feeds only the 6 tonnetz dims; dropping it leaves tonnetz
+  direction identical (cosine 1.000) with ~8-12% smaller magnitude, which
+  z-scoring largely absorbs. Changing features requires a FEATURE_VERSION
+  bump + full re-analysis, so bundle it with this work rather than doing it
+  piecemeal.
+- **Scan parallelism — MEASURED, NOT WORTH DOING** (2026-07-21). Unlike the
+  similarity analysis, scanning is I/O-latency bound, not CPU bound:
+  `extract_tags` costs **1.4 ms/file locally vs ~158 ms/file over the CIFS
+  mount** (113x). Thread-pool trials with distinct cold batches, alternating
+  1-vs-8 workers across three rounds to cancel network drift, gave a median
+  **1.14x** (158 → 139 ms/file; 16 min → 14 min for 5,902 files); 32 threads
+  regressed to 0.89x. Pre-reading each file into BytesIO before handing it to
+  mutagen was *worse* (0.79x) — mutagen often needs only the header, so bulk
+  reads transfer 14 MB needlessly. The SMB session/server is the
+  serialization point and one stream already saturates it. Verdict: adding
+  thread-safe progress, cancellation, and parent-only DB writes to buy ~10%
+  is a bad trade on a mount that has already caused one data incident.
+  Better levers if full-rescan time ever matters: (a) run the scan **on the
+  NAS** (files local there ⇒ ~1.4 ms/file, potentially ~100x), (b) relax the
+  mount's `actimeo=1`/`closetimeo=1` for a mostly-static library, (c) nothing
+  — Quick scan already skips unchanged files and `stat()` is effectively free
+  once the directory walk has run, which is why routine updates are fast.
+- **Analysis speed** (measured 2026-07-21 on 24-core Ultra 9 275HX):
+  ~12s/track today (HPSS 6-10s, other features ~2s, double file decode
+  ~0.5s — `_extract_features` and `compute_volatility` each call
+  `librosa.load`). Planned: (a) honest progress estimate measured from the
+  first few tracks instead of a hardcoded guess, (b) single decode shared by
+  features + volatility, (c) `ProcessPoolExecutor` parallelism — workers do
+  pure file→features with NO database access, parent does all writes
+  (avoids SQLite-over-CIFS concurrency, keeps per-track resumability); set
+  `OMP_NUM_THREADS=1` in workers, cap workers ~8 (each holds a decoded
+  track, ~100MB for a 20-min movement), module-level worker fn for spawn
+  picklability. Projected 5,902 tracks: ~20h today → ~2.5h parallel →
+  ~37min parallel without HPSS.
+
 ## Backlog (post-v3.0, user-proposed 2026-07-20)
 
 - **Merge Rescan + Scan Changes** into one "Scan Library…" button → dialog:

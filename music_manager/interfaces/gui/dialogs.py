@@ -250,10 +250,11 @@ class DialogsMixin:
 
         # -- Database --
         add_section("Database")
-        from music_manager.core.database import DATABASE_PATH
-        db_entry = add_browse_field("Database File",
-                                    config.get("db_path",
-                                               str(DATABASE_PATH)))
+        from music_manager.core.config import get_db_path
+        # Show the path actually in use. A missing or empty db_path falls
+        # back to the bundled default, and showing blank there left you
+        # guessing which database was open.
+        db_entry = add_browse_field("Database File", str(get_db_path()))
 
         # -- Plex --
         add_section("Plex")
@@ -361,17 +362,18 @@ class DialogsMixin:
                 "path_rules": parse_rules(m3u_rules_text),
             }
 
-            # Database path (stored in config.json, requires restart)
+            # Database path (stored in config.json, requires restart).
+            # The field shows the effective path, so compare against that
+            # — and persist it, turning an implicit fallback into an
+            # explicit setting.
+            from music_manager.core.config import get_db_path
             new_db = db_entry.get().strip()
-            current_db = config.get("db_path", str(DATABASE_PATH))
-            if new_db and new_db != current_db:
+            current_db = str(get_db_path())
+            db_changed = bool(new_db) and new_db != current_db
+            if new_db:
                 new_config["db_path"] = new_db
-                db_changed = True
             elif config.get("db_path"):
                 new_config["db_path"] = config["db_path"]
-                db_changed = False
-            else:
-                db_changed = False
 
             # Write config.json
             from music_manager.core.config import save_config

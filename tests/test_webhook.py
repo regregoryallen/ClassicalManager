@@ -1,15 +1,17 @@
-"""Phase 6 test: webhook m3u filename sanitization (allowlist)."""
+"""Webhook tests: m3u filename sanitization and thumbs-down argv building."""
 
 import os
+
+import pytest
 
 from music_manager.interfaces.webhook import JobManager
 
 
-def _manager():
+def _manager(commands=("m3u",)):
     return JobManager(
         python_path="/usr/bin/python", main_path="/app/main.py",
         config_arg=[], library_name="Lib",
-        allowed_commands=["m3u"], m3u_output_dir="/out")
+        allowed_commands=list(commands), m3u_output_dir="/out")
 
 
 def _m3u_path(profile):
@@ -35,3 +37,82 @@ def test_path_traversal_attempts_are_neutralized():
 def test_empty_after_sanitization_falls_back():
     # All-dots strips to nothing → generic fallback name.
     assert _m3u_path("...") == os.path.join("/out", "playlist.m3u")
+
+
+# ---------------------------------------------------------------------------
+# Thumbs-down (exclude-track)
+# ---------------------------------------------------------------------------
+
+def _exclude_argv(profile, track):
+    mgr = _manager(["exclude-track"])
+    (argv,) = mgr._build_steps("exclude-track", profile=profile, track=track)
+    return argv
+
+
+def test_exclude_track_argv_from_now_playing():
+    argv = _exclude_argv("Morning Mix", {
+        "title": "Adagio", "album": "Spartacus", "artist": "Bolshoi"})
+    assert argv[argv.index("--profile") + 1] == "Morning Mix"
+    assert argv[argv.index("--title") + 1] == "Adagio"
+    assert argv[argv.index("--album") + 1] == "Spartacus"
+    assert argv[argv.index("--artist") + 1] == "Bolshoi"
+    assert "--scope" not in argv  # defaults to track
+
+
+def test_exclude_track_omits_absent_fields_and_passes_scope():
+    argv = _exclude_argv("P", {"path": "A/Alb1/01.flac", "scope": "work"})
+    assert "--title" not in argv
+    assert "--album" not in argv
+    assert argv[argv.index("--path") + 1] == "A/Alb1/01.flac"
+    assert argv[argv.index("--scope") + 1] == "work"
+
+
+def test_exclude_track_requires_profile_and_identifier():
+    mgr = _manager(["exclude-track"])
+    with pytest.raises(ValueError):
+        mgr._build_steps("exclude-track", track={"title": "X"})
+    with pytest.raises(ValueError):
+        mgr._build_steps("exclude-track", profile="P", track={})
+
+
+def test_unknown_command_still_rejected():
+    mgr = _manager(["m3u"])
+    with pytest.raises(ValueError):
+        mgr.submit("exclude-track")  # not in allowed_commands
+
+
+# ---------------------------------------------------------------------------
+# Config validation must accept everything the webhook can run
+# ---------------------------------------------------------------------------
+
+def test_config_accepts_every_supported_webhook_command(tmp_path):
+    """The validator and the JobManager must agree on the command set.
+
+    They drifted once: 'exclude-track' worked in the webhook but made
+    config.json fail validation, so the service refused to start.
+    """
+    import json
+    from music_manager.core.config import _validate
+
+    from music_manager.interfaces.webhook import JobManager
+
+    commands = ["plex", "scan", "scan+plex", "scan+m3u", "m3u",
+                "exclude-track"]
+    config = {
+        "active_library": 1,
+        "targets": {},
+        "webhook": {"host": "0.0.0.0", "port": 5588,
+                    "allowed_commands": commands,
+                    "token": "s3cret"},
+    }
+    _validate(config, tmp_path / "config.json")  # must not raise
+
+    # And every one of them must be buildable by the job manager.
+    mgr = JobManager(
+        python_path="/usr/bin/python", main_path="/app/main.py",
+        config_arg=[], library_name="Lib",
+        allowed_commands=commands, m3u_output_dir="/out")
+    for cmd in commands:
+        track = ({"title": "T"} if cmd == "exclude-track" else None)
+        steps = mgr._build_steps(cmd, profile="P", track=track)
+        assert steps and all(isinstance(a, str) for s in steps for a in s)

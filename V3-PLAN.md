@@ -153,6 +153,20 @@
   tags but update rows in place (no scrub/ID churn); covers
   retagged-without-mtime-change and new-tag-column backfills, demoting Full
   rebuild to disaster recovery.
+- **Dirty-state tracking with save prompts** — the real intent behind
+  autosave was protection against *forgetting to save before navigating*,
+  which autosave does not provide (Load overwrites the builder immediately
+  and the next autosave tick destroys the only copy within 60s). Design:
+  baseline-diff dirty detection (canonical snapshot of settings + sorted
+  Rule tuples captured at load/save/new; dirty = current != baseline — no
+  boolean-flag false positives, and a crash-restored autosave computes as
+  dirty automatically since it differs from the saved baseline). Prompt
+  Save / Discard / Cancel on New, Load, library switch, app close, library
+  import; Cancel aborts the navigation (revert the library combobox).
+  Unnamed profile ⇒ "Save as…". Dirty marker in title/profile field.
+  Autosave stays as crash insurance, but every prompt resolution must
+  immediately refresh the autosave to the post-decision state — otherwise
+  Discard can be resurrected by a stale autosave on next launch.
 - **Retire the Track Similarity popup** (`similarity_popup.py`) — vestigial
   first home of the similarity feature; Builder's Find Similar supersedes its
   seed/browse role. Keep its one load-bearing job as a sidebar

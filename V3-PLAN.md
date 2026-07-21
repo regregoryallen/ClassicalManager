@@ -2,6 +2,13 @@
 
 ## Status (keep this section current)
 
+- **Released: v3.0 (2026-07-20) and v3.1 (2026-07-21), both merged to
+  `master` and tagged.** Tag lineage: v1.0, v2.0, v3.0, v3.1. Next work is
+  v3.2 — see the backlog section below.
+- Branch naming: use `v3.2-dev` style, **not** a bare version number — a
+  branch and tag sharing a name (`v3.1`) made git refuse plain pushes
+  ("src refspec matches more than one"). Merged release branches are
+  deleted; `v3` and `rules-overhaul` remain from earlier work.
 - Branch point: tag `v2.0` on `master` (2026-07-19). All V3 work happens on branch `v3`.
 - Decisions resolved 2026-07-19: **D1 = enforce honors track-level EXCEPTs**
   (behavior change). **D2 = empty selection → empty playlist** (fix labels, engine
@@ -183,6 +190,33 @@
   main.py usage, and config.example.json.
 
 ## v3.2 backlog
+
+- **Bootstrap installer** (user, 2026-07-21) — one fetched script that
+  clones/downloads and hands off to `install.sh`, so a fresh or headless box
+  needs no browser, unzip, or manual path juggling:
+  `curl -fsSL .../bootstrap.sh | bash`. The real payoff is upgrades: today an
+  upgrade means re-download, extract, remember where, re-run installer;
+  after this it is one command (pull + re-run installer, which already
+  handles venv, service restart, config merge). Design decisions to honor:
+  * **Clone and install must be SEPARATE directories** — e.g. source in
+    `~/.local/src/classical-manager`, install in
+    `~/.local/share/classical-manager`. Installing from a directory
+    containing `.git` would recreate the dev/installed confusion fixed in
+    v3.1 (and the `.git` guard would suppress the desktop entry).
+  * **Default to the newest release TAG, not master**, so a bootstrap never
+    installs mid-development code; allow `--ref` to override.
+  * Prefer `git clone` (cheap updates, tag pinning) with a tarball fallback
+    when git is absent.
+  * Document the two-step form (`curl -O`, inspect, `bash bootstrap.sh`) as
+    the default and the pipe-to-bash one-liner as the convenience option —
+    piping a remote script into a shell should be an informed choice.
+  * Windows needs a thin `bootstrap.ps1` (Invoke-WebRequest + Expand-Archive);
+    `install.bat` cannot be curl-piped.
+  * Add an update entry point (`classical-manager-update`) once the source
+    location is known and stable.
+  * Test against a scratch prefix, never the live install — install-path
+    changes caused three of the v3.1 bugs (stale config template, no service
+    restart, launcher hijack).
 
 - **Sortable column headers in the Find Similar results dialog** (user,
   2026-07-21) — the Builder trees already have `_setup_tree_sort`; the

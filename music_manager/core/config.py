@@ -246,7 +246,8 @@ def _validate_webhook(webhook: dict, path: Path) -> None:
             raise ConfigError(
                 f"{path}: 'webhook.allowed_commands' must be a list"
             )
-        valid_cmds = {"plex", "m3u", "scan", "scan+plex", "scan+m3u"}
+        valid_cmds = {"plex", "m3u", "scan", "scan+plex", "scan+m3u",
+                      "exclude-track"}
         for cmd in cmds:
             if cmd not in valid_cmds:
                 raise ConfigError(

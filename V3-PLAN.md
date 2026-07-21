@@ -182,6 +182,33 @@
   Documented in help, USERGUIDE (with a Music Assistant HA snippet),
   main.py usage, and config.example.json.
 
+## v3.2 backlog
+
+- **Sortable column headers in the Find Similar results dialog** (user,
+  2026-07-21) — the Builder trees already have `_setup_tree_sort`; the
+  similarity results tree does not.
+- **Similarity/volatility quality pass** (user, 2026-07-21) — similarity is
+  "rough at best"; volatility does not track the actual soft/loud contrast
+  it is meant to represent. Profiling done 2026-07-21 (see below) is the
+  natural entry point: `librosa.effects.harmonic` (HPSS) is ~75% of analysis
+  runtime and feeds only the 6 tonnetz dims; dropping it leaves tonnetz
+  direction identical (cosine 1.000) with ~8-12% smaller magnitude, which
+  z-scoring largely absorbs. Changing features requires a FEATURE_VERSION
+  bump + full re-analysis, so bundle it with this work rather than doing it
+  piecemeal.
+- **Analysis speed** (measured 2026-07-21 on 24-core Ultra 9 275HX):
+  ~12s/track today (HPSS 6-10s, other features ~2s, double file decode
+  ~0.5s — `_extract_features` and `compute_volatility` each call
+  `librosa.load`). Planned: (a) honest progress estimate measured from the
+  first few tracks instead of a hardcoded guess, (b) single decode shared by
+  features + volatility, (c) `ProcessPoolExecutor` parallelism — workers do
+  pure file→features with NO database access, parent does all writes
+  (avoids SQLite-over-CIFS concurrency, keeps per-track resumability); set
+  `OMP_NUM_THREADS=1` in workers, cap workers ~8 (each holds a decoded
+  track, ~100MB for a 20-min movement), module-level worker fn for spawn
+  picklability. Projected 5,902 tracks: ~20h today → ~2.5h parallel →
+  ~37min parallel without HPSS.
+
 ## Backlog (post-v3.0, user-proposed 2026-07-20)
 
 - **Merge Rescan + Scan Changes** into one "Scan Library…" button → dialog:

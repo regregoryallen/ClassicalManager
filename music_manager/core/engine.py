@@ -96,6 +96,7 @@ class ResolvedTrack:
     # Engine metadata
     order_key: int = 0
     admitted_by: str = ""  # rule description that admitted this track
+    work_sequence: int | None = None  # position of the work within its album
 
 
 @dataclass
@@ -125,11 +126,11 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
     library = profile.library
 
     # Step 1: Selection — resolve to a set of track IDs
-    selected_ids, admission_map, excluded_work_keys = _select_tracks(profile)
+    selection = _select_tracks(profile)
     logger.info("Selection: %d tracks from library '%s'",
-                len(selected_ids), library.name)
+                len(selection.track_ids), library.name)
 
-    if not selected_ids:
+    if not selection.track_ids:
         return EngineResult(
             playlist=[],
             profile_name=profile.name,
@@ -141,12 +142,11 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
         )
 
     # Step 2: Work-integrity expansion
-    selected_ids, admission_map = _apply_work_integrity(
-        profile, selected_ids, admission_map, excluded_work_keys
-    )
+    _apply_work_integrity(profile, selection)
 
     # Step 3: Build resolved track objects
-    resolved = _build_resolved_tracks(selected_ids, admission_map)
+    resolved = _build_resolved_tracks(
+        selection.track_ids, selection.admission_map)
 
     # Step 4: Shuffle (with optional separation constraints)
     rng = random.Random(profile.seed) if profile.seed is not None else random.Random()
@@ -213,43 +213,52 @@ def find_unused_tracks(
 
     used_ids: set[int] = set()
     for profile in profiles:
-        selected, _, _ = _select_tracks(profile)
-        used_ids |= selected
+        used_ids |= _select_tracks(profile).track_ids
+
+    # Bulk-load the library once and group in Python (V3: was N+1).
+    album_titles = {a.id: a.title for a in
+                    Album.select(Album.id, Album.title)
+                    .where(Album.library == library)}
+    work_names = {w.id: w.work_name for w in
+                  Work.select(Work.id, Work.work_name)
+                  .join(Album).where(Album.library == library)}
+
+    tracks_by_album: dict[int, list] = {}
+    for t in Track.select(Track.id, Track.title, Track.album, Track.work)\
+                  .where(Track.library == library):
+        tracks_by_album.setdefault(t.album_id, []).append(t)
 
     unused_albums: list[tuple[int, str]] = []
     unused_works: list[tuple[int, str]] = []
     unused_tracks: list[tuple[int, str]] = []
 
-    for album in Album.select().where(Album.library == library):
-        album_track_ids = set(
-            t.id for t in
-            Track.select(Track.id).where(Track.album == album)
-        )
+    for album_id, album_tracks in tracks_by_album.items():
+        album_track_ids = {t.id for t in album_tracks}
         album_unused = album_track_ids - used_ids
         if not album_unused:
             continue
 
         if album_unused == album_track_ids:
-            unused_albums.append((album.id, album.title))
+            unused_albums.append((album_id, album_titles.get(album_id, "?")))
             continue
 
         # Partially used album — check work by work
-        for work in Work.select().where(Work.album == album):
-            work_track_ids = set(
-                t.id for t in
-                Track.select(Track.id).where(Track.work == work)
-            )
+        tracks_by_work: dict[int | None, list] = {}
+        for t in album_tracks:
+            tracks_by_work.setdefault(t.work_id, []).append(t)
+
+        for work_id, work_tracks in tracks_by_work.items():
+            work_track_ids = {t.id for t in work_tracks}
             work_unused = work_track_ids - used_ids
             if not work_unused:
                 continue
 
-            if work_unused == work_track_ids:
-                unused_works.append((work.id, work.work_name))
+            if work_id is not None and work_unused == work_track_ids:
+                unused_works.append((work_id, work_names.get(work_id, "?")))
             else:
-                for t in Track.select(Track.id, Track.title).where(
-                    Track.id.in_(list(work_unused))
-                ):
-                    unused_tracks.append((t.id, t.title))
+                for t in work_tracks:
+                    if t.id in work_unused:
+                        unused_tracks.append((t.id, t.title))
 
     return unused_albums, unused_works, unused_tracks
 
@@ -258,17 +267,15 @@ def find_unused_tracks(
 # Step 1: Selection (§7.1)
 # ---------------------------------------------------------------------------
 
-def _select_tracks(
-    profile: PlaylistProfile,
-) -> tuple[set[int], dict[int, str], set[str]]:
+def _select_tracks(profile: PlaylistProfile):
     """Assemble the selected track set from profile selections.
 
     Pure additive model with specificity — see selection.py for the
     resolution algorithm.
 
     Returns:
-        (set of track IDs, dict mapping track_id → admission reason,
-         set of excluded work keys)
+        SelectionResult (track_ids, admission_map, excluded_work_keys,
+        excluded_track_paths).
     """
     from music_manager.core.selection import resolve_selections
     return resolve_selections(profile)
@@ -278,53 +285,53 @@ def _select_tracks(
 # Step 2: Work-integrity expansion (§7.3)
 # ---------------------------------------------------------------------------
 
-def _apply_work_integrity(
-    profile: PlaylistProfile,
-    selected_ids: set[int],
-    admission_map: dict[int, str],
-    excluded_work_keys: set[str] | None = None,
-) -> tuple[set[int], dict[int, str]]:
-    """Apply work-integrity policy to the selection.
+def _apply_work_integrity(profile: PlaylistProfile, selection) -> None:
+    """Apply work-integrity policy to the selection (mutates it in place).
 
-    - enforce: any work with >= 1 selected track plays whole,
-      UNLESS the work is explicitly excluded by a selection (specificity
-      takes precedence — a track-level add within an excluded work does
-      not pull the whole work back in).
+    - enforce: any work with >= 1 selected track plays whole, EXCEPT:
+        * works explicitly excluded by a selection (a track-level add
+          within an excluded work does not pull the whole work back in);
+        * tracks explicitly excluded at track level (decision D1 —
+          specificity wins over expansion; V2 silently re-added these).
     - respect_selection: emit exactly what was selected.
     """
     if profile.work_integrity == "respect_selection":
-        return selected_ids, admission_map
+        return
 
     from music_manager.core.selection import key_for_work
 
-    excluded_wkeys = excluded_work_keys or set()
+    if not selection.track_ids:
+        return
 
-    # enforce mode: expand partial works to full
-    # Find all works that have at least one selected track
-    work_ids_with_selected = set()
-    for tid in selected_ids:
-        try:
-            track = Track.get_by_id(tid)
-            if track.work_id:
-                work_ids_with_selected.add(track.work_id)
-        except Track.DoesNotExist:
-            pass
+    # Works containing at least one selected track (one query).
+    work_ids = {
+        t.work_id for t in
+        Track.select(Track.id, Track.work)
+        .where(Track.id.in_(list(selection.track_ids)) &
+               Track.work.is_null(False))
+    }
+    if not work_ids:
+        return
 
-    # Add all tracks from those works (skip explicitly excluded works)
-    for wid in work_ids_with_selected:
-        try:
-            work = Work.get_by_id(wid)
-        except Work.DoesNotExist:
-            continue
-        if key_for_work(work) in excluded_wkeys:
-            continue  # don't expand into an explicitly excluded work
-        work_tracks = Track.select(Track.id).where(Track.work == wid)
-        for t in work_tracks:
-            if t.id not in selected_ids:
-                selected_ids.add(t.id)
-                admission_map[t.id] = f"work_integrity:enforce:work:{wid}"
+    # Drop explicitly excluded works (one query, album joined for keys).
+    expand_ids = [
+        w.id for w in
+        Work.select(Work, Album).join(Album)
+        .where(Work.id.in_(list(work_ids)))
+        if key_for_work(w) not in selection.excluded_work_keys
+    ]
+    if not expand_ids:
+        return
 
-    return selected_ids, admission_map
+    # Pull in the missing tracks of those works (one query), honoring
+    # explicit track-level exclusions (D1).
+    for t in Track.select(Track.id, Track.relative_path, Track.work)\
+                  .where(Track.work.in_(expand_ids)):
+        if (t.id not in selection.track_ids
+                and t.relative_path not in selection.excluded_track_paths):
+            selection.track_ids.add(t.id)
+            selection.admission_map[t.id] = \
+                f"work_integrity:enforce:work:{t.work_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +389,7 @@ def _build_resolved_tracks(
             folder_id=t.folder_id,
             folder_root_path=t.folder.root_path,
             admitted_by=admission_map.get(t.id, ""),
+            work_sequence=work.work_sequence if work else None,
         )
         resolved.append(rt)
 
@@ -486,21 +494,12 @@ def _shuffle_album_mode(
     for rt in tracks:
         by_album.setdefault(rt.album_id, []).append(rt)
 
-    # Sort tracks within each album
-    # Need work_sequence from the Work table
-    work_sequences: dict[int, int] = {}
-    for rt in tracks:
-        if rt.work_id and rt.work_id not in work_sequences:
-            try:
-                work = Work.get_by_id(rt.work_id)
-                work_sequences[rt.work_id] = work.work_sequence or 0
-            except Work.DoesNotExist:
-                work_sequences[rt.work_id] = 0
-
+    # Sort tracks within each album (work_sequence is carried on the
+    # ResolvedTrack — V3: no per-work queries here).
     for group in by_album.values():
         group.sort(key=lambda rt: (
             rt.disc_number,
-            work_sequences.get(rt.work_id, 0) if rt.work_id else 0,
+            rt.work_sequence or 0,
             rt.track_number,
         ))
 

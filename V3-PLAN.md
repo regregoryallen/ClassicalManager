@@ -3,15 +3,194 @@
 ## Status (keep this section current)
 
 - Branch point: tag `v2.0` on `master` (2026-07-19). All V3 work happens on branch `v3`.
-- Pending decisions: **D1 and D2 must be answered by the user before Phase 1 step 2.**
-- [ ] Phase 0 — Test safety net
-- [ ] Phase 1 — Core effective-state engine
-- [ ] Phase 2 — Data layer hardening
-- [ ] Phase 3 — Mechanical GUI decomposition
-- [ ] Phase 4 — Builder performance + shared-state adoption
-- [ ] Phase 5 — Rules surface + retire Explorer
-- [ ] Phase 6 — Minor findings sweep
-- [ ] Phase 7 — Verification & wrap-up
+- Decisions resolved 2026-07-19: **D1 = enforce honors track-level EXCEPTs**
+  (behavior change). **D2 = empty selection → empty playlist** (fix labels, engine
+  unchanged). **D3 = duplicates are a hard stop**: report them and require a fix
+  before adding the unique index — do NOT fall back to a non-unique index.
+  **D4 = deferred**: present the Year/work_source relocation options in detail when
+  Phase 5 reaches that step, before acting.
+- Found during Phase 1: V2's Profile Summary is broken —
+  `gui.py:1377` unpacks `resolve_selections()`'s 3-tuple into 2 names
+  (ValueError for any profile with selections). Fixed by the Phase 1 switch to a
+  `SelectionResult` object.
+- [x] Phase 0 — Test safety net — **done 2026-07-19** (40 tests green:
+  `tests/test_selection.py`, `test_engine.py`, `test_reconcile.py`,
+  `test_overrides.py`; fixtures/factories in `tests/conftest.py`;
+  `pytest==9.1.1` in `requirements-dev.txt`; run with
+  `venv/bin/python -m pytest`). F2/F3/F4/F5 oddities are pinned as
+  characterization tests with finding-ID markers — the F3 assertion in
+  `test_enforce_readds_track_level_excepts_F3` flips when D1 lands.
+- [x] Phase 1 — Core effective-state engine — **done 2026-07-19** (49 tests green).
+  Delivered in `selection.py`: `SelectionResult` (attribute-based; retires the
+  positional tuple that broke Profile Summary), shared `_decide_track`,
+  `load_library_index` (4 bulk queries → `LibraryIndex`), `Rule` /
+  `rules_from_profile`, `resolve_effective_state` (per-entity
+  included/partial/excluded/none for Phase 4 trees), `classify_selections`
+  (active/redundant/no_op/orphaned + governs/covers counts + needs_breadcrumbs,
+  for Phase 5 Rules window). Engine: **D1 implemented** — enforce expansion now
+  skips explicit track EXCEPTs; `_apply_work_integrity` batched to 3 queries;
+  `work_sequence` carried on `ResolvedTrack` (album-mode N+1 gone);
+  `find_unused_tracks` bulk-grouped. GUI call sites updated
+  (`gui.py` Profile Summary bug fixed, similarity resolver). The
+  `overridden_by_integrity` status became unnecessary once D1 landed — enforce
+  no longer overrides track EXCEPTs, so classify has no such case.
+  Note for Phase 4: `resolve_effective_state`/`classify_selections` take `Rule`
+  objects — build them from the GUI's `_current_selections` dicts.
+- [x] Phase 2 — Data layer hardening — **code done 2026-07-19** (56 tests green).
+  `database.py`: `idx_tracks_library_relpath` + UNIQUE
+  `uq_tracks_folder_relpath`, gated by `find_duplicate_track_paths()`;
+  duplicates raise `DuplicateTracksError` at startup with the offending rows
+  (D3 hard stop — surfaces in the GUI's existing DB-error dialog).
+  Verified read-only against both real DBs: local dev (0 tracks) and prod
+  `/mnt/MediaLib/music_manager.db` (5,902 tracks) have **zero duplicates** —
+  index will create cleanly on next launch. `scanner.py`:
+  `_snapshot_analyses`/`_restore_analyses` carry TrackAnalysis across full
+  rescans keyed on (folder_id, relative_path) with mtime/size match;
+  `ScanStats.analyses_preserved` reported in scan-complete status.
+  `similarity.py` timestamps now UTC-aware.
+  **User checkpoint passed 2026-07-19** on a fresh testMusicData library
+  (`no_git/config-v3test.json` → `no_git/v3test.db`): analyses preserved
+  across rescan, Find Similar works without re-analysis.
+- [x] Phase 3 — Mechanical GUI decomposition — **code done 2026-07-19**
+  (56 tests green, pyflakes clean). `gui.py` (5,285 lines) split via AST into
+  `music_manager/interfaces/gui/`: `app.py` (App shell, 35 methods),
+  `builder_tab.py` (34), `cleanup_tab.py` (18), `dialogs.py` (9),
+  `treeutil.py` (9), `similarity_ui.py` (9), `explorer_tab.py` (6 — deleted
+  whole in Phase 5), `common.py` (prefs/log helpers). App = mixin composition;
+  120 methods verified reachable via MRO; public surface unchanged
+  (`from music_manager.interfaces.gui import launch_gui`). Method bodies are
+  verbatim except: `__add_with_breadcrumbs` de-mangled to
+  `_add_with_breadcrumbs`, and `Path(__file__).*parent*3` replaced with
+  `PROJECT_ROOT` (package is one level deeper).
+  **User checkpoint passed 2026-07-19:** GUI behaves as before across tabs.
+- [x] Phase 4 — Builder performance + shared-state adoption — **code done
+  2026-07-19** (67 tests green, pyflakes clean). New pure viewmodel
+  `music_manager/core/viewmodel.py` (`library_tree_rows`/`playlist_tree_rows`
+  → `TreeRow` specs; no Tk, no SQL). `builder_tab.py`: cached `LibraryIndex`
+  (`_get_library_index`/`_invalidate_library_index`), rebuilds consume
+  index + `resolve_effective_state` — **zero SQL in rebuild loops**; V2's
+  ~150 lines of hand-derived tag logic deleted; **F2 display bug fixed**
+  (playlist pane now shows ADDs inside an excluded album, regression-tested).
+  `_is_item_selected`/`_cascade_remove_children`/`_add_with_breadcrumbs`
+  answered from the index (no per-call queries). Invalidation: data-changed
+  entry `_refresh_builder_tree` + `_refresh_works_list` choke point (all
+  cleanup/override/redetect actions funnel there); selection-only changes
+  reuse the cache via `_refresh_rules_display`. Remaining DB use in
+  builder_tab is click-time actions only.
+  **User checkpoint passed 2026-07-19:** refresh is fast. Two findings from
+  the walkthrough, both addressed:
+  (a) container-remove bug fixed same day — removing an album/work covered
+  purely by child rules did nothing in V2; `_remove_item_selection` now
+  always cascades descendants and records an EXCEPT only if a broader ADD
+  still covers the item (regression-tested);
+  (b) **carried into Phase 5:** the playlist pane must also show
+  work-integrity expansion — extend `resolve_effective_state` with an
+  "included via work integrity" track state, render it visually distinct
+  (dimmed variant), count it in the header/strip ("8 selected + 4 via work
+  integrity"), and update live when the Integrity dropdown changes. Help
+  must state explicitly that integrity applies to works only, never albums.
+- [x] Phase 5 — Rules surface + retire Explorer — **code done 2026-07-19**
+  (77 tests green, pyflakes clean). D4 resolved: sortable Year column added to
+  both Builder trees (album rows); work_source already visible in Cleanup's
+  Works Browser. Delivered: integrity-aware effective state
+  (`resolve_effective_state(..., work_integrity="enforce")` mirrors engine
+  expansion incl. D1, parity-tested against `generate_playlist`); playlist
+  pane renders expanded movements in dimmed blue ('integrity' tag) and
+  updates live on Integrity dropdown change; health strip
+  (replaces "(empty = all tracks)" label — D2 text fixed everywhere) with
+  active/redundant/no-op/orphaned counts + "N + M via integrity" tracks,
+  click opens Rules window; new `gui/rules_window.py` (RulesWindowMixin):
+  graded rule list, surgical Remove, Reveal-in-Library, Clean Up dead rules;
+  breadcrumb backfill on profile save AND load; `explorer_tab.py` deleted,
+  tab removed, all references gone; help_content + USERGUIDE rewritten
+  (Rules section added, Explorer removed, integrity works-only documented).
+  **Remaining user checkpoint:** GUI walkthrough — two-tab layout, Year
+  column, dimmed integrity tracks toggling with the Integrity setting,
+  health strip counts, Rules window (remove/reveal/clean up), and a
+  save→load round trip.
+- [x] Phase 6 — Minor findings sweep — **done 2026-07-20** (80 tests green).
+  `plex.py` uses `NamedTemporaryFile` (mktemp retired); webhook m3u filenames
+  allowlist-sanitized (`[A-Za-z0-9._ -]`, leading dots stripped, fallback name;
+  traversal-tested); autosave delete+recreate wrapped in `database.atomic()`;
+  dead `assigned` local removed from `redetect_works`; CLAUDE.MD rewritten for
+  the V3 architecture; USERGUIDE gained a "What's New in Version 3" section.
+  Deliberately skipped (documented, not needed): DB uniqueness on
+  profile names (GUI enforces a stricter global rule) and on Override match
+  keys (code-enforced upsert).
+- **Incident 2026-07-20 (during Phase 7 verification):** overnight full rescan
+  on the prod DB; the workstation suspended ~02:30 (webhook poll gap proves it);
+  the CIFS `soft` mount returned disk-I/O errors on resume. Catalog rebuilt
+  fine (integrity ok, 5,902 tracks, profiles intact) but **all similarity
+  analyses were lost** — the F8 snapshot lived only in process RAM and the
+  restore step fell inside the crash window. No backup contains analyses
+  (db_bkp copy predates the table); user must re-run analysis (it is
+  resumable). Hardening landed same day:
+  (a) **durable snapshot** — `track_analysis_snapshot` table written before
+  the delete, consumed only on successful restore, retried by any later scan
+  (full or incremental); snapshot failure aborts the scan; restore failure is
+  non-fatal with the snapshot retained;
+  (b) **autosave resilience** — tick catches failures, logs once with
+  traceback then one line per retry, recycles the DB connection (peewee
+  auto-reconnects), reports recovery; `_on_close` can no longer be blocked by
+  a failing final autosave.
+  Reminder for the user: the installed copy at `~/.local/share/
+  classical-manager` is V2 vintage — refresh it after the v3 merge.
+- [x] Phase 7 — Verification & wrap-up — **complete 2026-07-20.** Automated:
+  full suite 83 green; py_compile sweep clean; pyflakes clean except
+  pre-existing cosmetic f-strings in cli.py. User verification: full rescan
+  + clean Scan Changes on the prod library (surfaced the mount incident →
+  hardening above), GUI walkthroughs each phase, user sign-off 2026-07-20.
+  **Merged `v3` → `master`, tagged `v3.0`.** Post-release: refresh the V2
+  install at `~/.local/share/classical-manager`; audio re-analysis running
+  (resumable). v3.1 work starts from the Backlog section above.
+
+## Backlog (post-v3.0, user-proposed 2026-07-20)
+
+- **Merge Rescan + Scan Changes** into one "Scan Library…" button → dialog:
+  radio Quick scan (changes only, default) / Full rebuild (warning: re-reads
+  every file, rebuilds catalog, hours on large libraries). Auto-select Full
+  when the library lacks mtime data (replaces incremental's silent refusal).
+  CLI keeps both verbs. Candidate third option later: "Deep" — re-read all
+  tags but update rows in place (no scrub/ID churn); covers
+  retagged-without-mtime-change and new-tag-column backfills, demoting Full
+  rebuild to disaster recovery.
+- **Dirty-state tracking with save prompts** — the real intent behind
+  autosave was protection against *forgetting to save before navigating*,
+  which autosave does not provide (Load overwrites the builder immediately
+  and the next autosave tick destroys the only copy within 60s). Design:
+  baseline-diff dirty detection (canonical snapshot of settings + sorted
+  Rule tuples captured at load/save/new; dirty = current != baseline — no
+  boolean-flag false positives, and a crash-restored autosave computes as
+  dirty automatically since it differs from the saved baseline). Prompt
+  Save / Discard / Cancel on New, Load, library switch, app close, library
+  import; Cancel aborts the navigation (revert the library combobox).
+  Unnamed profile ⇒ "Save as…". Dirty marker in title/profile field.
+  Autosave stays as crash insurance, but every prompt resolution must
+  immediately refresh the autosave to the post-decision state — otherwise
+  Discard can be resurrected by a stale autosave on next launch.
+- **Retire the Track Similarity popup** (`similarity_popup.py`) — vestigial
+  first home of the similarity feature; Builder's Find Similar supersedes its
+  seed/browse role. Keep its one load-bearing job as a sidebar
+  **"Analyze Audio"** button: scan-button-style batch analysis with
+  missing-count, progress, cancel, and summary (mirrors CLI
+  `analyze-similarity`). Find Similar keeps auto-top-up for small gaps but
+  prompts before large ones (hundreds of unanalyzed tracks ⇒ hours) instead
+  of silently launching the marathon.
+
+- **Thumbs-down webhook** (Pandora-style) — remove a specific track from a
+  named profile via HTTP, for a Home Assistant button wired to the currently
+  playing Plex track; takes effect at the nightly regenerate. Core insight:
+  this is exactly a track-level EXCEPT rule — specificity beats any covering
+  ADD, D1 keeps enforce-integrity from re-adding it, the unique
+  (profile, level, key) index makes repeats idempotent, and the Rules window
+  shows/undoes it. No engine changes. The work is identification + plumbing:
+  new CLI verb `exclude-track --profile NAME` accepting `--rating-key`
+  (resolve via Plex → file path → reverse path rules → relative_path;
+  preferred, HA exposes it) or `--title/--album` (exact match, error on
+  ambiguity — never guess); webhook gains an endpoint/command invoking it as
+  a job (keeps the webhook process DB-free). Optional variant: scope=work to
+  thumb down the whole work. Since this is the first webhook op that
+  MODIFIES profiles, add the optional shared-secret header in the same pass.
 
 Target consumer: Claude Code. Each phase is independently completable and committable;
 finish a phase, run its checkpoint, commit+push with a descriptive message, then stop or

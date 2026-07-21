@@ -10,6 +10,7 @@ Start via:  python main.py --cli webhook [--library NAME] [--port 5588]
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -126,7 +127,10 @@ class JobManager:
         if profile:
             plex_args = base + ["generate", "--profile", profile,
                                 "--target", "plex"] + q
-            safe_name = profile.replace(" ", "_").replace("/", "_")
+            # Allowlist sanitization: profile names come from the HTTP
+            # request; strip anything path-capable (\\, .., leading dots).
+            safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_", profile)
+            safe_name = safe_name.replace(" ", "_").lstrip(".") or "playlist"
             m3u_args = base + ["generate", "--profile", profile,
                                "--format", "m3u", "--output",
                                os.path.join(self._m3u_output_dir,

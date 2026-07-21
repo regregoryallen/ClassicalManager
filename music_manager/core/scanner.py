@@ -821,6 +821,116 @@ class ScanStats:
     tracks_no_composer: int = 0
     tracks_no_duration: int = 0
     heuristic_works: int = 0
+    analyses_preserved: int = 0  # similarity analyses carried across rescan
+
+
+# ---------------------------------------------------------------------------
+# Similarity-analysis preservation across full rescans (V3, F8)
+# ---------------------------------------------------------------------------
+# A full rescan deletes every Track row, and TrackAnalysis cascades with
+# them — hours of librosa work gone for files that didn't change.  The
+# snapshot is written to a DURABLE table in the same database before the
+# delete, and consumed only after a successful restore: if the restore
+# crashes (share outage, suspend), the next scan — full or incremental —
+# retries it.  A pure in-memory snapshot lost real data in production
+# when the machine suspended mid-scan (2026-07-20).
+
+def _snapshot_analyses(library: Library) -> int:
+    """Persist the library's analyses into track_analysis_snapshot.
+
+    Upserts by (folder_id, relative_path) and never clears rows it
+    didn't write — leftovers from a previously failed restore stay until
+    a restore succeeds.  Returns the number of rows snapshotted.
+
+    A failure here must abort the scan: proceeding to the delete without
+    a snapshot would destroy the analyses.
+    """
+    from music_manager.core.similarity import AnalysisSnapshot, TrackAnalysis
+
+    rows = []
+    query = (
+        TrackAnalysis.select(TrackAnalysis, Track)
+        .join(Track)
+        .where(Track.library == library)
+    )
+    for ta in query:
+        t = ta.track
+        rows.append({
+            "library": library,
+            "folder_id": t.folder_id,
+            "relative_path": t.relative_path,
+            "features": ta.features,
+            "volatility": ta.volatility,
+            "analyzed_at": ta.analyzed_at,
+            "feature_version": ta.feature_version,
+            "file_mtime": t.file_mtime,
+            "file_size": t.file_size,
+        })
+
+    if rows:
+        from peewee import chunked
+        with database.atomic():
+            for batch in chunked(rows, 200):
+                AnalysisSnapshot.insert_many(batch)\
+                    .on_conflict("replace").execute()
+    return len(rows)
+
+
+def _restore_analyses(library: Library) -> int:
+    """Re-link snapshotted analyses to the library's current tracks.
+
+    Only tracks whose stored mtime/size match the snapshot get their
+    analysis back — a changed file needs re-analysis.  Tracks that
+    already have an analysis row are skipped (retry safety).  The
+    library's snapshot rows are deleted in the same transaction as the
+    restore, so they are consumed exactly once — on success.
+
+    Returns the number of analyses restored.
+    """
+    from music_manager.core.similarity import AnalysisSnapshot, TrackAnalysis
+
+    snap_rows = list(AnalysisSnapshot.select().where(
+        AnalysisSnapshot.library == library))
+    if not snap_rows:
+        return 0
+    snapshot = {(r.folder_id, r.relative_path): r for r in snap_rows}
+
+    already = {
+        ta.track_id for ta in
+        TrackAnalysis.select(TrackAnalysis.track)
+        .join(Track).where(Track.library == library)
+    }
+
+    rows = []
+    for t in Track.select(
+            Track.id, Track.folder, Track.relative_path,
+            Track.file_mtime, Track.file_size,
+    ).where(Track.library == library):
+        if t.id in already:
+            continue
+        old = snapshot.get((t.folder_id, t.relative_path))
+        if old is None:
+            continue
+        if old.file_mtime is None or t.file_mtime is None:
+            continue
+        if abs(t.file_mtime - old.file_mtime) >= 0.01:
+            continue
+        if old.file_size != t.file_size:
+            continue
+        rows.append(TrackAnalysis(
+            track=t.id,
+            features=old.features,
+            volatility=old.volatility,
+            analyzed_at=old.analyzed_at,
+            feature_version=old.feature_version,
+        ))
+
+    with database.atomic():
+        if rows:
+            TrackAnalysis.bulk_create(rows, batch_size=500)
+        AnalysisSnapshot.delete().where(
+            AnalysisSnapshot.library == library).execute()
+    return len(rows)
 
 
 def redetect_works(library: Library,
@@ -856,7 +966,6 @@ def redetect_works(library: Library,
             # Build PendingTrack list with tags reconstructed from DB
             all_tracks = list(Track.select().where(Track.album == album)
                               .order_by(Track.disc_number, Track.track_number))
-            assigned: set[int] = set()
             pending: list[PendingTrack] = []
             for t in all_tracks:
                 tags = RawTags(
@@ -946,6 +1055,13 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
     # Load overrides for this library (for work_name grouping lookups)
     work_overrides = _load_work_overrides(library)
 
+    # Persist similarity analyses to the snapshot table before the delete
+    # cascades them away (F8). Deliberately NOT wrapped: if the snapshot
+    # cannot be written, the scan must abort rather than destroy data.
+    snap_count = _snapshot_analyses(library)
+    if snap_count:
+        logger.info("Snapshotted %d similarity analyses", snap_count)
+
     # Clear existing scan data (but not overrides)
     with database.atomic():
         Track.delete().where(Track.library == library).execute()
@@ -1009,11 +1125,22 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
                 library, sf, album_key, file_group, work_overrides, stats
             )
 
+    # Re-link analyses for files whose mtime/size didn't change (F8).
+    # Non-fatal: the scan itself succeeded; on failure the snapshot
+    # survives and the next scan (full or incremental) retries.
+    try:
+        stats.analyses_preserved = _restore_analyses(library)
+    except Exception as exc:
+        logger.warning(
+            "Could not restore similarity analyses (%s) — snapshot "
+            "retained; the next scan will retry the restore", exc)
+
     logger.info(
         "Scan complete: %d files scanned, %d albums, %d works, %d tracks, "
-        "%d failed",
+        "%d failed, %d similarity analyses preserved",
         stats.files_scanned, stats.albums_created, stats.works_created,
         stats.tracks_created, len(stats.files_failed),
+        stats.analyses_preserved,
     )
 
     # Count heuristic works
@@ -1279,6 +1406,16 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             "Selection reconciliation: %d remapped, %d orphaned",
             recon["remapped"], recon["orphaned"],
         )
+
+    # Retry any analysis restore left over from a crashed full rescan
+    try:
+        recovered = _restore_analyses(library)
+        if recovered:
+            logger.info("Recovered %d similarity analyses from a "
+                        "previous scan's snapshot", recovered)
+    except Exception as exc:
+        logger.warning("Analysis-snapshot recovery failed (%s) — "
+                       "snapshot retained for the next scan", exc)
 
     return stats
 

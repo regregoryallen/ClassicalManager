@@ -135,13 +135,14 @@
   a failing final autosave.
   Reminder for the user: the installed copy at `~/.local/share/
   classical-manager` is V2 vintage — refresh it after the v3 merge.
-- [~] Phase 7 — Verification & wrap-up — automated checks done 2026-07-20:
-  full suite 80 green; py_compile sweep clean; pyflakes clean except
-  pre-existing cosmetic f-strings in cli.py; no dead references to removed
-  symbols. **Remaining user checkpoints:** (1) full rescan + Find Similar on
-  the real library at scale, (2) a Plex push and an M3U export of an existing
-  profile, (3) a normal building session with the new Rules surface. After
-  sign-off: merge `v3` → `master`, tag `v3.0`.
+- [x] Phase 7 — Verification & wrap-up — **complete 2026-07-20.** Automated:
+  full suite 83 green; py_compile sweep clean; pyflakes clean except
+  pre-existing cosmetic f-strings in cli.py. User verification: full rescan
+  + clean Scan Changes on the prod library (surfaced the mount incident →
+  hardening above), GUI walkthroughs each phase, user sign-off 2026-07-20.
+  **Merged `v3` → `master`, tagged `v3.0`.** Post-release: refresh the V2
+  install at `~/.local/share/classical-manager`; audio re-analysis running
+  (resumable). v3.1 work starts from the Backlog section above.
 
 ## Backlog (post-v3.0, user-proposed 2026-07-20)
 
@@ -175,6 +176,21 @@
   `analyze-similarity`). Find Similar keeps auto-top-up for small gaps but
   prompts before large ones (hundreds of unanalyzed tracks ⇒ hours) instead
   of silently launching the marathon.
+
+- **Thumbs-down webhook** (Pandora-style) — remove a specific track from a
+  named profile via HTTP, for a Home Assistant button wired to the currently
+  playing Plex track; takes effect at the nightly regenerate. Core insight:
+  this is exactly a track-level EXCEPT rule — specificity beats any covering
+  ADD, D1 keeps enforce-integrity from re-adding it, the unique
+  (profile, level, key) index makes repeats idempotent, and the Rules window
+  shows/undoes it. No engine changes. The work is identification + plumbing:
+  new CLI verb `exclude-track --profile NAME` accepting `--rating-key`
+  (resolve via Plex → file path → reverse path rules → relative_path;
+  preferred, HA exposes it) or `--title/--album` (exact match, error on
+  ambiguity — never guess); webhook gains an endpoint/command invoking it as
+  a job (keeps the webhook process DB-free). Optional variant: scope=work to
+  thumb down the whole work. Since this is the first webhook op that
+  MODIFIES profiles, add the optional shared-secret header in the same pass.
 
 Target consumer: Claude Code. Each phase is independently completable and committable;
 finish a phase, run its checkpoint, commit+push with a descriptive message, then stop or

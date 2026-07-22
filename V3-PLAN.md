@@ -189,7 +189,10 @@
   Documented in help, USERGUIDE (with a Music Assistant HA snippet),
   main.py usage, and config.example.json.
 
-## v3.2 backlog
+## Future directions (not scheduled)
+
+Larger or longer-horizon ideas. Nothing here is committed to a release;
+each needs its own design pass before work starts.
 
 - **Bootstrap installer** (user, 2026-07-21) — one fetched script that
   clones/downloads and hands off to `install.sh`, so a fresh or headless box
@@ -217,6 +220,43 @@
   * Test against a scratch prefix, never the live install — install-path
     changes caused three of the v3.1 bugs (stale config template, no service
     restart, launcher hijack).
+
+- **Pluggable database backends — SQLite plus MySQL/MariaDB** (user,
+  2026-07-21). Motivation is concrete: the SQLite file lives on a CIFS
+  share, which has already produced a disk-I/O incident mid-scan and makes
+  genuine multi-machine access unsafe (SQLite locking over SMB is
+  unreliable). A real database server — e.g. on the OMV box that already
+  hosts the files — would let the GUI, the nightly cron, and the webhook
+  share one database properly, and would make a headless deployment
+  straightforward. Peewee supports MySQL/MariaDB natively, so the ORM layer
+  is largely portable, but these are NOT free:
+  * **SQLite-specific code must be abstracted**: `pragmas={journal_mode:
+    wal, foreign_keys: 1}`; `playhouse.migrate.SqliteMigrator` (needs
+    `MySQLMigrator`); `_ensure_track_indexes()` uses `PRAGMA index_list`
+    and `CREATE INDEX IF NOT EXISTS` (MySQL 8 does not support IF NOT
+    EXISTS on CREATE INDEX); `AnalysisSnapshot` upsert uses
+    `on_conflict("replace")` (MySQL wants ON DUPLICATE KEY UPDATE).
+  * **Schema portability**: MySQL cannot index a TEXT column without a
+    prefix length. `Track.relative_path`, `ProfileSelection.key`, and
+    `Album.album_key` are all TextField and all indexed/unique — they would
+    need VARCHAR with a defined length, which means picking maximum path
+    and key lengths and enforcing them.
+  * **Concurrency semantics change**: the app currently assumes one writer.
+    Real concurrent writers (GUI editing while cron generates) would need
+    thought about transactions and the autosave/`__temp_` profile churn.
+  * **Config and setup**: connection settings (host/port/user/password or
+    socket), driver dependency (`pymysql`), migration/bootstrap of an empty
+    server, and a documented path for moving an existing SQLite library
+    across (export-library JSON already exists and may be the migration
+    tool).
+  * Keep SQLite as the default and the zero-configuration path — a
+    single-user desktop install should never require a database server.
+  * Related, smaller, and independently useful: **switching between
+    databases from the GUI** (currently a config edit plus restart). The
+    window title already names the active database; a picker with recent
+    databases would make prod/test/scratch juggling safe and obvious.
+
+## v3.2 backlog
 
 - **Sortable column headers in the Find Similar results dialog** (user,
   2026-07-21) — the Builder trees already have `_setup_tree_sort`; the

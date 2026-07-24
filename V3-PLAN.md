@@ -221,6 +221,31 @@ each needs its own design pass before work starts.
     changes caused three of the v3.1 bugs (stale config template, no service
     restart, launcher hijack).
 
+- **Cleanup/Overlay workflow — filter works by relevance, not just
+  detection method** (user, 2026-07-21). The Cleanup tab's Works Browser
+  currently filters on ONE axis: `work_source` (Heuristic / Standalone /
+  Override / MB Work ID / Work Tag / All), plus text search and hide-1-track.
+  That axis answers "how was this grouped?" but not "is this worth my
+  attention?" — so reviewing corrections means wading through the whole
+  library. Add relevance-based selection:
+  * **By playlist/profile** — show only works that appear in a chosen
+    profile's resolved selection (or in any profile). The machinery exists:
+    `resolve_selections(profile).track_ids` → the works those tracks belong
+    to. This lets the user clean up exactly the works a playlist actually
+    uses, ignoring the long tail they never play.
+  * **Newly added** — show works whose tracks were added by the most recent
+    scan, so freshly imported music can be reviewed/regrouped right after
+    import. `Track.file_mtime` exists but records file time, not scan time;
+    this likely needs a scan-batch marker (e.g. a `first_seen`/`scan_id`
+    column set on insert, or reuse the incremental scan's
+    added-this-run set surfaced to the GUI).
+  * These compose with the existing source filter (e.g. "heuristic works in
+    'Morning Mix'"), so it is an added filter dimension, not a replacement.
+  * Broader framing: the Cleanup tab is organized around detection
+    provenance; a review workflow wants to be organized around
+    what-needs-fixing. Worth a small design pass on the whole tab before
+    building, not just bolting on two dropdown options.
+
 - **Pluggable database backends — SQLite plus MySQL/MariaDB** (user,
   2026-07-21). Motivation is concrete: the SQLite file lives on a CIFS
   share, which has already produced a disk-I/O incident mid-scan and makes

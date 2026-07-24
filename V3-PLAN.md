@@ -221,6 +221,27 @@ each needs its own design pass before work starts.
     changes caused three of the v3.1 bugs (stale config template, no service
     restart, launcher hijack).
 
+- **Auto-generate an "Imports-<timestamp>" profile after an incremental
+  scan** (user, 2026-07-24). A quick scan that adds files would create a
+  profile like `Imports-2026.07.24.14.30` selecting exactly the added
+  tracks, which the user can keep and work with. This is effectively what
+  the user does now by hand via Find Unused. Needs the scan-batch marker
+  from the Cleanup-filtering item (added-this-run set), and a decision on
+  lifecycle (transient like `__autosave__`, or a normal saved profile the
+  user renames). Pairs naturally with the Cleanup "newly added" filter.
+- **Filter all tree views by profile inclusion, orthogonal to text search**
+  (user, 2026-07-24). Add a "in profile: [picker]" filter to the Builder
+  library pane, the Cleanup Works Browser, and similar trees (NOT the
+  Builder playlist pane, which already shows one profile). Two use cases it
+  unlocks: (1) assign newly imported music to playlists by filtering the
+  library to an "Imports-date" profile and adding from there; (2) copy items
+  from one playlist to another by filtering to profile A while building
+  profile B. Machinery exists: `resolve_selections(profile).track_ids` gives
+  the membership set; the viewmodel already builds rows and could take an
+  optional "restrict to these track ids" set. Composes with text search and
+  the source filter. This is the general form of the Cleanup-by-playlist
+  item — worth designing them together.
+
 - **Cleanup/Overlay workflow — filter works by relevance, not just
   detection method** (user, 2026-07-21). The Cleanup tab's Works Browser
   currently filters on ONE axis: `work_source` (Heuristic / Standalone /
@@ -282,6 +303,42 @@ each needs its own design pass before work starts.
     databases would make prod/test/scratch juggling safe and obvious.
 
 ## v3.2 backlog
+
+- **BUG (confirmed 2026-07-24): works display in detection order, not track
+  order.** In the Builder library pane, works within an album are sorted by
+  `work_sequence`, but that is assigned in detection-PRECEDENCE order
+  (WORK-tag/MB/heuristic works numbered before standalone singles), so works
+  appear out of track order. Measured: **90 albums** affected in the prod DB
+  (e.g. a multi-part work on track 9 shows before standalone tracks 1-8).
+  CONSTRAINT: `work_sequence` is part of the stable work key
+  (`album_key ⋮ work_name ⋮ work_sequence`) — reassigning it would orphan
+  every work-level selection, so DO NOT change assignment. Fix at the display
+  layer: sort works by their first track's `(disc_number, track_number)`.
+  Touch points: `load_library_index` in selection.py (`a.work_ids.sort(...)`
+  currently keys on `sequence`), and `_shuffle_album_mode` in engine.py
+  (sorts by `work_sequence` — same bug in album-mode output ordering).
+  User has "trust user observations" history; they were right again.
+- **Cleanup Works Browser: default Source to "All Works"** (user, 2026-07-24)
+  — currently defaults to "Heuristic". One-line change:
+  `cleanup_source_var = tk.StringVar(value="Heuristic")` → "All Works".
+- **Refresh control for the "Data has changed" case** (user, 2026-07-24) —
+  `builder_tab.py:724` shows "Data has changed. Please refresh the view" (on
+  a stale context-menu entry after data changed underneath), but there is no
+  refresh affordance. Add a small refresh icon/button (calls
+  `_refresh_builder_tree`, which already exists) to the Builder pane header;
+  consider the same on Cleanup.
+- **Text-field usability: clear button + select-all** (user, 2026-07-24) —
+  entries (search boxes, override work-name, etc.) require backspacing to
+  erase. Root cause is partly tkinter's default `Ctrl+A` = move-to-start
+  (emacs binding) instead of select-all, so keyboard highlight-overwrite
+  does not work as users expect. Two fixes, do both: (a) bind Ctrl+A /
+  Cmd+A to select-all on Entry widgets app-wide; (b) add a small "x" clear
+  button next to key fields (search, override name). Mouse drag-select +
+  type-over already works; this is about discoverability and keyboard.
+- **Already done — verify on installed build:** M3U export already defaults
+  to `<profile name>.m3u` (`_export_m3u`: `initialfile=f"{default_name}.m3u"`,
+  default_name = profile name). If the user is not seeing this, the installed
+  copy predates it — no code change needed.
 
 - **Sortable column headers in the Find Similar results dialog** (user,
   2026-07-21) — the Builder trees already have `_setup_tree_sort`; the

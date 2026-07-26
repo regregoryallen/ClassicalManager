@@ -427,11 +427,24 @@ def load_library_index(library) -> LibraryIndex:
         ti = index.tracks[tid]
         return (ti.disc_number, ti.track_number)
 
-    for a in index.albums.values():
-        a.track_ids.sort(key=_order)
-        a.work_ids.sort(key=lambda wid: (index.works[wid].sequence or 0))
     for w in index.works.values():
         w.track_ids.sort(key=_order)
+
+    def _work_order(wid):
+        # Order works by their first track's position, NOT by
+        # work_sequence: sequence is assigned in detection-precedence
+        # order (tagged/multi-track works before standalone singles), so
+        # it does not track album order. work_sequence stays in the work
+        # key, so it must not be reassigned — this is a display-only fix.
+        w = index.works[wid]
+        if w.track_ids:
+            first = index.tracks[w.track_ids[0]]
+            return (first.disc_number, first.track_number)
+        return (10**9, w.sequence or 0)  # empty works sort last, stably
+
+    for a in index.albums.values():
+        a.track_ids.sort(key=_order)
+        a.work_ids.sort(key=_work_order)
 
     return index
 

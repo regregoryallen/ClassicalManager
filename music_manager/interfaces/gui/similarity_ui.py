@@ -294,6 +294,10 @@ class SimilarityUIMixin:
         scroll.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne",
                      in_=result_tree)
 
+        # Sortable headers (double-click) — e.g. rank by Match or
+        # Volatility. Numeric-aware for %, ratios, and floats.
+        self._setup_tree_sort(result_tree)
+
         result_tree.bind("<Button-3>", lambda e: self._sim_result_context_menu(
             e, result_tree, sim_state))
 

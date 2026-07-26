@@ -304,6 +304,17 @@ each needs its own design pass before work starts.
 
 ## v3.2 backlog
 
+**In progress on branch `v3.2-dev` (started 2026-07-26).** Shipped so far
+(144 tests green): works-ordering bug fix; Cleanup default source "All
+Works"; Builder refresh (⟳) button + stale-message pointer; filter/search
+✕ clear buttons + app-wide Ctrl+A select-all; sortable Find Similar
+columns (shared numeric key extracted to `treeutil.numeric_sort_key`, now
+handles % and N/M ratios). m3u default filename was already implemented.
+Remaining: the two large items below (similarity/volatility quality pass
+and analysis speed) — both need a FEATURE_VERSION bump + full re-analysis
+and the quality pass needs the user's ear, so they are their own effort.
+
+
 - **BUG (confirmed 2026-07-24): works display in detection order, not track
   order.** In the Builder library pane, works within an album are sorted by
   `work_sequence`, but that is assigned in detection-PRECEDENCE order

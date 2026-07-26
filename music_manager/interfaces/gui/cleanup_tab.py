@@ -62,10 +62,9 @@ class CleanupTabMixin:
 
         self._cleanup_search_var = tk.StringVar()
         self._cleanup_search_var.trace_add("write", lambda *_: self._debounce_cleanup_search())
-        self.cleanup_search = ctk.CTkEntry(filter_frame, width=200,
-                                           placeholder_text="Search works...",
-                                           textvariable=self._cleanup_search_var)
-        self.cleanup_search.pack(side="right", padx=5)
+        self._make_filter_entry(filter_frame, self._cleanup_search_var,
+                                placeholder="Search works...",
+                                width=200).pack(side="right", padx=5)
         self._cleanup_search_after = None
 
         self.cleanup_hide_single = tk.BooleanVar(value=True)
@@ -74,9 +73,9 @@ class CleanupTabMixin:
                         command=self._refresh_works_list,
                         width=20).pack(side="right", padx=5)
 
-        _SOURCE_OPTIONS = ["Heuristic", "Standalone", "All Works",
+        _SOURCE_OPTIONS = ["All Works", "Heuristic", "Standalone",
                            "Override", "MB Work ID", "Work Tag"]
-        self.cleanup_source_var = tk.StringVar(value="Heuristic")
+        self.cleanup_source_var = tk.StringVar(value="All Works")
         self.cleanup_source_menu = ctk.CTkOptionMenu(
             filter_frame, variable=self.cleanup_source_var,
             values=_SOURCE_OPTIONS, width=140,
@@ -151,10 +150,9 @@ class CleanupTabMixin:
             side="left", padx=5)
         self._overrides_search_var = tk.StringVar()
         self._overrides_search_var.trace_add("write", lambda *_: self._debounce_overrides_search())
-        self.overrides_search = ctk.CTkEntry(ov_header, width=200,
-                                             placeholder_text="Filter overrides...",
-                                             textvariable=self._overrides_search_var)
-        self.overrides_search.pack(side="right", padx=5)
+        self._make_filter_entry(ov_header, self._overrides_search_var,
+                                placeholder="Filter overrides...",
+                                width=200).pack(side="right", padx=5)
         self._overrides_search_after = None
 
         self.overrides_tree = ttk.Treeview(
@@ -228,7 +226,7 @@ class CleanupTabMixin:
 
         query = query.order_by(Album.title, Work.work_name)
 
-        search = self.cleanup_search.get().strip().lower()
+        search = self._cleanup_search_var.get().strip().lower()
         hide_single = self.cleanup_hide_single.get()
 
         for work in query:
@@ -270,7 +268,7 @@ class CleanupTabMixin:
 
         from music_manager.core.database import Override
 
-        search = self.overrides_search.get().strip().lower() if hasattr(self, "overrides_search") else ""
+        search = self._overrides_search_var.get().strip().lower()
 
         for ov in Override.select().where(Override.library == self.active_library):
             match = ov.match_mb_id or ov.match_relative_path or ""

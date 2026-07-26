@@ -447,6 +447,51 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                   background=[("selected", "#1f6aa5")],
                   foreground=[("selected", "white")])
 
+        self._bind_select_all()
+
+    def _bind_select_all(self):
+        """Make Ctrl+A / Cmd+A select all in every text entry.
+
+        Tk binds Ctrl+A to move-to-line-start (an emacs default), so
+        users could not highlight-and-overwrite a field the usual way.
+        bind_class covers all current and future Entry widgets; CTkEntry
+        wraps a plain tk.Entry, so the "TEntry"/"Entry" classes apply.
+        """
+        def select_all(event):
+            w = event.widget
+            try:
+                w.select_range(0, "end")
+                w.icursor("end")
+            except tk.TclError:
+                return
+            return "break"
+
+        for cls in ("Entry", "TEntry"):
+            self.root.bind_class(cls, "<Control-a>", select_all)
+            self.root.bind_class(cls, "<Control-A>", select_all)
+            self.root.bind_class(cls, "<Command-a>", select_all)
+            self.root.bind_class(cls, "<Command-A>", select_all)
+
+    def _make_filter_entry(self, parent, textvar, *, placeholder="Filter...",
+                           width=150):
+        """A filter entry with a one-click clear (✕) button.
+
+        Returns the wrapper frame (pack/grid it as you would the entry).
+        Ctrl+A select-all works too (see _bind_select_all); the ✕ is the
+        discoverable, mouse-only path.
+        """
+        ctk = self.ctk
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        entry = ctk.CTkEntry(frame, width=width, placeholder_text=placeholder,
+                             textvariable=textvar)
+        entry.pack(side="left")
+        ctk.CTkButton(frame, text="✕", width=22,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray60",
+                      command=lambda: textvar.set("")).pack(
+            side="left", padx=(2, 0))
+        return frame
+
     def _build_layout(self):
         """Build the main window layout: sidebar + tabbed content."""
         ctk = self.ctk

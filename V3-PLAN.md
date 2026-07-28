@@ -304,52 +304,35 @@ each needs its own design pass before work starts.
 
 ## v3.2 backlog
 
-**In progress on branch `v3.2-dev` (started 2026-07-26).** Shipped so far
-(144 tests green): works-ordering bug fix; Cleanup default source "All
-Works"; Builder refresh (⟳) button + stale-message pointer; filter/search
-✕ clear buttons + app-wide Ctrl+A select-all; sortable Find Similar
-columns (shared numeric key extracted to `treeutil.numeric_sort_key`, now
-handles % and N/M ratios). m3u default filename was already implemented.
-Remaining: the two large items below (similarity/volatility quality pass
-and analysis speed) — both need a FEATURE_VERSION bump + full re-analysis
-and the quality pass needs the user's ear, so they are their own effort.
+**In progress on branch `v3.2-dev` (started 2026-07-26).**
 
+Shipped and **user-verified 2026-07-28** (158 tests green):
+- works-ordering bug fixed everywhere: tree views, engine album-mode,
+  Show Album popup, and library export now share
+  `selection.works_in_track_order()` (the popup and export were missed in
+  the first pass — the same album looked different in two places)
+- Cleanup Works Browser defaults to "All Works"
+- Builder refresh (⟳) button; the stale-data message now names it
+- filter/search ✕ clear buttons + app-wide Ctrl+A select-all
+- sortable Find Similar columns; shared numeric key extracted to
+  `treeutil.numeric_sort_key` (handles %, N/M ratios, durations, counts)
+- **M3U/JSON save dialogs pre-fill the filename.** Root cause was NOT
+  ours: zenity 4 (GTK4) dropped save-name pre-filling — `--filename`
+  means "select this existing file", so a new playlist's name is
+  discarded and the dialog opens in the process CWD. Verified by
+  screenshotting zenity 4.0.1 with an absolute path (still empty).
+  Save dialogs WITH a suggested name now use tkinter (which pre-fills and
+  pre-selects); open/dir dialogs keep native zenity; kdialog unaffected.
+  **Do not "simplify" this back to zenity-for-everything.**
+- scans now list which files could not be read (scrollable + copy
+  button). Previously only a count was shown, making a silently-missing
+  track undiagnosable. Surfaced by a real case: a FLAC on the CIFS share
+  that `stat`s fine but returns EINVAL on open() for every tool — bad
+  data, correctly skipped by the scanner.
 
-- **BUG (confirmed 2026-07-24): works display in detection order, not track
-  order.** In the Builder library pane, works within an album are sorted by
-  `work_sequence`, but that is assigned in detection-PRECEDENCE order
-  (WORK-tag/MB/heuristic works numbered before standalone singles), so works
-  appear out of track order. Measured: **90 albums** affected in the prod DB
-  (e.g. a multi-part work on track 9 shows before standalone tracks 1-8).
-  CONSTRAINT: `work_sequence` is part of the stable work key
-  (`album_key ⋮ work_name ⋮ work_sequence`) — reassigning it would orphan
-  every work-level selection, so DO NOT change assignment. Fix at the display
-  layer: sort works by their first track's `(disc_number, track_number)`.
-  Touch points: `load_library_index` in selection.py (`a.work_ids.sort(...)`
-  currently keys on `sequence`), and `_shuffle_album_mode` in engine.py
-  (sorts by `work_sequence` — same bug in album-mode output ordering).
-  User has "trust user observations" history; they were right again.
-- **Cleanup Works Browser: default Source to "All Works"** (user, 2026-07-24)
-  — currently defaults to "Heuristic". One-line change:
-  `cleanup_source_var = tk.StringVar(value="Heuristic")` → "All Works".
-- **Refresh control for the "Data has changed" case** (user, 2026-07-24) —
-  `builder_tab.py:724` shows "Data has changed. Please refresh the view" (on
-  a stale context-menu entry after data changed underneath), but there is no
-  refresh affordance. Add a small refresh icon/button (calls
-  `_refresh_builder_tree`, which already exists) to the Builder pane header;
-  consider the same on Cleanup.
-- **Text-field usability: clear button + select-all** (user, 2026-07-24) —
-  entries (search boxes, override work-name, etc.) require backspacing to
-  erase. Root cause is partly tkinter's default `Ctrl+A` = move-to-start
-  (emacs binding) instead of select-all, so keyboard highlight-overwrite
-  does not work as users expect. Two fixes, do both: (a) bind Ctrl+A /
-  Cmd+A to select-all on Entry widgets app-wide; (b) add a small "x" clear
-  button next to key fields (search, override name). Mouse drag-select +
-  type-over already works; this is about discoverability and keyboard.
-- **Already done — verify on installed build:** M3U export already defaults
-  to `<profile name>.m3u` (`_export_m3u`: `initialfile=f"{default_name}.m3u"`,
-  default_name = profile name). If the user is not seeing this, the installed
-  copy predates it — no code change needed.
+Remaining v3.2 (deferred, their own effort — both need a
+FEATURE_VERSION bump + full re-analysis, and the quality pass needs the
+user's ear):
 
 - **Sortable column headers in the Find Similar results dialog** (user,
   2026-07-21) — the Builder trees already have `_setup_tree_sort`; the

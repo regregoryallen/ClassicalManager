@@ -180,7 +180,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Profile name \u2014 enter a name for your playlist profile")
     bullet("Unsaved changes \u2014 the status strip shows \"\u2022 unsaved\" "
            "whenever the playlist differs from its saved version. New, Load, "
-           "switching libraries, Find Unused, and quitting all prompt you to "
+           "switching libraries, and quitting all prompt you to "
            "Save, Discard, or Cancel first, so work is never lost by "
            "navigating away")
     bullet("Load \u2014 restore a saved profile's settings and selections")
@@ -213,9 +213,16 @@ def build_help_content(text: tk.Text) -> None:
            "A container is blue when every track under it is included (including "
            "when all children were added individually), amber only when some but "
            "not all content is included")
+    bullet("Show: narrows the pane to a scope \u2014 \"Entire library\", "
+           "\"Unassigned (no profile)\" to find music no playlist uses, or "
+           "any profile to work within it. Use it to assign newly imported "
+           "music, or to copy items from one playlist into another")
     bullet("Filter matches name, composer, genre, performer, conductor, "
            "ensemble; the \u2715 button clears it, and Ctrl+A selects all "
-           "in any text field")
+           "in any text field. Show, Filter, and Hide 1-track COMBINE \u2014 "
+           "each narrows what the others left")
+    bullet("Ctrl+A in the tree selects everything shown \u2014 pair it with "
+           "Show to add a whole scope at once")
     bullet("Hide 1-track: hides standalone works")
     bullet("\u27f3 reloads the tree (use it if a popup says data has "
            "changed); +/\u2212: expand/collapse all (to work level)")
@@ -246,8 +253,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Export JSON \u2014 save as a JSON file with full metadata")
     bullet("Push to Plex \u2014 create or update a playlist on your Plex server "
            "(preserves playlist ID across regenerations)")
-    bullet("Find Unused \u2014 populate the builder with all tracks not included "
-           "in any saved profile, so you can browse and assign them")
+
     bullet("Find Similar \u2014 find tracks that sound similar to your selections "
            "(see below); needs a one-time audio analysis pass the first time")
 
@@ -326,6 +332,19 @@ def build_help_content(text: tk.Text) -> None:
         "reconciliation data; it is healed automatically when the profile "
         "is saved or loaded.\n"
     )
+
+    subheading("Imported Music")
+    body(
+        "After a Quick scan that adds files, the new tracks are saved as "
+        "their own profile named like \"Imports 2026-07-28 14:30\". Pick it "
+        "under Show: to browse and assign them.\n"
+    )
+    bullet("Import profiles never count as \"already assigned\", so "
+           "Show \u2192 Unassigned still finds their tracks")
+    bullet("Save it under a new name to keep it as a normal playlist; you "
+           "are then offered the chance to remove the original")
+    bullet("Delete import profiles you are done with \u2014 the Delete "
+           "dialog accepts multiple selections")
 
     # ── Cleanup / Overlay ──
     heading("cleanup", "Cleanup / Overlay")

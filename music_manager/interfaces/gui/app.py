@@ -1101,6 +1101,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.root.after(0, lambda: self.scan_status.configure(
                 text=f"[{current}/{total}] {message}"))
 
+        import_profile_name = None
         try:
             stats = scan_incremental(library, progress_callback=progress)
             if stats.files_added or stats.files_updated or stats.files_removed:
@@ -1109,6 +1110,15 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                    f"~{stats.files_updated} updated, "
                    f"-{stats.files_removed} removed, "
                    f"{stats.files_unchanged} unchanged")
+            # Record what arrived as its own profile, so newly imported
+            # music can be browsed and assigned instead of hunted for.
+            if stats.added_paths:
+                from music_manager.core.selection import create_import_profile
+                created = create_import_profile(
+                    library, stats.added_paths, when=stats.scan_started)
+                if created is not None:
+                    import_profile_name = created.name
+                    msg += f" — saved as '{created.name}'"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
                 failed = list(stats.files_failed)
@@ -1126,6 +1136,14 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
+            if import_profile_name:
+                messagebox.showinfo(
+                    "New Music Imported",
+                    f"{stats.files_added} new track(s) were saved as the "
+                    f"profile:\n\n    {import_profile_name}\n\n"
+                    f"Pick it under \"Show:\" above the Library pane to "
+                    f"browse and assign them. Rename it to keep it as a "
+                    f"normal playlist, or delete it when you are done.")
             if failed:
                 self._report_failed_files(failed)
 

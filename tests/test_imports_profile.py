@@ -9,11 +9,14 @@ the tracks it was created to help assign.
 from music_manager.core.database import (
     PlaylistProfile, ProfileSelection, Track,
 )
-from music_manager.core.engine import find_unused_tracks
-from music_manager.core.selection import (
-    create_import_profile, resolve_selections, user_profile_filter,
-    visible_profile_filter,
+from music_manager.core.engine import (
+    assigned_track_ids, find_unused_tracks, unassigned_track_ids,
 )
+from music_manager.core.selection import (
+    create_import_profile, load_library_index, resolve_effective_state,
+    resolve_selections, user_profile_filter, visible_profile_filter,
+)
+from music_manager.core.viewmodel import library_tree_rows
 
 from tests.conftest import make_album, make_profile, add_sel
 
@@ -131,3 +134,61 @@ def test_visible_filter_includes_imports_but_not_internal(lib):
         (PlaylistProfile.library == lib) & user_profile_filter())]
     assert "Morning Mix" in user_only
     assert not any(n.startswith("Imports ") for n in user_only)
+
+
+# ---------------------------------------------------------------------------
+# Library-pane scope: Entire library / Unassigned / a profile
+# ---------------------------------------------------------------------------
+
+def test_unassigned_ids_ignore_import_profiles(lib):
+    album = make_album(lib, "A/Alb1", [("Work One", 2)])
+    ids = {t.id for t in Track.select().where(Track.album == album)}
+
+    assert unassigned_track_ids(lib) == ids
+
+    create_import_profile(lib, [t.relative_path for t in
+                                Track.select().where(Track.album == album)])
+    assert unassigned_track_ids(lib) == ids, "imports must not count"
+
+    p = make_profile(lib, name="Real")
+    add_sel(p, "track", "A/Alb1/01.flac")
+    assert len(unassigned_track_ids(lib)) == 1
+    assert len(assigned_track_ids(lib)) == 1
+
+
+def test_restrict_ids_narrows_the_library_tree(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    make_album(lib, "A/Alb2", [("Work Three", 2)])
+    index = load_library_index(lib)
+    state = resolve_effective_state(index, [])
+
+    everything = library_tree_rows(index, state)
+    assert len(everything) == 2
+
+    keep = {index.track_id_by_path["A/Alb1/03.flac"]}
+    narrowed = library_tree_rows(index, state, restrict_ids=keep)
+
+    assert len(narrowed) == 1                     # Alb2 disappears
+    (album_row,) = narrowed
+    assert [w.text for w in album_row.children] == ["Work Two"]
+    assert len(album_row.children[0].children) == 1
+    assert album_row.values[3] == "1 trk"         # count reflects the scope
+
+
+def test_empty_restrict_set_shows_nothing(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    index = load_library_index(lib)
+    state = resolve_effective_state(index, [])
+    assert library_tree_rows(index, state, restrict_ids=set()) == []
+
+
+def test_restrict_composes_with_hide_single(lib):
+    make_album(lib, "A/Alb1", [("Big", 3), ("Lone", 1)])
+    index = load_library_index(lib)
+    state = resolve_effective_state(index, [])
+
+    all_ids = set(index.tracks)
+    rows = library_tree_rows(index, state, hide_single=True,
+                             restrict_ids=all_ids)
+    (album_row,) = rows
+    assert [w.text for w in album_row.children] == ["Big"]

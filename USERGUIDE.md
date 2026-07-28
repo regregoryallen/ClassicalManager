@@ -316,7 +316,7 @@ The main workspace for creating playlists.
 
 The status strip at the bottom right shows **• unsaved** whenever the current
 playlist differs from its saved version. Any action that would replace the
-builder's contents — **New**, **Load**, switching libraries, **Find Unused**,
+builder's contents — **New**, **Load**, switching libraries,
 or quitting — prompts first:
 
 - **Yes** saves the profile (asking for a name if it doesn't have one yet)
@@ -385,6 +385,14 @@ Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
 - **Columns**: Name, Composer, Genre, Year (albums), Info (track count or duration). Works appear in track order within each album.
 - **Toolbar**: ⟳ reloads the tree, +/− expand/collapse. Filter fields have a ✕ clear button, and Ctrl+A selects all in any text field.
+- **Show**: narrows the pane to a scope — *Entire library* (default),
+  *Unassigned (no profile)* to find music no playlist uses, or any profile
+  to work within it. **Show**, **Filter**, and **Hide 1-track** combine: each
+  narrows what the others left. Ctrl+A in the tree selects everything shown,
+  so you can add a whole scope in one gesture.
+
+  Two workflows this enables: pick an *Imports* profile to assign newly added
+  music, or pick playlist A while building playlist B to copy items across.
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded.
   A container (album or work) is blue when *every* track under it is included —
   including when you have added all of its children individually — and amber only
@@ -424,7 +432,6 @@ and scroll position are preserved when items are added or removed.
 | **Export M3U** | Save as an M3U playlist file |
 | **Export JSON** | Save as a JSON file with full metadata |
 | **Push to Plex** | Create or update a playlist on your Plex server (updates in place, preserving the playlist ID) |
-| **Find Unused** | Populate the builder with all tracks not included in any saved profile. Creates an unnamed profile so you can browse, preview, and decide where items belong. |
 | **Find Similar** | Find tracks that sound similar to your current selections (see below). Requires an audio analysis pass the first time. |
 
 ### Find Similar Tracks
@@ -528,6 +535,22 @@ The Tracks column shows how many tracks each rule currently decides.
 healed automatically when the profile is saved or loaded.
 
 ---
+
+### Imported Music
+
+After a Quick scan that adds files, those tracks are saved as their own
+profile named like `Imports 2026-07-28 14:30`, and the app tells you so.
+Pick it under **Show** to browse and assign the new music.
+
+Import profiles are ordinary, editable profiles with one exception: they never
+count as evidence that a track is *already assigned*, so **Show → Unassigned**
+still finds their tracks. That is deliberate — an import profile exists to help
+you assign music, not to claim it.
+
+To keep one as a real playlist, save it under a new name; you are then offered
+the chance to remove the original. Delete the ones you have finished with — the
+Delete Profile dialog accepts multiple selections.
+
 
 ## Cleanup / Overlay Tab
 

@@ -216,6 +216,40 @@ profile's membership. Design them together.
   the source filter. This is the general form of the Cleanup-by-playlist
   item — worth designing them together.
 
+**Imports-profile decisions (user, 2026-07-28): REAL profiles, one per
+import.** A "last import" virtual profile was rejected: two imports in one
+work session would lose the first. Clutter is contained by design, not by
+avoiding profiles.
+
+- **CRITICAL — needs a first-class flag, not a name convention.**
+  `engine.find_unused_tracks()` treats every non-`__` profile as evidence a
+  track is used, so a normally-named import profile makes every newly
+  imported track look assigned — breaking Find Unused, the very workflow
+  this feature automates. Add `PlaylistProfile.auto_generated` (bool,
+  null=True per the Peewee CASCADE constraint) or a `kind` column, and
+  EXCLUDE auto-generated profiles from find_unused_tracks. A name prefix is
+  not enough: it breaks when the user renames one, or names their own
+  profile "Imports ...".
+- **Assignment progress**: show each import as
+  `Imports 2026-07-28 14:30 — 18/40 assigned`, computed with the same
+  machinery as Find Unused. Turns clutter into a to-do list and gives a
+  principled deletion moment; enables a "Delete fully-assigned imports"
+  bulk action that only removes provably-finished ones.
+- **Promotion by rename**: renaming an import profile clears the flag and
+  makes it a normal profile — the natural "keep this one" gesture, no extra
+  UI.
+- **Grouping**: profile pickers list user profiles first, then a separator,
+  then imports newest-first.
+- **Multi-select delete already exists** — `_delete_profile`'s listbox is
+  `selectmode="extended"` and deletes every selection. Nothing to build.
+- **Do NOT auto-prune.** Same reasoning as the deliberate decision to keep
+  Rules "Clean Up" manual: automatic deletion of user-visible data is a
+  trust problem, and an edited import profile is the user's. Make the state
+  visible (progress counts) and disposal one click.
+- The scan-batch marker also enables a zero-clutter browse path ("added
+  since <date>" as a tree filter), which complements import profiles rather
+  than replacing them — it lowers the pressure for them to live forever.
+
 **Shared groundwork both need:**
 - A **scan-batch marker**. `Track.file_mtime` is FILE time, not scan time,
   so it cannot answer "added by the last scan". Add a nullable column
@@ -237,12 +271,10 @@ profile's membership. Design them together.
 **Design questions to settle before building:**
 - Where does the profile picker live in the Builder header — a dropdown
   next to the text filter? What labels the "no filter" state?
-- Imports profile lifecycle: a real saved profile the user renames, or a
-  transient one like `__autosave__` that is replaced each scan? If real,
-  how many accumulate before they need pruning?
 - Should an Imports profile be created when a scan adds 0 files? (No.)
 - Does an imports profile respect the `__` internal-name convention?
-  (No — the user must see and keep it, so it needs a normal name.)
+  (No — the user must see and keep it, so it needs a normal name. This is
+  exactly why the auto_generated flag is required.)
 
 ## Future directions (not scheduled)
 

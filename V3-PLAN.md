@@ -2,9 +2,9 @@
 
 ## Status (keep this section current)
 
-- **Released: v3.0 (2026-07-20) and v3.1 (2026-07-21), both merged to
-  `master` and tagged.** Tag lineage: v1.0, v2.0, v3.0, v3.1. Next work is
-  v3.2 — see the backlog section below.
+- **Released: v3.0, v3.1, v3.2 — all merged to `master` and tagged.**
+  Tag lineage: v1.0, v2.0, v3.0, v3.1, v3.2 (v3.2 on 2026-07-28, 158 tests
+  green). **Next work is v3.3 — see the v3.3 section below.**
 - Branch naming: use `v3.2-dev` style, **not** a bare version number — a
   branch and tag sharing a name (`v3.1`) made git refuse plain pushes
   ("src refspec matches more than one"). Merged release branches are
@@ -189,6 +189,61 @@
   Documented in help, USERGUIDE (with a Music Assistant HA snippet),
   main.py usage, and config.example.json.
 
+## v3.3 — next up (promoted from Future directions 2026-07-28)
+
+Two features that are really one capability seen from two angles: knowing
+which tracks arrived recently, and being able to restrict any tree to a
+profile's membership. Design them together.
+
+- **Auto-generate an "Imports-<timestamp>" profile after an incremental
+  scan** (user, 2026-07-24). A quick scan that adds files would create a
+  profile like `Imports-2026.07.24.14.30` selecting exactly the added
+  tracks, which the user can keep and work with. This is effectively what
+  the user does now by hand via Find Unused. Needs the scan-batch marker
+  from the Cleanup-filtering item (added-this-run set), and a decision on
+  lifecycle (transient like `__autosave__`, or a normal saved profile the
+  user renames). Pairs naturally with the Cleanup "newly added" filter.
+- **Filter all tree views by profile inclusion, orthogonal to text search**
+  (user, 2026-07-24). Add a "in profile: [picker]" filter to the Builder
+  library pane, the Cleanup Works Browser, and similar trees (NOT the
+  Builder playlist pane, which already shows one profile). Two use cases it
+  unlocks: (1) assign newly imported music to playlists by filtering the
+  library to an "Imports-date" profile and adding from there; (2) copy items
+  from one playlist to another by filtering to profile A while building
+  profile B. Machinery exists: `resolve_selections(profile).track_ids` gives
+  the membership set; the viewmodel already builds rows and could take an
+  optional "restrict to these track ids" set. Composes with text search and
+  the source filter. This is the general form of the Cleanup-by-playlist
+  item — worth designing them together.
+
+**Shared groundwork both need:**
+- A **scan-batch marker**. `Track.file_mtime` is FILE time, not scan time,
+  so it cannot answer "added by the last scan". Add a nullable column
+  (e.g. `first_seen` timestamp, or `scan_id`) set on INSERT only — never
+  updated — plus a migration (remember: `null=True`, see the Peewee CASCADE
+  constraint below). `scan_incremental` already computes its added set;
+  the full scan needs the same treatment so a rebuild does not make every
+  track look new (probably: preserve first_seen across a full rescan the
+  same way analyses are preserved, keyed on (folder_id, relative_path)).
+- A **restrict-set parameter on the viewmodel**. `library_tree_rows` /
+  `playlist_tree_rows` take an optional set of track ids; rows whose
+  tracks fall outside it are dropped (an album/work disappears when it has
+  no surviving tracks). This is the single mechanism behind "filter by
+  profile", "show only new imports", and the Cleanup-by-playlist item.
+- **Composition rule:** the profile filter is ORTHOGONAL to the text
+  filter and the source filter — they intersect, never replace. The
+  Builder playlist pane is excluded (it already shows one profile).
+
+**Design questions to settle before building:**
+- Where does the profile picker live in the Builder header — a dropdown
+  next to the text filter? What labels the "no filter" state?
+- Imports profile lifecycle: a real saved profile the user renames, or a
+  transient one like `__autosave__` that is replaced each scan? If real,
+  how many accumulate before they need pruning?
+- Should an Imports profile be created when a scan adds 0 files? (No.)
+- Does an imports profile respect the `__` internal-name convention?
+  (No — the user must see and keep it, so it needs a normal name.)
+
 ## Future directions (not scheduled)
 
 Larger or longer-horizon ideas. Nothing here is committed to a release;
@@ -220,27 +275,6 @@ each needs its own design pass before work starts.
   * Test against a scratch prefix, never the live install — install-path
     changes caused three of the v3.1 bugs (stale config template, no service
     restart, launcher hijack).
-
-- **Auto-generate an "Imports-<timestamp>" profile after an incremental
-  scan** (user, 2026-07-24). A quick scan that adds files would create a
-  profile like `Imports-2026.07.24.14.30` selecting exactly the added
-  tracks, which the user can keep and work with. This is effectively what
-  the user does now by hand via Find Unused. Needs the scan-batch marker
-  from the Cleanup-filtering item (added-this-run set), and a decision on
-  lifecycle (transient like `__autosave__`, or a normal saved profile the
-  user renames). Pairs naturally with the Cleanup "newly added" filter.
-- **Filter all tree views by profile inclusion, orthogonal to text search**
-  (user, 2026-07-24). Add a "in profile: [picker]" filter to the Builder
-  library pane, the Cleanup Works Browser, and similar trees (NOT the
-  Builder playlist pane, which already shows one profile). Two use cases it
-  unlocks: (1) assign newly imported music to playlists by filtering the
-  library to an "Imports-date" profile and adding from there; (2) copy items
-  from one playlist to another by filtering to profile A while building
-  profile B. Machinery exists: `resolve_selections(profile).track_ids` gives
-  the membership set; the viewmodel already builds rows and could take an
-  optional "restrict to these track ids" set. Composes with text search and
-  the source filter. This is the general form of the Cleanup-by-playlist
-  item — worth designing them together.
 
 - **Cleanup/Overlay workflow — filter works by relevance, not just
   detection method** (user, 2026-07-21). The Cleanup tab's Works Browser
@@ -302,7 +336,7 @@ each needs its own design pass before work starts.
     window title already names the active database; a picker with recent
     databases would make prod/test/scratch juggling safe and obvious.
 
-## v3.2 backlog
+## v3.2 (RELEASED 2026-07-28) — record of what shipped
 
 **In progress on branch `v3.2-dev` (started 2026-07-26).**
 
@@ -330,9 +364,11 @@ Shipped and **user-verified 2026-07-28** (158 tests green):
   that `stat`s fine but returns EINVAL on open() for every tool — bad
   data, correctly skipped by the scanner.
 
-Remaining v3.2 (deferred, their own effort — both need a
-FEATURE_VERSION bump + full re-analysis, and the quality pass needs the
-user's ear):
+**Deferred out of v3.2 — needs a design review first (user, 2026-07-28:
+"we need to take a hard look at how the whole analysis and 'find similar'
+features work"). Not simply a tuning exercise: revisit the feature's
+shape before changing feature vectors. Both items below need a
+FEATURE_VERSION bump + full re-analysis, so do them in ONE pass:**
 
 - **Sortable column headers in the Find Similar results dialog** (user,
   2026-07-21) — the Builder trees already have `_setup_tree_sort`; the

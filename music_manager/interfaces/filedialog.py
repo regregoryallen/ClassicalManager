@@ -122,9 +122,17 @@ def _save_start_path(initialdir, initialfile):
 
 def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
                       initialdir=None, filetypes=None, parent=None, **kwargs):
-    if _ZENITY:
-        cmd = ["zenity", "--file-selection", "--save",
-               "--confirm-overwrite", "--title", title,
+    # Save dialogs deliberately prefer tkinter over zenity when a
+    # filename is suggested. zenity 4 (GTK4) dropped support for
+    # pre-filling the name: its --filename maps to a "select this
+    # existing file" call, so for a not-yet-created playlist the name is
+    # silently discarded and the dialog opens in the process CWD.
+    # Verified on zenity 4.0.1 — no argument spelling avoids it. tkinter
+    # fills the name and pre-selects it for overtyping, which matters
+    # more here than the dialog's styling. Open/dir dialogs have no
+    # suggested name, so they keep using the nicer native zenity.
+    if _ZENITY and not initialfile:
+        cmd = ["zenity", "--file-selection", "--save", "--title", title,
                "--filename", _save_start_path(initialdir, initialfile)]
         if filetypes:
             cmd.extend(_zenity_filetypes(filetypes))

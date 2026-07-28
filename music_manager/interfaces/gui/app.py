@@ -989,6 +989,52 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         dialog.wait_window()
         return result["mode"]
 
+    def _report_failed_files(self, failed):
+        """Show which files a scan could not read.
+
+        Scans counted failures but never named them, so a file silently
+        missing from the library was undiagnosable from the GUI. Causes
+        are usually outside the app — an unreadable file on a network
+        share, a truncated download, a genuinely corrupt file.
+        """
+        popup = tk.Toplevel(self.root)
+        popup.title(f"{len(failed)} file(s) could not be read")
+        popup.transient(self.root)
+        popup.configure(bg="#2b2b2b")
+        self._center_on_main(popup, 820, 400)
+
+        tk.Label(
+            popup,
+            text=(f"{len(failed)} file(s) were skipped and are NOT in the "
+                  f"library.\nThe file exists but could not be opened or "
+                  f"parsed — check the share, or re-copy the file, then "
+                  f"scan again."),
+            bg="#2b2b2b", fg="white", justify="left",
+            font=("Segoe UI", 11)).pack(anchor="w", padx=14, pady=(12, 8))
+
+        frame = tk.Frame(popup, bg="#2b2b2b")
+        frame.pack(fill="both", expand=True, padx=14)
+        text = tk.Text(frame, bg="#1e1e1e", fg="#e0e0e0", wrap="none",
+                       font=("monospace", 9), height=12)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.insert("1.0", "\n".join(str(f) for f in failed))
+        text.configure(state="disabled")
+
+        bot = tk.Frame(popup, bg="#2b2b2b")
+        bot.pack(fill="x", padx=14, pady=10)
+
+        def copy_list():
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(str(f) for f in failed))
+
+        tk.Button(bot, text="Copy list", bg="#3b3b3b", fg="white",
+                  command=copy_list).pack(side="left")
+        tk.Button(bot, text="Close", bg="#3b3b3b", fg="white",
+                  command=popup.destroy).pack(side="right")
+
     def _cancel_scan(self):
         """Signal the running scan to stop."""
         self._scan_cancel.set()
@@ -998,6 +1044,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """Run the scan in a background thread."""
         from music_manager.core.scanner import scan_library
         from music_manager.core.overrides import apply_overrides
+
+        failed = []
 
         def progress(current, total, message):
             if self._scan_cancel.is_set():
@@ -1017,6 +1065,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 msg += f", {stats.analyses_preserved} analyses kept"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
+                failed = list(stats.files_failed)
         except _ScanCancelled:
             msg = "Scan cancelled"
             logger.info("Scan cancelled by user")
@@ -1032,6 +1081,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
+            if failed:
+                self._report_failed_files(failed)
 
         self.root.after(0, finish)
 
@@ -1039,6 +1090,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """Run incremental scan in a background thread."""
         from music_manager.core.scanner import scan_incremental
         from music_manager.core.overrides import apply_overrides
+
+        failed = []
 
         def progress(current, total, message):
             if self._scan_cancel.is_set():
@@ -1058,6 +1111,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                    f"{stats.files_unchanged} unchanged")
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
+                failed = list(stats.files_failed)
         except _ScanCancelled:
             msg = "Scan cancelled"
         except Exception as exc:
@@ -1072,6 +1126,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
+            if failed:
+                self._report_failed_files(failed)
 
         self.root.after(0, finish)
 

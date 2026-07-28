@@ -397,6 +397,11 @@ class BuilderTabMixin:
                       text_color="gray70", font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_lib_tree, True)
                       ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(lib_header, text="\u27f3", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      command=self._refresh_builder_tree,
+                      ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(lib_header, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
                       text_color="gray70", font=ctk.CTkFont(size=14),
@@ -404,10 +409,8 @@ class BuilderTabMixin:
                       ).pack(side="left")
         self._lib_filter_var = tk.StringVar()
         self._lib_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("lib"))
-        lib_filter = ctk.CTkEntry(lib_header, width=150,
-                                  placeholder_text="Filter...",
-                                  textvariable=self._lib_filter_var)
-        lib_filter.pack(side="right")
+        self._make_filter_entry(lib_header, self._lib_filter_var).pack(
+            side="right")
         ctk.CTkLabel(lib_header, text="Filter:",
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
@@ -487,10 +490,8 @@ class BuilderTabMixin:
                       ).pack(side="left")
         self._pl_filter_var = tk.StringVar()
         self._pl_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("pl"))
-        pl_filter = ctk.CTkEntry(pl_header, width=150,
-                                 placeholder_text="Filter...",
-                                 textvariable=self._pl_filter_var)
-        pl_filter.pack(side="right")
+        self._make_filter_entry(pl_header, self._pl_filter_var).pack(
+            side="right")
         ctk.CTkLabel(pl_header, text="Filter:",
                      text_color="gray70").pack(side="right", padx=(0, 3))
 
@@ -721,7 +722,10 @@ class BuilderTabMixin:
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(entity_id))
         except Exception:
-            messagebox.showinfo("Stale Data", "Data has changed. Please refresh the view.")
+            messagebox.showinfo(
+                "Stale Data",
+                "Data has changed. Click the ⟳ refresh button above the "
+                "Library pane to reload.")
             return
 
         menu.add_separator()

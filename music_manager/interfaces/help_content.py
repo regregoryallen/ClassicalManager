@@ -213,10 +213,14 @@ def build_help_content(text: tk.Text) -> None:
            "A container is blue when every track under it is included (including "
            "when all children were added individually), amber only when some but "
            "not all content is included")
-    bullet("Filter matches name, composer, genre, performer, conductor, ensemble")
+    bullet("Filter matches name, composer, genre, performer, conductor, "
+           "ensemble; the \u2715 button clears it, and Ctrl+A selects all "
+           "in any text field")
     bullet("Hide 1-track: hides standalone works")
-    bullet("+/\u2212: expand/collapse all (to work level)")
-    bullet("Double-click column headers to sort (numeric-aware)")
+    bullet("\u27f3 reloads the tree (use it if a popup says data has "
+           "changed); +/\u2212: expand/collapse all (to work level)")
+    bullet("Works appear in track order within each album; double-click "
+           "column headers to sort (numeric-aware)")
     bullet("Select items and click Add >> or double-click to include "
            "(double-click toggles: included items are removed, unselected items are included)")
     bullet("Right-click: Play, Details (metadata incl. per-track volatility), Show Album")
@@ -265,6 +269,8 @@ def build_help_content(text: tk.Text) -> None:
            "as the seeds are to each other; self-calibrating per search. "
            "Green = strong, amber = loose, red = weak")
     bullet("Agreement column \u2014 how many seeds consider the track close (e.g. 12/31)")
+    bullet("Double-click any column header to sort results by it \u2014 "
+           "rank by Match, Agreement, or Volatility (numeric-aware)")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
     bullet("Right-click a result for Play or Details")

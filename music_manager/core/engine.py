@@ -487,21 +487,31 @@ def _shuffle_album_mode(
 ) -> list[ResolvedTrack]:
     """Album mode: shuffle albums, emit each album's tracks in order.
 
-    Within an album, order by (disc_number, work_sequence, track_number).
+    Within an album, keep each work's tracks together and order the works
+    by their first track's position — NOT by work_sequence, which is
+    assigned in detection order and does not track album order.
     """
     # Group by album_id
     by_album: dict[int, list[ResolvedTrack]] = {}
     for rt in tracks:
         by_album.setdefault(rt.album_id, []).append(rt)
 
-    # Sort tracks within each album (work_sequence is carried on the
-    # ResolvedTrack — V3: no per-work queries here).
+    # First-track position per work (standalone tracks are their own
+    # group). Keeps a work's tracks contiguous and orders works by where
+    # they actually begin.
+    work_start: dict[int | None, tuple[int, int]] = {}
+    for rt in tracks:
+        pos = (rt.disc_number, rt.track_number)
+        key = rt.work_id if rt.work_id is not None else -rt.track_id
+        if key not in work_start or pos < work_start[key]:
+            work_start[key] = pos
+
+    def _sort_key(rt):
+        key = rt.work_id if rt.work_id is not None else -rt.track_id
+        return (rt.disc_number, work_start[key], rt.track_number)
+
     for group in by_album.values():
-        group.sort(key=lambda rt: (
-            rt.disc_number,
-            rt.work_sequence or 0,
-            rt.track_number,
-        ))
+        group.sort(key=_sort_key)
 
     # Shuffle the albums
     album_keys = list(by_album.keys())

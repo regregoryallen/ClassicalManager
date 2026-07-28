@@ -106,18 +106,34 @@ def askopenfilenames(title="Open", filetypes=None, initialdir=None,
         parent=parent, **kwargs)
 
 
+def _save_start_path(initialdir, initialfile):
+    """Absolute start path for a save dialog.
+
+    GTK (zenity) and kdialog need an ABSOLUTE path: given a bare name
+    like "Morning Mix.m3u" the name entry is left empty and the dialog
+    opens in the process CWD. Falls back to the user's home when no
+    directory was supplied, so a suggested filename always survives.
+    """
+    base = initialdir or os.path.expanduser("~")
+    if initialfile:
+        return os.path.abspath(os.path.join(base, initialfile))
+    return os.path.abspath(base).rstrip("/") + "/"
+
+
 def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
                       initialdir=None, filetypes=None, parent=None, **kwargs):
-    if _ZENITY:
-        cmd = ["zenity", "--file-selection", "--save",
-               "--confirm-overwrite", "--title", title]
-        if initialdir and initialfile:
-            cmd.extend(["--filename",
-                         os.path.join(initialdir, initialfile)])
-        elif initialfile:
-            cmd.extend(["--filename", initialfile])
-        elif initialdir:
-            cmd.extend(["--filename", initialdir.rstrip("/") + "/"])
+    # Save dialogs deliberately prefer tkinter over zenity when a
+    # filename is suggested. zenity 4 (GTK4) dropped support for
+    # pre-filling the name: its --filename maps to a "select this
+    # existing file" call, so for a not-yet-created playlist the name is
+    # silently discarded and the dialog opens in the process CWD.
+    # Verified on zenity 4.0.1 — no argument spelling avoids it. tkinter
+    # fills the name and pre-selects it for overtyping, which matters
+    # more here than the dialog's styling. Open/dir dialogs have no
+    # suggested name, so they keep using the nicer native zenity.
+    if _ZENITY and not initialfile:
+        cmd = ["zenity", "--file-selection", "--save", "--title", title,
+               "--filename", _save_start_path(initialdir, initialfile)]
         if filetypes:
             cmd.extend(_zenity_filetypes(filetypes))
         result = _run(cmd)
@@ -125,8 +141,8 @@ def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
             result += defaultextension
         return result
     if _KDIALOG:
-        start = os.path.join(initialdir, initialfile) if initialdir else initialfile
-        cmd = ["kdialog", "--getsavefilename", start or os.path.expanduser("~"),
+        cmd = ["kdialog", "--getsavefilename",
+               _save_start_path(initialdir, initialfile),
                "--title", title]
         if filetypes:
             cmd.insert(3, _kdialog_filter(filetypes))

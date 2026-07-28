@@ -24,6 +24,39 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 
+def numeric_sort_key(val):
+    """Parse a display cell into a float for numeric column sorting.
+
+    Understands the value shapes the trees actually render — plain
+    numbers, "N trk" counts, "95%" match, "M:SS"/"H:MM:SS" durations, and
+    "N/M" ratios (agreement) — returning None when a cell is not numeric
+    (callers fall back to case-insensitive string sort then).
+    """
+    v = val.strip()
+    if v.endswith(" trk"):
+        v = v[:-4]
+    if v.endswith("%"):
+        v = v[:-1].strip()
+    if ":" in v:
+        parts = v.split(":")
+        try:
+            return sum(float(p) * (60 ** i)
+                       for i, p in enumerate(reversed(parts)))
+        except ValueError:
+            return None
+    if "/" in v:
+        num, _, den = v.partition("/")
+        try:
+            d = float(den)
+            return float(num) / d if d else None
+        except ValueError:
+            return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
 class TreeUtilMixin:
     def _setup_tree_sort(self, tree, row_dbl_click=None):
         """Bind double-click on column headers to sort the treeview.
@@ -78,24 +111,7 @@ class TreeUtilMixin:
             items.append((val, iid))
 
         # Try numeric sort when all values look like numbers
-        def numeric_key(val):
-            v = val.strip()
-            # Handle "N trk" style values
-            if v.endswith(" trk"):
-                v = v[:-4]
-            # Handle "M:SS" durations
-            if ":" in v:
-                parts = v.split(":")
-                try:
-                    return sum(float(p) * (60 ** i) for i, p in enumerate(reversed(parts)))
-                except ValueError:
-                    return None
-            try:
-                return float(v)
-            except ValueError:
-                return None
-
-        numeric_vals = [numeric_key(v) for v, _ in items]
+        numeric_vals = [numeric_sort_key(v) for v, _ in items]
         if items and all(n is not None for n in numeric_vals):
             decorated = sorted(zip(numeric_vals, [iid for _, iid in items]),
                                reverse=reverse)

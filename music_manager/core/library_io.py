@@ -11,6 +11,7 @@ from music_manager.core.database import (
     SourceFolder, Album, Work, Track, Composer, Override,
     PlaylistProfile, ProfileSelection,
 )
+from music_manager.core.selection import works_in_track_order
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def export_library(lib, path: Path) -> dict:
             "mb_album_id": album.musicbrainz_album_id,
             "works": [],
         }
-        for work in Work.select().where(Work.album == album).order_by(Work.work_sequence):
+        for work in works_in_track_order(album):
             work_data = {
                 "work_name": work.work_name, "work_sequence": work.work_sequence,
                 "work_source": work.work_source, "mb_work_id": work.musicbrainz_work_id,

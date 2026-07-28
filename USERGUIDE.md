@@ -383,7 +383,8 @@ These are best-effort: if the playlist is dominated by one composer, album, or f
 
 Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
-- **Columns**: Name, Composer, Genre, Year (albums), Info (track count or duration)
+- **Columns**: Name, Composer, Genre, Year (albums), Info (track count or duration). Works appear in track order within each album.
+- **Toolbar**: ⟳ reloads the tree, +/− expand/collapse. Filter fields have a ✕ clear button, and Ctrl+A selects all in any text field.
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded.
   A container (album or work) is blue when *every* track under it is included —
   including when you have added all of its children individually — and amber only
@@ -461,6 +462,7 @@ Actions:
 - **Accept Selected / Accept All**: Add result tracks to the profile as track-level
   selections.
 - **Re-search (include accepted)**: Re-run using the widened seed set.
+- **Sort results**: double-click any column header to rank by Match, Agreement, or Volatility (numeric-aware).
 - **Right-click** a result for **Play** or **Details** (metadata popup) to audition and
   inspect before accepting.
 

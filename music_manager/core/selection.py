@@ -53,6 +53,33 @@ def key_for_track(track):
     return track.relative_path
 
 
+def works_in_track_order(album):
+    """Return an album's works ordered by their first track's position.
+
+    NOT by `work_sequence`: that is assigned in detection-precedence
+    order (tagged/multi-track works before standalone singles), so it
+    does not follow album order. work_sequence is part of the stable
+    work key and must never be reassigned, so ordering is corrected at
+    read time — here, and in `load_library_index` for the tree views.
+
+    Works with no tracks sort last.
+    """
+    works = list(Work.select().where(Work.album == album))
+    if not works:
+        return []
+
+    firsts = {}
+    for t in (Track.select(Track.work, Track.disc_number, Track.track_number)
+              .where(Track.work.in_([w.id for w in works]))):
+        pos = (t.disc_number, t.track_number)
+        if t.work_id not in firsts or pos < firsts[t.work_id]:
+            firsts[t.work_id] = pos
+
+    return sorted(
+        works,
+        key=lambda w: firsts.get(w.id, (10**9, w.work_sequence or 0)))
+
+
 def key_for_entity(level, entity):
     """Dispatch to the correct key function for a level + entity."""
     if level == "album":
@@ -427,11 +454,24 @@ def load_library_index(library) -> LibraryIndex:
         ti = index.tracks[tid]
         return (ti.disc_number, ti.track_number)
 
-    for a in index.albums.values():
-        a.track_ids.sort(key=_order)
-        a.work_ids.sort(key=lambda wid: (index.works[wid].sequence or 0))
     for w in index.works.values():
         w.track_ids.sort(key=_order)
+
+    def _work_order(wid):
+        # Order works by their first track's position, NOT by
+        # work_sequence: sequence is assigned in detection-precedence
+        # order (tagged/multi-track works before standalone singles), so
+        # it does not track album order. work_sequence stays in the work
+        # key, so it must not be reassigned — this is a display-only fix.
+        w = index.works[wid]
+        if w.track_ids:
+            first = index.tracks[w.track_ids[0]]
+            return (first.disc_number, first.track_number)
+        return (10**9, w.sequence or 0)  # empty works sort last, stably
+
+    for a in index.albums.values():
+        a.track_ids.sort(key=_order)
+        a.work_ids.sort(key=_work_order)
 
     return index
 

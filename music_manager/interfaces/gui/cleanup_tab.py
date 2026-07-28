@@ -538,7 +538,8 @@ class CleanupTabMixin:
         # Track map for resolving selections
         popup_track_map = {}  # iid → ("work", work_id) or ("track", track_id)
 
-        works = Work.select().where(Work.album == album).order_by(Work.work_sequence)
+        from music_manager.core.selection import works_in_track_order
+        works = works_in_track_order(album)
         for work in works:
             tracks = list(Track.select().where(Track.work == work)
                           .order_by(Track.disc_number, Track.track_number))
@@ -714,7 +715,8 @@ class CleanupTabMixin:
             """Reload the popup treeview after changes."""
             album_tree.delete(*album_tree.get_children())
             popup_track_map.clear()
-            for work in Work.select().where(Work.album == album).order_by(Work.work_sequence):
+            from music_manager.core.selection import works_in_track_order
+            for work in works_in_track_order(album):
                 tracks = list(Track.select().where(Track.work == work)
                               .order_by(Track.disc_number, Track.track_number))
                 composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""

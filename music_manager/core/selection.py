@@ -53,6 +53,33 @@ def key_for_track(track):
     return track.relative_path
 
 
+def works_in_track_order(album):
+    """Return an album's works ordered by their first track's position.
+
+    NOT by `work_sequence`: that is assigned in detection-precedence
+    order (tagged/multi-track works before standalone singles), so it
+    does not follow album order. work_sequence is part of the stable
+    work key and must never be reassigned, so ordering is corrected at
+    read time — here, and in `load_library_index` for the tree views.
+
+    Works with no tracks sort last.
+    """
+    works = list(Work.select().where(Work.album == album))
+    if not works:
+        return []
+
+    firsts = {}
+    for t in (Track.select(Track.work, Track.disc_number, Track.track_number)
+              .where(Track.work.in_([w.id for w in works]))):
+        pos = (t.disc_number, t.track_number)
+        if t.work_id not in firsts or pos < firsts[t.work_id]:
+            firsts[t.work_id] = pos
+
+    return sorted(
+        works,
+        key=lambda w: firsts.get(w.id, (10**9, w.work_sequence or 0)))
+
+
 def key_for_entity(level, entity):
     """Dispatch to the correct key function for a level + entity."""
     if level == "album":

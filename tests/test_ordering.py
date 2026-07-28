@@ -79,6 +79,35 @@ def test_album_mode_keeps_works_contiguous_in_track_order(lib):
     assert names == ["Overture", "Symphony", "Symphony", "Symphony", "Encore"]
 
 
+def test_works_in_track_order_helper(lib):
+    """Shared helper used by the Show Album popup and library export —
+    the popup kept ordering by work_sequence after the tree views were
+    fixed, so the same album looked different in two places."""
+    from music_manager.core.selection import works_in_track_order
+
+    album = _mismatched_album(lib)
+    assert [w.work_name for w in works_in_track_order(album)] == [
+        "Overture", "Symphony", "Encore"]
+
+
+def test_works_in_track_order_handles_empty_album(lib):
+    from music_manager.core.selection import works_in_track_order
+
+    album = Album.create(library=lib, folder=lib.test_folder,
+                         album_key="A/Empty", title="Empty")
+    assert works_in_track_order(album) == []
+
+
+def test_works_in_track_order_puts_trackless_work_last(lib):
+    from music_manager.core.selection import works_in_track_order
+
+    album = _mismatched_album(lib)
+    Work.create(album=album, work_name="Ghost", work_sequence=0,
+                work_source="standalone")
+    names = [w.work_name for w in works_in_track_order(album)]
+    assert names[-1] == "Ghost"  # despite the lowest work_sequence
+
+
 def test_empty_work_sorts_last_without_crashing(lib):
     album = _mismatched_album(lib)
     # A work with no tracks (can arise transiently); must not break sort.
@@ -89,3 +118,19 @@ def test_empty_work_sorts_last_without_crashing(lib):
                   for wid in index.albums[album.id].work_ids]
     assert work_names[-1] == "Ghost"
     assert work_names[:3] == ["Overture", "Symphony", "Encore"]
+
+
+def test_library_export_writes_works_in_track_order(lib, tmp_path):
+    """Export shares the ordering helper — a JSON backup should not
+    encode detection order either (it drives re-import display)."""
+    import json
+    from music_manager.core.library_io import export_library
+
+    _mismatched_album(lib)
+    out = tmp_path / "lib.json"
+    export_library(lib, out)
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    album = data["albums"][0]
+    assert [w["work_name"] for w in album["works"]] == [
+        "Overture", "Symphony", "Encore"]

@@ -204,10 +204,16 @@ def find_unused_tracks(
         - fully unused works in partially-used albums
         - individual unused tracks in partially-used works
     """
+    # Auto-generated profiles (per-import track sets) are deliberately
+    # NOT evidence that a track is used: they exist to help assign new
+    # music, so counting them would mark every freshly imported track as
+    # assigned and make this function return nothing for exactly the
+    # tracks the user wants to find.
+    from music_manager.core.selection import user_profile_filter
+
     profiles = list(
         PlaylistProfile.select().where(
-            (PlaylistProfile.library == library)
-            & (~PlaylistProfile.name.startswith("__"))
+            (PlaylistProfile.library == library) & user_profile_filter()
         )
     )
 

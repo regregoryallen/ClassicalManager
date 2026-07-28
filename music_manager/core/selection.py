@@ -15,11 +15,12 @@ output agree by construction.  `classify_selections` grades each rule
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from peewee import fn
 
 from music_manager.core.database import (
-    Album, Composer, ProfileSelection, Track, Work,
+    Album, Composer, ProfileSelection, Track, Work, database,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,81 @@ def key_for_work(work):
 def key_for_track(track):
     """Return the stable key for a track (its relative_path)."""
     return track.relative_path
+
+
+def user_profile_filter():
+    """Peewee expression matching profiles the USER created.
+
+    Excludes internal profiles (`__autosave__`, `__temp_*`) and
+    machine-generated ones (import track sets).
+
+    NULL-safe on purpose: rows that predate the auto_generated column
+    have NULL there, and `NOT (auto_generated = 1)` evaluates to NULL in
+    SQL — which would silently drop every pre-existing profile.
+    """
+    from music_manager.core.database import PlaylistProfile
+    return (
+        (~PlaylistProfile.name.startswith("__"))
+        & ((PlaylistProfile.auto_generated.is_null())
+           | (PlaylistProfile.auto_generated == False))  # noqa: E712
+    )
+
+
+def visible_profile_filter():
+    """Profiles the user can see and pick, INCLUDING import profiles.
+
+    Import profiles are real, user-visible profiles; only the
+    "is this track already assigned?" question excludes them.
+    """
+    from music_manager.core.database import PlaylistProfile
+    return ~PlaylistProfile.name.startswith("__")
+
+
+def create_import_profile(library, relative_paths, when=None):
+    """Create a profile holding the tracks an import just added (v3.3).
+
+    Returns the PlaylistProfile, or None when there is nothing to record.
+    The profile is a normal, user-visible, editable profile — it is only
+    flagged `auto_generated` so that "is this track already assigned?"
+    questions skip it (see user_profile_filter). Renaming it in the GUI
+    clears the flag, promoting it to an ordinary profile.
+
+    Selections are track-level: an import is a set of files, not a
+    musical grouping, and track keys (relative paths) are the stable
+    ones across rescans.
+    """
+    from music_manager.core.database import PlaylistProfile, ProfileSelection
+
+    paths = [p for p in dict.fromkeys(relative_paths or [])]
+    if not paths:
+        return None
+
+    when = when or datetime.now()
+    name = f"Imports {when:%Y-%m-%d %H:%M}"
+    # Two scans within the same minute must not collide.
+    base, suffix = name, 2
+    while PlaylistProfile.select().where(
+            (PlaylistProfile.library == library)
+            & (PlaylistProfile.name == name)).exists():
+        name = f"{base} ({suffix})"
+        suffix += 1
+
+    with database.atomic():
+        profile = PlaylistProfile.create(
+            library=library, name=name,
+            shuffle_mode="work", work_integrity="respect_selection",
+            length_mode="all", length_value=None, seed=None,
+            no_repeat_tracks=True, auto_generated=True,
+        )
+        ProfileSelection.insert_many([
+            {"profile": profile, "level": "track", "key": p,
+             "excluded": False}
+            for p in paths
+        ]).execute()
+
+    logger.info("Created import profile '%s' with %d track(s)",
+                name, len(paths))
+    return profile
 
 
 def works_in_track_order(album):

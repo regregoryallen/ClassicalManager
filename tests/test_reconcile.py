@@ -106,3 +106,30 @@ def test_internal_profiles_are_skipped(lib):
 
     result = reconcile_selections(lib)
     assert result == {"remapped": 0, "orphaned": 0, "details": []}
+
+
+def test_redetect_reconciles_work_selections(lib):
+    """Regrouping rebuilds every Work, so work keys change. Without
+    reconciliation a re-detect silently breaks saved playlists."""
+    from music_manager.core.scanner import redetect_works
+    from music_manager.core.database import Track, Work
+
+    album = make_album(lib, "A/Alb1", [("Sym", 3)])
+    # Tag data drives redetect; give the tracks a WORK tag so the rebuilt
+    # work is named differently from the original.
+    Track.update(work_tag="Symphony No. 1").where(
+        Track.album == album).execute()
+
+    p = make_profile(lib)
+    original_key = work_key("A/Alb1", "Sym", 1)
+    add_sel(p, "work", original_key,
+            track_paths=_breadcrumbs("A/Alb1", [1, 2, 3]))
+
+    result = redetect_works(lib)
+
+    assert result["selections_remapped"] == 1
+    sel = ProfileSelection.get(ProfileSelection.profile == p)
+    assert sel.key != original_key
+    rebuilt = Work.get(Work.album == album)
+    assert sel.key == key_for_work(rebuilt)
+    assert rebuilt.work_name == "Symphony No. 1"

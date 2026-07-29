@@ -1177,7 +1177,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             f"MB Work ID: {result['mb_workid']}  |  "
             f"Work Tag: {result['work_tag']}\n"
             f"Heuristic: {result['heuristic']}  |  "
-            f"Standalone: {result['standalone']}")
+            f"Standalone: {result['standalone']}"
+            + (f"\n\nPlaylist rules: {result['selections_remapped']} "
+               f"remapped, {result['selections_orphaned']} orphaned"
+               if result.get("selections_remapped")
+               or result.get("selections_orphaned") else ""))
+        self._invalidate_library_index()
+        self._refresh_builder_tree()
 
     def _run_integrity_check(self):
         """Run integrity checks and show results in a popup."""

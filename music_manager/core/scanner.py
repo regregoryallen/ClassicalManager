@@ -989,6 +989,18 @@ def redetect_works(library: Library,
             (Album.library == library) & (Work.work_source == source)
         ).count()
 
+    # Regrouping rebuilds every Work, so work KEYS change and work-level
+    # playlist rules would be left pointing at works that no longer
+    # exist. Both scan paths reconcile for exactly this reason; redetect
+    # must too, or a regroup silently breaks saved playlists.
+    from music_manager.core.selection import reconcile_selections
+    recon = reconcile_selections(library)
+    result["selections_remapped"] = recon["remapped"]
+    result["selections_orphaned"] = recon["orphaned"]
+    if recon["remapped"] or recon["orphaned"]:
+        logger.info("Redetect reconciliation: %d remapped, %d orphaned",
+                    recon["remapped"], recon["orphaned"])
+
     return result
 
 

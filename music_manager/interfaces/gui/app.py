@@ -570,7 +570,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
 
-        ctk.CTkButton(self.sidebar, text="Re-detect Works",
+        ctk.CTkButton(self.sidebar, text="Regroup Works",
                       command=self._redetect_works).pack(
             padx=15, pady=(3, 0), fill="x")
 
@@ -1159,10 +1159,14 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             return
 
         if not messagebox.askyesno(
-                "Re-detect Works",
-                f"Re-run work detection for '{self.active_library.name}'?\n\n"
-                "This will regroup tracks into works based on\n"
-                "current tag data and detection rules."):
+                "Regroup Works",
+                f"Regroup tracks into works for "
+                f"'{self.active_library.name}'?\n\n"
+                "Re-runs work detection from current tag data and "
+                "overrides.\nThis changes work grouping, not track "
+                "details \u2014 use Apply Corrections on the Cleanup tab "
+                "for those.\n\nPlaylist rules that point at works are "
+                "remapped automatically where possible."):
             return
 
         from music_manager.core.scanner import redetect_works
@@ -1171,7 +1175,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_cleanup()
         messagebox.showinfo(
-            "Re-detect Complete",
+            "Regroup Complete",
             f"Albums processed: {result['albums_processed']}\n"
             f"Override: {result['override']}  |  "
             f"MB Work ID: {result['mb_workid']}  |  "

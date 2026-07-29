@@ -24,8 +24,9 @@ CLI commands:
       Much faster than a full rescan for routine updates.
 
   redetect --library NAME [-v] [-q]
-      Re-run all work detection steps using tag data already in the
-      database, without rescanning files from disk.
+      Regroup tracks into works from tag data already in the database,
+      without rescanning files (the GUI calls this "Regroup Works").
+      Playlist rules pointing at works are remapped where possible.
 
   preview --profile NAME [-v]
       Dry-run a profile and output the resolved playlist as JSON.

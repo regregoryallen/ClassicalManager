@@ -257,11 +257,22 @@ metadata drift.
 Quick scan is unavailable until one full rebuild has run, since it needs stored
 file timestamps; the dialog explains this rather than failing later.
 
-### Re-detect Works
+### Regroup Works
 
-Re-runs all five work detection steps (override, MusicBrainz, WORK tag, heuristic,
-standalone) using tag data already in the database, without rescanning files from disk.
-Useful after editing overrides or when detection logic has been updated.
+Re-runs work detection from stored tag data and overrides, without reading
+files. Use it when a correction changes **which tracks belong together** — for
+example setting the same work name across tracks that currently sit in two
+different works. Renaming alone cannot merge them; regrouping can.
+
+It rebuilds every work, so playlist rules that point at works are remapped
+automatically where possible, and the summary reports how many were remapped or
+orphaned.
+
+> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
+> tracks form a work). **Apply Corrections**, on the Cleanup tab, re-applies
+> stored overrides that change *details* (composer, titles, numbering).
+> Individual edits already apply themselves, so you rarely need either button —
+> Apply Corrections is mainly for after importing an overrides JSON.
 
 ### Source Folders
 
@@ -844,7 +855,7 @@ If the scanner grouped tracks incorrectly:
 3. Find the work and right-click > **Show Album** to see the full album context
 4. To merge tracks into one work: select tracks, set the same **Group Key** for all
 5. To split an incorrect grouping: select the work(s) and click **Make Standalone**
-6. Click **Re-detect Works** in the sidebar to apply
+6. Click **Regroup Works** in the sidebar to apply
 
 ### Suppressing Erroneous Work Tags
 
@@ -853,7 +864,7 @@ Some files have incorrect WORK tags (e.g., "PMEDIA" from bulk tagging tools):
 1. Switch the Source dropdown to **Work Tag** or **MB Work ID**
 2. Multi-select the incorrect works (Ctrl+click or Shift+click)
 3. Click **Make Standalone**
-4. Click **Re-detect Works** to apply
+4. Click **Regroup Works** to apply
 
 ### Migrating from Simple Playlists
 
@@ -1331,7 +1342,7 @@ method and the search field to find specific works. Right-click > **Details** to
 inspect metadata, or **Show Album** for the full album context.
 
 Use **Set Group Key** to merge tracks, or **Make Standalone** to split them. Click
-**Re-detect Works** to apply changes without a full rescan.
+**Regroup Works** to apply grouping changes without a full rescan.
 
 ### Scan takes too long
 

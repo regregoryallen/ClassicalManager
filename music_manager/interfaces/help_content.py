@@ -153,10 +153,20 @@ def build_help_content(text: tk.Text) -> None:
         "rebuild has run, because it needs stored file timestamps. Either "
         "mode can be cancelled while running.\n"
     )
-    bold("Re-detect Works")
+    bold("Regroup Works")
     body(
-        " \u2014 re-runs all five detection steps from stored tag data, "
-        "without rescanning files. Useful after editing overrides.\n"
+        " \u2014 re-runs work detection from stored tag data and "
+        "overrides, without reading files. Use it when you have changed "
+        "which tracks belong together (e.g. set a work name across "
+        "tracks from two different works). It rebuilds every work, so "
+        "playlist rules that point at works are remapped automatically "
+        "where possible \u2014 the summary reports how many.\n"
+    )
+    body(
+        "Regroup Works changes STRUCTURE (which tracks form a work). "
+        "Apply Corrections on the Cleanup tab changes DETAILS (composer, "
+        "titles, numbering). Individual edits already apply themselves; "
+        "you rarely need either button.\n"
     )
 
     subheading("Other Controls")
@@ -332,6 +342,19 @@ def build_help_content(text: tk.Text) -> None:
         "reconciliation data; it is healed automatically when the profile "
         "is saved or loaded.\n"
     )
+
+    subheading("Applying Corrections")
+    body(
+        "Edits you make here (work name, composer, Make Standalone) take "
+        "effect immediately. Two sidebar/tab actions exist for the cases "
+        "that need more:\n"
+    )
+    bullet("Apply Corrections (this tab) \u2014 re-applies every stored "
+           "override to the scanned data. Mainly needed after importing "
+           "an overrides JSON, or if data has drifted")
+    bullet("Regroup Works (sidebar) \u2014 rebuilds work grouping. Needed "
+           "when a correction changes which tracks belong together, "
+           "which renaming alone cannot do")
 
     subheading("Imported Music")
     body(
@@ -562,13 +585,13 @@ def build_help_content(text: tk.Text) -> None:
         "On the Cleanup tab, use the Source dropdown to filter by detection "
         "method. Right-click \u2192 Show Album for full context. To merge "
         "tracks: set the same Group Key. To split: click Make Standalone. "
-        "Then Re-detect Works in the sidebar.\n"
+        "Then Regroup Works in the sidebar.\n"
     )
 
     subheading("Suppressing Erroneous Work Tags")
     body(
         "Filter by Work Tag or MB Work ID, multi-select the incorrect works, "
-        "click Make Standalone, then Re-detect Works.\n"
+        "click Make Standalone, then Regroup Works.\n"
     )
 
     subheading("Multiple Plex Sections")
@@ -605,7 +628,7 @@ def build_help_content(text: tk.Text) -> None:
         "Plex and leaves M3U untranslated.\n"
     )
     bold("Works grouped incorrectly")
-    body(" \u2014 Use Cleanup tab. Set Group Key to merge, Make Standalone to split. Re-detect Works to apply.\n")
+    body(" \u2014 Use Cleanup tab. Set the work name to merge, Make Standalone to split, then Regroup Works to apply.\n")
     bold("Scan takes too long")
     body(" \u2014 Use Scan Library... \u2192 Quick scan for routine updates; reserve Full rebuild for first scans and recovery. Either mode can be cancelled.\n")
     bold("\"Cannot open database\"")

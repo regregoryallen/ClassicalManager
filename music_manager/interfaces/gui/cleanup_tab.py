@@ -38,7 +38,7 @@ class CleanupTabMixin:
                       command=self._export_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Import Overrides JSON", width=180,
                       command=self._import_overrides).pack(side="left", padx=5)
-        ctk.CTkButton(top, text="Apply Overrides", width=140,
+        ctk.CTkButton(top, text="Apply Corrections", width=150,
                       command=self._apply_overrides_now).pack(side="left", padx=5)
         ctk.CTkButton(top, text="?", width=28, height=28,
                       font=ctk.CTkFont(size=14, weight="bold"),
@@ -709,7 +709,7 @@ class CleanupTabMixin:
             messagebox.showinfo(
                 "Done",
                 f"Marked {len(tracks)} track(s) as standalone.\n"
-                f"Re-detect Works or Rescan to apply.",
+                f"Use Regroup Works (sidebar) to apply the new grouping.",
                 parent=popup)
             self._refresh_overrides_list()
 
@@ -835,7 +835,7 @@ class CleanupTabMixin:
 
         messagebox.showinfo("Done", f"Marked {total} tracks across "
                            f"{len(work_ids)} work(s) as standalone. "
-                           f"Re-detect or rescan to apply.")
+                           f"Use Regroup Works in the sidebar to apply.")
         self._refresh_cleanup()
 
     def _set_composer_override(self):
@@ -892,7 +892,7 @@ class CleanupTabMixin:
         self._refresh_cleanup()
         self._refresh_builder_tree()
         messagebox.showinfo(
-            "Overrides Applied",
+            "Corrections Applied",
             f"Applied {counts['tracks_updated']} track and "
             f"{counts['albums_updated']} album override(s)."
             + (f"\n{counts['skipped']} could not be matched to a track "

@@ -281,6 +281,21 @@ avoiding profiles.
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
 
+- **Preserve audio analyses across file moves/renames** (found 2026-07-28
+  while answering how a Picard multi-disc merge behaves). `TrackAnalysis`
+  cascades from `Track`, and the full-scan snapshot matches on
+  `(folder_id, relative_path)` — so reorganising files (e.g. merging
+  "XXX disc1"/"XXX disc2" into one folder with 1-01/2-01 numbering) throws
+  away analyses for content that did not change. On a ~6,000-track library
+  that is hours of librosa work lost to a rename. Fix: match the snapshot
+  on content identity as well as path — `musicbrainz_recording_id` first
+  (Picard-tagged files have it, and overrides already match this way), then
+  `(file_size, mtime)` as a fallback. Note overrides ALREADY survive such a
+  move via MB-ID matching; analyses should behave the same way.
+  Simulation of the current behaviour: analyses deleted, overrides kept and
+  re-applied via MB ID, work-level rules deleted by reconciliation,
+  album/track rules left orphaned for the Rules window to clean up.
+
 - **Bootstrap installer** (user, 2026-07-21) — one fetched script that
   clones/downloads and hands off to `install.sh`, so a fresh or headless box
   needs no browser, unzip, or manual path juggling:

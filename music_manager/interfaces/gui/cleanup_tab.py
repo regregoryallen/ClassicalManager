@@ -387,6 +387,10 @@ class CleanupTabMixin:
                          command=lambda: self._show_work_details(work_id))
         menu.add_command(label="Show Album",
                          command=lambda: self._show_album_popup(work.album_id))
+        menu.add_command(
+            label="Show in Folder",
+            command=(lambda: self._show_track_in_folder(track_id)) if track_id
+            else (lambda: self._show_work_in_folder(work_id)))
         menu.add_separator()
         menu.add_command(label="Set Work Name...",
                          command=lambda: self.edit_work_name.focus_set())
@@ -619,11 +623,18 @@ class CleanupTabMixin:
             if not entry:
                 return
             level, eid = entry
+            menu = tk.Menu(popup, tearoff=0)
             if level == "track":
-                menu = tk.Menu(popup, tearoff=0)
                 menu.add_command(label="Play",
                                  command=lambda: self._play_track(eid))
-                menu.tk_popup(event.x_root, event.y_root)
+                menu.add_command(
+                    label="Show in Folder",
+                    command=lambda: self._show_track_in_folder(eid))
+            else:
+                menu.add_command(
+                    label="Show in Folder",
+                    command=lambda: self._show_work_in_folder(eid))
+            menu.tk_popup(event.x_root, event.y_root)
 
         album_tree.bind("<Button-3>", _album_popup_context_menu)
 

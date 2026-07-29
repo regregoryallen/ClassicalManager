@@ -800,6 +800,8 @@ class BuilderTabMixin:
                                  command=lambda: self._show_work_details(entity_id))
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(work.album_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_work_in_folder(entity_id))
             elif level == "track":
                 from music_manager.core.database import Track
                 track = Track.get_by_id(entity_id)
@@ -810,9 +812,13 @@ class BuilderTabMixin:
                                      command=lambda: self._show_work_details(track.work_id))
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(track.album_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_track_in_folder(entity_id))
             elif level == "album":
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(entity_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_album_in_folder(entity_id))
         except Exception:
             messagebox.showinfo(
                 "Stale Data",

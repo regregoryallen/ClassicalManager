@@ -240,7 +240,9 @@ def build_help_content(text: tk.Text) -> None:
            "column headers to sort (numeric-aware)")
     bullet("Select items and click Add >> or double-click to include "
            "(double-click toggles: included items are removed, unselected items are included)")
-    bullet("Right-click: Play, Details (metadata incl. per-track volatility), Show Album")
+    bullet("Right-click: Play, Details (metadata incl. per-track volatility), "
+           "Show Album, Show in Folder (opens your file manager at the "
+           "track or album, selecting the file where the desktop supports it)")
     bullet("Show in profiles\u2026 \u2014 right-click to see which saved profiles include this item")
 
     subheading("Playlist Pane (right)")
@@ -289,7 +291,7 @@ def build_help_content(text: tk.Text) -> None:
            "rank by Match, Agreement, or Volatility (numeric-aware)")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
-    bullet("Right-click a result for Play or Details")
+    bullet("Right-click a result for Play, Details, or Show in Folder")
 
     subheading("Pin to Position")
     body(
@@ -415,6 +417,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Play \u2014 open track in default player")
     bullet("Details \u2014 read-only metadata popup (incl. per-track volatility) with copy buttons")
     bullet("Show Album \u2014 full album view with editing")
+    bullet("Show in Folder \u2014 opens your file manager at the file")
     bullet("Set Work Name / Group Key / Composer \u2014 jump to edit fields")
     bullet("Make Standalone \u2014 set __standalone__ group key")
 

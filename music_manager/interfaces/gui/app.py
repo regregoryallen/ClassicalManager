@@ -405,6 +405,110 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         except Exception as exc:
             messagebox.showerror("Playback Error", str(exc))
 
+    def _show_in_folder(self, path):
+        """Open the system file manager at *path*, selecting it if possible.
+
+        Windows and macOS can highlight the file itself. On Linux the
+        freedesktop FileManager1 D-Bus interface does the same for
+        Nautilus/Dolphin/Thunar; when that is unavailable (no D-Bus, an
+        unusual file manager) it falls back to just opening the folder,
+        which is the useful part anyway.
+        """
+        import subprocess
+        path = Path(path)
+        if not path.exists():
+            # A folder may survive when a file does not, so offer that.
+            if path.parent.exists():
+                path = path.parent
+            else:
+                messagebox.showerror(
+                    "Not Found",
+                    f"This location no longer exists:\n{path}")
+                return
+
+        target = str(path)
+        folder = str(path if path.is_dir() else path.parent)
+        _sys = platform.system()
+        try:
+            if _sys == "Windows":
+                if path.is_dir():
+                    subprocess.Popen(["explorer", target])
+                else:
+                    # /select, takes the path as one token, comma-joined.
+                    subprocess.Popen(f'explorer /select,"{target}"')
+            elif _sys == "Darwin":
+                subprocess.Popen(["open", "-R", target] if not path.is_dir()
+                                 else ["open", target])
+            else:
+                if path.is_dir() or not self._linux_reveal(target):
+                    subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            messagebox.showerror("Could Not Open Folder", str(exc))
+
+    @staticmethod
+    def _linux_reveal(file_path):
+        """Ask the desktop's file manager to show and select a file.
+
+        Returns True when the request was delivered. Uses the standard
+        org.freedesktop.FileManager1 interface so it works across
+        Nautilus, Dolphin, Thunar, Nemo, etc. without special-casing.
+        """
+        import shutil
+        import subprocess
+        from urllib.parse import quote
+
+        if not shutil.which("gdbus"):
+            return False
+        uri = "file://" + quote(file_path)
+        try:
+            result = subprocess.run(
+                ["gdbus", "call", "--session",
+                 "--dest", "org.freedesktop.FileManager1",
+                 "--object-path", "/org/freedesktop/FileManager1",
+                 "--method", "org.freedesktop.FileManager1.ShowItems",
+                 f"['{uri}']", ""],
+                capture_output=True, timeout=5)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _show_track_in_folder(self, track_id):
+        """Reveal a track's file."""
+        from music_manager.core.database import Track
+        try:
+            track = Track.get_by_id(track_id)
+        except Track.DoesNotExist:
+            return
+        self._show_in_folder(
+            Path(track.folder.root_path) / track.relative_path)
+
+    def _show_album_in_folder(self, album_id):
+        """Reveal an album's folder.
+
+        album_key IS the folder path relative to the source root, so the
+        containing directory is derivable without touching a track.
+        """
+        from music_manager.core.database import Album
+        try:
+            album = Album.get_by_id(album_id)
+        except Album.DoesNotExist:
+            return
+        self._show_in_folder(Path(album.folder.root_path) / album.album_key)
+
+    def _show_work_in_folder(self, work_id):
+        """Reveal a work by way of its first track's file."""
+        from music_manager.core.database import Track, Work
+        try:
+            work = Work.get_by_id(work_id)
+        except Work.DoesNotExist:
+            return
+        track = (Track.select().where(Track.work == work)
+                 .order_by(Track.disc_number, Track.track_number).first())
+        if track is None:
+            self._show_album_in_folder(work.album_id)
+        else:
+            self._show_track_in_folder(track.id)
+
     @contextmanager
     def _busy(self):
         """Show a wait/watch cursor while a blocking operation runs.

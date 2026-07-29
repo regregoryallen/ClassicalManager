@@ -457,6 +457,8 @@ class SimilarityUIMixin:
         if track.work_id:
             menu.add_command(label="Details...",
                              command=lambda: self._show_work_details(track.work_id))
+        menu.add_command(label="Show in Folder",
+                         command=lambda: self._show_track_in_folder(track.id))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _sim_re_search(self, result_tree, sim_state, limit_var, vol_var,

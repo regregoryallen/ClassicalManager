@@ -481,8 +481,8 @@ Actions:
   selections.
 - **Re-search (include accepted)**: Re-run using the widened seed set.
 - **Sort results**: double-click any column header to rank by Match, Agreement, or Volatility (numeric-aware).
-- **Right-click** a result for **Play** or **Details** (metadata popup) to audition and
-  inspect before accepting.
+- **Right-click** a result for **Play**, **Details** (metadata popup), or
+  **Show in Folder** to audition and inspect before accepting.
 
 Find Similar analyzes any tracks that still need it before searching. For a small
 number it just runs; for a large backlog it warns with a time estimate first, so a

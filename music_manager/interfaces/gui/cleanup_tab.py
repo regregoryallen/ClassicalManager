@@ -70,7 +70,7 @@ class CleanupTabMixin:
                                 width=200).pack(side="right", padx=5)
         self._cleanup_search_after = None
 
-        self.cleanup_hide_single = tk.BooleanVar(value=True)
+        self.cleanup_hide_single = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(filter_frame, text="Hide 1-track",
                         variable=self.cleanup_hide_single,
                         command=self._refresh_works_list,

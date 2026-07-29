@@ -410,7 +410,7 @@ def build_help_content(text: tk.Text) -> None:
            "you are judging the grouping, so its full contents matter")
     bullet("Source dropdown \u2014 filter by: All Works, Heuristic, Standalone, Override, MB Work ID, Work Tag")
     bullet("Search field \u2014 live filtering by work name, album, or composer")
-    bullet("Hide 1-track \u2014 hides standalone works (enabled by default)")
+    bullet("Hide 1-track \u2014 hides standalone works (off by default)")
     bullet("Multi-select with Ctrl+click or Shift+click")
 
     subheading("Context Menu (right-click)")

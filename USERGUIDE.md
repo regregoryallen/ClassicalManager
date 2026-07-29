@@ -601,7 +601,7 @@ The top section lists works with filtering and search controls:
   Override, MB Work ID, or Work Tag
 - **Search field**: Live filtering by work name, album title, or composer
 - **Hide 1-track**: Hides standalone works to focus on multi-track groupings
-  (enabled by default)
+  (off by default)
 - **+/−**: Expand or collapse all tree nodes
 - **Multi-select**: Ctrl+click or Shift+click to select multiple works
 

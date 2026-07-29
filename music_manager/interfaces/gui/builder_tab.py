@@ -19,10 +19,10 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    SCOPE_ALL, SCOPE_UNASSIGNED,
 )
 
 logger = logging.getLogger(__name__)
-
 
 class BuilderTabMixin:
     # ------------------------------------------------------------------
@@ -126,6 +126,75 @@ class BuilderTabMixin:
             self._clear_autosave()
         self._mark_builder_clean()
         return True
+
+    def _scope_track_ids(self, scope):
+        """Track ids a Show scope selects, or None for no restriction.
+
+        Shared by the Builder's Library pane and the Cleanup Works
+        Browser so both dropdowns mean exactly the same thing.
+        """
+        if scope == SCOPE_ALL or not self.active_library:
+            return None
+
+        from music_manager.core.engine import unassigned_track_ids
+        if scope == SCOPE_UNASSIGNED:
+            return unassigned_track_ids(self.active_library)
+
+        from music_manager.core.database import PlaylistProfile
+        from music_manager.core.selection import resolve_selections
+        profile = PlaylistProfile.get_or_none(
+            (PlaylistProfile.library == self.active_library)
+            & (PlaylistProfile.name == scope))
+        if profile is None:
+            return None  # profile vanished (deleted/renamed) — show all
+        return resolve_selections(profile).track_ids
+
+    def _restrict_ids(self):
+        """Track ids the Builder library pane is limited to."""
+        scope = (self._lib_scope_var.get()
+                 if hasattr(self, "_lib_scope_var") else SCOPE_ALL)
+        return self._scope_track_ids(scope)
+
+    def _scope_values(self):
+        """Show-dropdown vocabulary: fixed scopes, then profiles.
+
+        User profiles come first, then import profiles (newest first) —
+        imports accumulate, so they must not bury the playlists.
+        """
+        values = [SCOPE_ALL, SCOPE_UNASSIGNED]
+        if self.active_library:
+            from music_manager.core.database import PlaylistProfile
+            from music_manager.core.selection import visible_profile_filter
+            profiles = list(PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library)
+                & visible_profile_filter()))
+            user = sorted((p.name for p in profiles if not p.auto_generated),
+                          key=str.lower)
+            imports = sorted((p.name for p in profiles if p.auto_generated),
+                             reverse=True)
+            values += user + imports
+        return values
+
+    def _refresh_scope_choices(self):
+        """Reload every Show dropdown from the current profile list."""
+        values = self._scope_values()
+        for menu_attr, var_attr in (("lib_scope_menu", "_lib_scope_var"),
+                                    ("cleanup_scope_menu",
+                                     "_cleanup_scope_var")):
+            menu = getattr(self, menu_attr, None)
+            var = getattr(self, var_attr, None)
+            if menu is None or var is None:
+                continue
+            menu.configure(values=values)
+            if var.get() not in values:
+                var.set(SCOPE_ALL)
+
+    def _on_scope_changed(self):
+        """Re-render the library pane for the newly chosen scope."""
+        with self._busy():
+            view_state = self._save_builder_view_state()
+            self._rebuild_library_tree()
+            self._restore_builder_view_state(view_state)
 
     def _current_effective_state(self, index):
         from music_manager.core.selection import resolve_effective_state
@@ -394,31 +463,47 @@ class BuilderTabMixin:
             side="left")
         ctk.CTkButton(lib_header, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_lib_tree, True)
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(lib_header, text="\u27f3", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=self._refresh_builder_tree,
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(lib_header, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_lib_tree, False)
                       ).pack(side="left")
+        # Second header row: the three filters live together because they
+        # COMPOSE (they intersect, never replace each other), and because
+        # an active profile filter must stay visible — hiding it behind a
+        # popover would make "where did my library go?" a real question.
+        lib_filters = ctk.CTkFrame(left_frame, fg_color="transparent")
+        lib_filters.pack(fill="x", padx=5, pady=(0, 2))
+
+        ctk.CTkLabel(lib_filters, text="Show:",
+                     text_color=("gray25", "gray70")).pack(side="left", padx=(0, 3))
+        self._lib_scope_var = tk.StringVar(value=SCOPE_ALL)
+        self.lib_scope_menu = ctk.CTkOptionMenu(
+            lib_filters, variable=self._lib_scope_var,
+            values=[SCOPE_ALL, SCOPE_UNASSIGNED], width=190,
+            command=lambda _v: self._on_scope_changed())
+        self.lib_scope_menu.pack(side="left")
+
         self._lib_filter_var = tk.StringVar()
         self._lib_filter_var.trace_add("write", lambda *_: self._apply_tree_filter("lib"))
-        self._make_filter_entry(lib_header, self._lib_filter_var).pack(
+        self._make_filter_entry(lib_filters, self._lib_filter_var).pack(
             side="right")
-        ctk.CTkLabel(lib_header, text="Filter:",
-                     text_color="gray70").pack(side="right", padx=(0, 3))
+        ctk.CTkLabel(lib_filters, text="Filter:",
+                     text_color=("gray25", "gray70")).pack(side="right", padx=(0, 3))
 
         self.builder_hide_single = tk.BooleanVar(value=False)
-        ctk.CTkCheckBox(lib_header, text="Hide 1-track",
+        ctk.CTkCheckBox(lib_filters, text="Hide 1-track",
                         variable=self.builder_hide_single,
                         command=self._on_hide_single_changed,
-                        width=20).pack(side="right", padx=5)
+                        width=20).pack(side="right", padx=8)
 
         self.builder_lib_tree = ttk.Treeview(
             left_frame, columns=("composer", "genre", "year", "info"),
@@ -444,6 +529,7 @@ class BuilderTabMixin:
 
         self._setup_tree_sort(self.builder_lib_tree,
                               row_dbl_click=self._builder_toggle_include)
+        self._bind_tree_select_all(self.builder_lib_tree)
         self.builder_lib_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "lib"))
         self._builder_lib_iid_map = {}  # iid → (level, entity_id, key)
 
@@ -480,12 +566,17 @@ class BuilderTabMixin:
             side="left")
         ctk.CTkButton(pl_header, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_pl_tree, True)
+                      ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(pl_header, text="\u27f3", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
+                      command=self._refresh_builder_tree,
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(pl_header, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_pl_tree, False)
                       ).pack(side="left")
         self._pl_filter_var = tk.StringVar()
@@ -493,7 +584,7 @@ class BuilderTabMixin:
         self._make_filter_entry(pl_header, self._pl_filter_var).pack(
             side="right")
         ctk.CTkLabel(pl_header, text="Filter:",
-                     text_color="gray70").pack(side="right", padx=(0, 3))
+                     text_color=("gray25", "gray70")).pack(side="right", padx=(0, 3))
 
         self._pl_hide_warning = ctk.CTkLabel(
             pl_header, text="  (filter may hide items)",
@@ -522,6 +613,7 @@ class BuilderTabMixin:
 
         self._setup_tree_sort(self.builder_pl_tree,
                               row_dbl_click=self._builder_exclude_selected)
+        self._bind_tree_select_all(self.builder_pl_tree)
         self.builder_pl_tree.bind("<Button-3>", lambda e: self._builder_context_menu(e, "pl"))
         self.builder_pl_tree.tag_configure("pinned", foreground="#e680ff")  # orchid
         # Tracks pulled in by work-integrity enforcement: dimmed blue,
@@ -541,8 +633,6 @@ class BuilderTabMixin:
                       command=self._export_json).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Push to Plex", width=110,
                       command=self._push_plex).pack(side="left", padx=4)
-        ctk.CTkButton(bot, text="Find Unused", width=110,
-                      command=self._find_unused).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Find Similar", width=110,
                       command=self._find_similar_tracks).pack(side="left", padx=4)
 
@@ -585,6 +675,7 @@ class BuilderTabMixin:
         which reuses the cache.
         """
         self._invalidate_library_index()
+        self._refresh_scope_choices()
         self._rebuild_library_tree()
         self._rebuild_playlist_tree()
 
@@ -630,7 +721,8 @@ class BuilderTabMixin:
         index = self._get_library_index()
         state = self._current_effective_state(index)
         rows = library_tree_rows(
-            index, state, hide_single=bool(self.builder_hide_single.get()))
+            index, state, hide_single=bool(self.builder_hide_single.get()),
+            restrict_ids=self._restrict_ids())
         self._insert_tree_rows(self.builder_lib_tree, rows,
                                self._builder_lib_iid_map,
                                self._lib_search_meta)
@@ -708,6 +800,8 @@ class BuilderTabMixin:
                                  command=lambda: self._show_work_details(entity_id))
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(work.album_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_work_in_folder(entity_id))
             elif level == "track":
                 from music_manager.core.database import Track
                 track = Track.get_by_id(entity_id)
@@ -718,9 +812,13 @@ class BuilderTabMixin:
                                      command=lambda: self._show_work_details(track.work_id))
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(track.album_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_track_in_folder(entity_id))
             elif level == "album":
                 menu.add_command(label="Show Album",
                                  command=lambda: self._show_album_popup(entity_id))
+                menu.add_command(label="Show in Folder",
+                                 command=lambda: self._show_album_in_folder(entity_id))
         except Exception:
             messagebox.showinfo(
                 "Stale Data",
@@ -1231,46 +1329,6 @@ class BuilderTabMixin:
                     dur_str,
                 ))
 
-    def _find_unused(self):
-        """Populate the builder with tracks not included in any saved profile."""
-        if not self.active_library:
-            messagebox.showwarning("No Library", "Select a library first.")
-            return
-
-        self._save_before_export()
-
-        with self._busy():
-            try:
-                from music_manager.core.engine import find_unused_tracks
-                albums, works, tracks = find_unused_tracks(self.active_library)
-            except Exception as exc:
-                messagebox.showerror("Find Unused Error", str(exc))
-                return
-
-        if not albums and not works and not tracks:
-            messagebox.showinfo(
-                "Find Unused",
-                "All tracks are used by at least one profile.")
-            return
-
-        # Clear builder and populate with unused items. If the user
-        # cancels the unsaved-changes prompt, abort — populating on top
-        # of the existing rules would silently merge two playlists.
-        if not self._new_profile():
-            return
-        from music_manager.core.database import Album, Work, Track
-        from music_manager.core.selection import key_for_album, key_for_work, key_for_track
-        for target_id, name in albums:
-            album = Album.get_by_id(target_id)
-            self._add_selection("album", key_for_album(album), refresh=False)
-        for target_id, name in works:
-            work = Work.get_by_id(target_id)
-            self._add_with_breadcrumbs("work", key_for_work(work), target_id)
-        for target_id, name in tracks:
-            track = Track.get_by_id(target_id)
-            self._add_selection("track", key_for_track(track), refresh=False)
-        self._refresh_rules_display()
-
     def _save_before_export(self):
         """Silently save profile settings before an export operation.
 
@@ -1563,6 +1621,25 @@ class BuilderTabMixin:
 
         self._clear_autosave()
         self._mark_builder_clean()
+
+        # Saving always produces a normal profile (auto_generated defaults
+        # to False), so this IS the "keep it" gesture for an import. Offer
+        # to clear the original rather than leaving a duplicate behind.
+        original = getattr(self, "_loaded_profile_name", None)
+        if (getattr(self, "_loaded_profile_auto", False)
+                and original and original != name):
+            if messagebox.askyesno(
+                    "Keep Import Profile?",
+                    f"Saved as '{name}'.\n\nRemove the original import "
+                    f"profile '{original}'?"):
+                for old_p in PlaylistProfile.select().where(
+                        (PlaylistProfile.library == self.active_library)
+                        & (PlaylistProfile.name == original)):
+                    old_p.delete_instance()  # CASCADE drops its selections
+                self._refresh_scope_choices()
+        self._loaded_profile_name = name
+        self._loaded_profile_auto = False
+
         messagebox.showinfo("Saved", f"Profile '{name}' saved.")
         return True
 
@@ -1801,6 +1878,11 @@ class BuilderTabMixin:
                 "track_paths": sel.track_paths,
                 "display": f"{prefix}: {sel.level} — {display_name}{pin_str}",
             })
+
+        # Remember the loaded profile so Save can tell "renamed this
+        # import to keep it" from "saved a copy under a new name".
+        self._loaded_profile_name = name
+        self._loaded_profile_auto = bool(profile.auto_generated)
 
         # Heal work rules loaded without breadcrumbs (e.g. created by the
         # retired Explorer tab); persisted on the next save/autosave.

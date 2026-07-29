@@ -281,6 +281,77 @@ avoiding profiles.
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
 
+- **Write overrides back to source file tags** (user, 2026-07-28). A way to
+  push meaningful corrections — work name, composer, and similar — into the
+  files themselves, so other tools (Plex, Picard, players) see them too.
+  **This deliberately reverses a founding rule**: spec §6 states corrections
+  are stored "only as Overrides records — audio files are never modified in
+  V1", and the whole overlay system exists to honour that. Reversing it is a
+  design decision, not a feature toggle, and needs its own pass. Notes:
+  * **Field mapping is mostly clean**: composer (TCOM / COMPOSER / ©wrt),
+    work (TXXX:Work or TIT1 / WORK / ©wrk), title, genre, performer,
+    conductor, ensemble, disc/track/movement numbers; album-scope fields
+    (album title, artist, year) fan out to every track in the folder.
+  * **`__standalone__` MUST NEVER be written.** It is a grouping directive
+    in the work_name field, not a title. Any writeback needs an explicit
+    denylist of directive values, not just a field allowlist.
+  * **Writing tags changes mtime and size, which currently DESTROYS the
+    similarity analysis** for every file touched: `_restore_analyses`
+    matches on (folder_id, relative_path) plus mtime/size. Tagging 6,000
+    files would silently discard hours of librosa work. **Sequencing: do the
+    "preserve analyses by MB recording ID" item FIRST**, then writeback is
+    safe. The two are coupled and should not be done in the other order.
+  * **Irreversibility**: an override can be deleted to undo; a written tag
+    cannot. Needs a dry-run preview (per file, old → new), and a decision on
+    whether to keep a backup of original tags (a JSON sidecar of prior
+    values would make it undoable without copying audio).
+  * **After a successful write the override is redundant** — decide whether
+    to delete it, or mark it applied and keep it as provenance. Deleting is
+    risky if a write silently failed; verify by re-reading the tag before
+    considering it done.
+  * **Failure modes to handle explicitly**: read-only files, permissions,
+    partial batches over the CIFS share (see the 2026-07-20 incident),
+    formats with weak or absent tag support (WAV, APE), and Plex or another
+    process reading the file mid-write.
+  * Scope choice: everything, a selected album, or the current scope filter
+    — the Show mechanism from v3.3 already gives a natural selection UI.
+  * **The real motivation (user, 2026-07-28): curation work should outlive
+    the database.** Today every correction lives only in
+    music_manager.db (with overrides-JSON export as an app-specific
+    backup). Written into tags, the work becomes portable — Plex, Picard,
+    players and any future install read it natively, and a fresh scan on a
+    new machine reproduces the corrections with no import step.
+  * That reframes the override table itself: it stops being a permanent
+    overlay and becomes a **staging area** — pending corrections not yet
+    committed to the files, much like a working tree versus commits. Which
+    in turn answers the "delete or keep after writing?" question above:
+    written overrides are history, not active state. Note this only holds
+    for overrides that are *meaningful in a file* — app-specific grouping
+    decisions (notably `__standalone__`) stay database-only, so the table
+    never fully empties.
+  * **Round-trip fidelity becomes a hard requirement**, not a nicety: write
+    the tag, re-read it with `extract_tags`, and confirm the value comes
+    back identical. The reader has format-specific preferences (ID3 takes
+    TXXX:Work before TIT1/GRP1; Vorbis reads WORK; MP4 reads ©wrk), so a
+    writeback must target exactly what the reader prefers per format or the
+    value silently fails to round-trip and the correction appears to
+    "not stick" after the next scan.
+
+- **Preserve audio analyses across file moves/renames** (found 2026-07-28
+  while answering how a Picard multi-disc merge behaves). `TrackAnalysis`
+  cascades from `Track`, and the full-scan snapshot matches on
+  `(folder_id, relative_path)` — so reorganising files (e.g. merging
+  "XXX disc1"/"XXX disc2" into one folder with 1-01/2-01 numbering) throws
+  away analyses for content that did not change. On a ~6,000-track library
+  that is hours of librosa work lost to a rename. Fix: match the snapshot
+  on content identity as well as path — `musicbrainz_recording_id` first
+  (Picard-tagged files have it, and overrides already match this way), then
+  `(file_size, mtime)` as a fallback. Note overrides ALREADY survive such a
+  move via MB-ID matching; analyses should behave the same way.
+  Simulation of the current behaviour: analyses deleted, overrides kept and
+  re-applied via MB ID, work-level rules deleted by reconciliation,
+  album/track rules left orphaned for the Rules window to clean up.
+
 - **Bootstrap installer** (user, 2026-07-21) — one fetched script that
   clones/downloads and hands off to `install.sh`, so a fresh or headless box
   needs no browser, unzip, or manual path juggling:

@@ -205,14 +205,17 @@ def redetect(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
-    """Re-run all work detection steps using tag data in the database."""
+    """Regroup tracks into works from stored tag data (GUI: "Regroup Works").
+
+    The verb name is kept for existing scripts and cron jobs.
+    """
     _setup_logging(verbose)
 
     from music_manager.core.scanner import redetect_works
     lib = _get_library(library)
 
     if not quiet and not yes:
-        typer.echo(f"Re-detect works for '{lib.name}'.")
+        typer.echo(f"Regroup works for '{lib.name}'.")
         if not typer.confirm("Proceed?", default=True):
             raise typer.Exit(0)
 
@@ -220,18 +223,22 @@ def redetect(
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
 
     if not quiet:
-        typer.echo(f"Re-detecting works for: {lib.name}")
+        typer.echo(f"Regrouping works for: {lib.name}")
     result = redetect_works(lib, progress_callback=None if quiet else progress)
     if not quiet:
         typer.echo("")  # newline after progress
 
-        typer.echo(f"\n--- Redetect Report ---")
+        typer.echo(f"\n--- Regroup Report ---")
         typer.echo(f"Albums processed:    {result['albums_processed']}")
         typer.echo(f"Override:            {result['override']}")
         typer.echo(f"MB Work ID:          {result['mb_workid']}")
         typer.echo(f"Work Tag:            {result['work_tag']}")
         typer.echo(f"Heuristic:           {result['heuristic']}")
         typer.echo(f"Standalone:          {result['standalone']}")
+        if result.get("selections_remapped") or result.get("selections_orphaned"):
+            typer.echo(f"Playlist rules:      "
+                       f"{result['selections_remapped']} remapped, "
+                       f"{result['selections_orphaned']} orphaned")
 
 
 def _get_profile(name: str):

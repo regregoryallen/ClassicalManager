@@ -54,29 +54,46 @@ def _track_row(t, tag: str) -> TreeRow:
 
 
 def library_tree_rows(index: LibraryIndex, state: EffectiveState,
-                      hide_single: bool = False) -> list[TreeRow]:
-    """Rows for the left (library) pane: everything, tagged by state."""
+                      hide_single: bool = False,
+                      restrict_ids: set | None = None) -> list[TreeRow]:
+    """Rows for the left (library) pane: everything, tagged by state.
+
+    restrict_ids, when given, limits the tree to those track ids —
+    the mechanism behind "show only tracks in profile X" and "show only
+    unassigned tracks". Works and albums disappear once none of their
+    tracks survive. It composes with hide_single and (in the GUI) with
+    the text filter: they intersect, never replace one another.
+    """
     rows = []
     for album in sorted(index.albums.values(), key=lambda a: a.title):
         works = [index.works[wid] for wid in album.work_ids]
         visible_works = works
         if hide_single:
             visible_works = [w for w in works if len(w.track_ids) > 1]
-            if not visible_works:
-                continue
+        if restrict_ids is not None:
+            visible_works = [w for w in visible_works
+                             if any(t in restrict_ids for t in w.track_ids)]
+        if not visible_works:
+            continue
 
+        shown_tracks = (album.track_ids if restrict_ids is None
+                        else [t for t in album.track_ids
+                              if t in restrict_ids])
         album_row = TreeRow(
             level="album", entity_id=album.id, key=album.key,
             text=album.title,
             values=(album.album_artist, album.genre,
                     str(album.year) if album.year else "",
-                    f"{len(album.track_ids)} trk"),
+                    f"{len(shown_tracks)} trk"),
             tag=_STATE_TO_TAG[state.album_states[album.id]],
             search=_search_text(album.title, album.album_artist,
                                 album.genre))
 
         for work in visible_works:
-            tracks = [index.tracks[tid] for tid in work.track_ids]
+            track_ids = work.track_ids
+            if restrict_ids is not None:
+                track_ids = [t for t in track_ids if t in restrict_ids]
+            tracks = [index.tracks[tid] for tid in track_ids]
             work_genre = tracks[0].genre if tracks else ""
             work_row = TreeRow(
                 level="work", entity_id=work.id, key=work.key,

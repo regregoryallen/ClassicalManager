@@ -189,6 +189,28 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
     )
 
 
+def assigned_track_ids(library: Library) -> set[int]:
+    """Track IDs selected by at least one user-created profile.
+
+    Auto-generated (import) profiles are excluded — see
+    `selection.user_profile_filter` for why.
+    """
+    from music_manager.core.selection import user_profile_filter
+
+    used: set[int] = set()
+    for profile in PlaylistProfile.select().where(
+            (PlaylistProfile.library == library) & user_profile_filter()):
+        used |= _select_tracks(profile).track_ids
+    return used
+
+
+def unassigned_track_ids(library: Library) -> set[int]:
+    """Track IDs no user profile has claimed — 'Find Unused' as a set."""
+    all_ids = {t.id for t in
+               Track.select(Track.id).where(Track.library == library)}
+    return all_ids - assigned_track_ids(library)
+
+
 def find_unused_tracks(
     library: Library,
 ) -> tuple[list[tuple[int, str]], list[tuple[int, str]], list[tuple[int, str]]]:
@@ -204,10 +226,16 @@ def find_unused_tracks(
         - fully unused works in partially-used albums
         - individual unused tracks in partially-used works
     """
+    # Auto-generated profiles (per-import track sets) are deliberately
+    # NOT evidence that a track is used: they exist to help assign new
+    # music, so counting them would mark every freshly imported track as
+    # assigned and make this function return nothing for exactly the
+    # tracks the user wants to find.
+    from music_manager.core.selection import user_profile_filter
+
     profiles = list(
         PlaylistProfile.select().where(
-            (PlaylistProfile.library == library)
-            & (~PlaylistProfile.name.startswith("__"))
+            (PlaylistProfile.library == library) & user_profile_filter()
         )
     )
 

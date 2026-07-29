@@ -58,6 +58,30 @@ def numeric_sort_key(val):
 
 
 class TreeUtilMixin:
+    def _bind_tree_select_all(self, tree):
+        """Ctrl+A selects every visible row in a tree.
+
+        Needed once the library pane can be narrowed to a scope (e.g.
+        "Unassigned"): selecting everything shown and pressing Add >> is
+        what replaced the old Find Unused button, which bulk-added by
+        clobbering the builder instead.
+        """
+        def select_all(_event):
+            def walk(parent=""):
+                out = []
+                for iid in tree.get_children(parent):
+                    out.append(iid)
+                    out.extend(walk(iid))
+                return out
+            items = walk()
+            if items:
+                tree.selection_set(items)
+            return "break"
+
+        for seq in ("<Control-a>", "<Control-A>",
+                    "<Command-a>", "<Command-A>"):
+            tree.bind(seq, select_all)
+
     def _setup_tree_sort(self, tree, row_dbl_click=None):
         """Bind double-click on column headers to sort the treeview.
 

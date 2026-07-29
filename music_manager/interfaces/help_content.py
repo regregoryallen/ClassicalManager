@@ -153,10 +153,20 @@ def build_help_content(text: tk.Text) -> None:
         "rebuild has run, because it needs stored file timestamps. Either "
         "mode can be cancelled while running.\n"
     )
-    bold("Re-detect Works")
+    bold("Regroup Works")
     body(
-        " \u2014 re-runs all five detection steps from stored tag data, "
-        "without rescanning files. Useful after editing overrides.\n"
+        " \u2014 re-runs work detection from stored tag data and "
+        "overrides, without reading files. Use it when you have changed "
+        "which tracks belong together (e.g. set a work name across "
+        "tracks from two different works). It rebuilds every work, so "
+        "playlist rules that point at works are remapped automatically "
+        "where possible \u2014 the summary reports how many.\n"
+    )
+    body(
+        "Regroup Works changes STRUCTURE (which tracks form a work). "
+        "Apply Corrections on the Cleanup tab changes DETAILS (composer, "
+        "titles, numbering). Individual edits already apply themselves; "
+        "you rarely need either button.\n"
     )
 
     subheading("Other Controls")
@@ -180,7 +190,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Profile name \u2014 enter a name for your playlist profile")
     bullet("Unsaved changes \u2014 the status strip shows \"\u2022 unsaved\" "
            "whenever the playlist differs from its saved version. New, Load, "
-           "switching libraries, Find Unused, and quitting all prompt you to "
+           "switching libraries, and quitting all prompt you to "
            "Save, Discard, or Cancel first, so work is never lost by "
            "navigating away")
     bullet("Load \u2014 restore a saved profile's settings and selections")
@@ -213,9 +223,16 @@ def build_help_content(text: tk.Text) -> None:
            "A container is blue when every track under it is included (including "
            "when all children were added individually), amber only when some but "
            "not all content is included")
+    bullet("Show: narrows the pane to a scope \u2014 \"Entire library\", "
+           "\"Unassigned (no profile)\" to find music no playlist uses, or "
+           "any profile to work within it. Use it to assign newly imported "
+           "music, or to copy items from one playlist into another")
     bullet("Filter matches name, composer, genre, performer, conductor, "
            "ensemble; the \u2715 button clears it, and Ctrl+A selects all "
-           "in any text field")
+           "in any text field. Show, Filter, and Hide 1-track COMBINE \u2014 "
+           "each narrows what the others left")
+    bullet("Ctrl+A in the tree selects everything shown \u2014 pair it with "
+           "Show to add a whole scope at once")
     bullet("Hide 1-track: hides standalone works")
     bullet("\u27f3 reloads the tree (use it if a popup says data has "
            "changed); +/\u2212: expand/collapse all (to work level)")
@@ -223,7 +240,9 @@ def build_help_content(text: tk.Text) -> None:
            "column headers to sort (numeric-aware)")
     bullet("Select items and click Add >> or double-click to include "
            "(double-click toggles: included items are removed, unselected items are included)")
-    bullet("Right-click: Play, Details (metadata incl. per-track volatility), Show Album")
+    bullet("Right-click: Play, Details (metadata incl. per-track volatility), "
+           "Show Album, Show in Folder (opens your file manager at the "
+           "track or album, selecting the file where the desktop supports it)")
     bullet("Show in profiles\u2026 \u2014 right-click to see which saved profiles include this item")
 
     subheading("Playlist Pane (right)")
@@ -246,8 +265,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Export JSON \u2014 save as a JSON file with full metadata")
     bullet("Push to Plex \u2014 create or update a playlist on your Plex server "
            "(preserves playlist ID across regenerations)")
-    bullet("Find Unused \u2014 populate the builder with all tracks not included "
-           "in any saved profile, so you can browse and assign them")
+
     bullet("Find Similar \u2014 find tracks that sound similar to your selections "
            "(see below); needs a one-time audio analysis pass the first time")
 
@@ -273,7 +291,7 @@ def build_help_content(text: tk.Text) -> None:
            "rank by Match, Agreement, or Volatility (numeric-aware)")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
-    bullet("Right-click a result for Play or Details")
+    bullet("Right-click a result for Play, Details, or Show in Folder")
 
     subheading("Pin to Position")
     body(
@@ -327,20 +345,79 @@ def build_help_content(text: tk.Text) -> None:
         "is saved or loaded.\n"
     )
 
+    subheading("Applying Corrections")
+    body(
+        "Edits you make here (work name, composer, Make Standalone) take "
+        "effect immediately. Two sidebar/tab actions exist for the cases "
+        "that need more:\n"
+    )
+    bullet("Apply Corrections (this tab) \u2014 re-applies every stored "
+           "override to the scanned data. Mainly needed after importing "
+           "an overrides JSON, or if data has drifted")
+    bullet("Regroup Works (sidebar) \u2014 rebuilds work grouping. Needed "
+           "when a correction changes which tracks belong together, "
+           "which renaming alone cannot do")
+
+    subheading("Imported Music")
+    body(
+        "After a Quick scan that adds files, the new tracks are saved as "
+        "their own profile named like \"Imports 2026-07-28 14:30\". Pick it "
+        "under Show: to browse and assign them.\n"
+    )
+    bullet("Import profiles never count as \"already assigned\", so "
+           "Show \u2192 Unassigned still finds their tracks")
+    bullet("Save it under a new name to keep it as a normal playlist; you "
+           "are then offered the chance to remove the original")
+    bullet("Delete import profiles you are done with \u2014 the Delete "
+           "dialog accepts multiple selections")
+
     # ── Cleanup / Overlay ──
     heading("cleanup", "Cleanup / Overlay")
     body("Review, correct, and manage work groupings and metadata overrides.\n")
 
+    subheading("How Works Are Detected")
+    body(
+        "Tracks are grouped into works by the first rule that matches: a "
+        "manual override, a MusicBrainz work ID, a WORK tag, then the "
+        "title-prefix heuristic, and finally standalone (one track = one "
+        "work).\n"
+    )
+    bold("Why didn't my album group? ")
+    body(
+        "The title-prefix heuristic is deliberately conservative — a wrong "
+        "grouping is harder to spot than a missing one. It only groups "
+        "tracks when the shared title prefix is at least 5 characters AND "
+        "at least 3 words long, the tracks are adjacent by track number, "
+        "and either the prefix ends in a delimiter (\":\", \"-\") or both "
+        "remainders start with a movement marker (\"I.\", \"Allegro\", "
+        "\"No. 2\"...).\n"
+    )
+    body(
+        "So titles like \"Magnificat: Quia respexit\" do NOT group: the "
+        "shared prefix \"Magnificat:\" is only one word. Fix these here — "
+        "select the tracks and Set Work Name — rather than expecting the "
+        "scanner to catch them. Loosening the rule would risk merging "
+        "unrelated tracks on albums where every title starts with the "
+        "composer's name.\n"
+    )
+
     subheading("Works Browser")
+    bullet("Works are listed in track order within each album")
+    bullet("Show \u2014 narrow to a scope: the whole library, unassigned "
+           "tracks, or one profile. Pick an Imports profile to review "
+           "just-added music for grouping problems. A work appears when "
+           "ANY of its tracks is in scope, and then shows all of them \u2014 "
+           "you are judging the grouping, so its full contents matter")
     bullet("Source dropdown \u2014 filter by: All Works, Heuristic, Standalone, Override, MB Work ID, Work Tag")
     bullet("Search field \u2014 live filtering by work name, album, or composer")
-    bullet("Hide 1-track \u2014 hides standalone works (enabled by default)")
+    bullet("Hide 1-track \u2014 hides standalone works (off by default)")
     bullet("Multi-select with Ctrl+click or Shift+click")
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open track in default player")
     bullet("Details \u2014 read-only metadata popup (incl. per-track volatility) with copy buttons")
     bullet("Show Album \u2014 full album view with editing")
+    bullet("Show in Folder \u2014 opens your file manager at the file")
     bullet("Set Work Name / Group Key / Composer \u2014 jump to edit fields")
     bullet("Make Standalone \u2014 set __standalone__ group key")
 
@@ -511,13 +588,13 @@ def build_help_content(text: tk.Text) -> None:
         "On the Cleanup tab, use the Source dropdown to filter by detection "
         "method. Right-click \u2192 Show Album for full context. To merge "
         "tracks: set the same Group Key. To split: click Make Standalone. "
-        "Then Re-detect Works in the sidebar.\n"
+        "Then Regroup Works in the sidebar.\n"
     )
 
     subheading("Suppressing Erroneous Work Tags")
     body(
         "Filter by Work Tag or MB Work ID, multi-select the incorrect works, "
-        "click Make Standalone, then Re-detect Works.\n"
+        "click Make Standalone, then Regroup Works.\n"
     )
 
     subheading("Multiple Plex Sections")
@@ -554,7 +631,7 @@ def build_help_content(text: tk.Text) -> None:
         "Plex and leaves M3U untranslated.\n"
     )
     bold("Works grouped incorrectly")
-    body(" \u2014 Use Cleanup tab. Set Group Key to merge, Make Standalone to split. Re-detect Works to apply.\n")
+    body(" \u2014 Use Cleanup tab. Set the work name to merge, Make Standalone to split, then Regroup Works to apply.\n")
     bold("Scan takes too long")
     body(" \u2014 Use Scan Library... \u2192 Quick scan for routine updates; reserve Full rebuild for first scans and recovery. Either mode can be cancelled.\n")
     bold("\"Cannot open database\"")

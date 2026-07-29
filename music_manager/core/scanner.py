@@ -8,6 +8,7 @@ heuristic → standalone), and populates the database.
 import logging
 import re
 import unicodedata
+from datetime import datetime, timezone
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -988,6 +989,18 @@ def redetect_works(library: Library,
             (Album.library == library) & (Work.work_source == source)
         ).count()
 
+    # Regrouping rebuilds every Work, so work KEYS change and work-level
+    # playlist rules would be left pointing at works that no longer
+    # exist. Both scan paths reconcile for exactly this reason; redetect
+    # must too, or a regroup silently breaks saved playlists.
+    from music_manager.core.selection import reconcile_selections
+    recon = reconcile_selections(library)
+    result["selections_remapped"] = recon["remapped"]
+    result["selections_orphaned"] = recon["orphaned"]
+    if recon["remapped"] or recon["orphaned"]:
+        logger.info("Redetect reconciliation: %d remapped, %d orphaned",
+                    recon["remapped"], recon["orphaned"])
+
     return result
 
 
@@ -1069,6 +1082,17 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
 
     # Load overrides for this library (for work_name grouping lookups)
     work_overrides = _load_work_overrides(library)
+    scan_started = datetime.now(timezone.utc)
+
+    # A full rescan deletes and recreates every track, so remember when
+    # each path was FIRST seen — otherwise a rebuild would make the whole
+    # library look freshly imported (v3.3).
+    first_seen_map = {
+        t.relative_path: t.first_seen
+        for t in Track.select(Track.relative_path, Track.first_seen)
+                      .where((Track.library == library)
+                             & Track.first_seen.is_null(False))
+    }
 
     # Persist similarity analyses to the snapshot table before the delete
     # cascades them away (F8). Deliberately NOT wrapped: if the snapshot
@@ -1137,7 +1161,8 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
         for (sf_id, album_key), file_group in album_groups.items():
             sf = SourceFolder.get_by_id(sf_id)
             _process_album_group(
-                library, sf, album_key, file_group, work_overrides, stats
+                library, sf, album_key, file_group, work_overrides, stats,
+                first_seen_map, scan_started
             )
 
     # Re-link analyses for files whose mtime/size didn't change (F8).
@@ -1186,6 +1211,11 @@ class IncrementalStats:
     files_removed: int = 0
     files_failed: list[str] = field(default_factory=list)
     albums_affected: int = 0
+    # Relative paths of tracks this scan added — drives the per-import
+    # profile (v3.3). Paths rather than ids so the caller resolves them
+    # after the scan's own transactions have settled.
+    added_paths: list[str] = field(default_factory=list)
+    scan_started = None
 
 
 def scan_incremental(library: Library, progress_callback=None) -> IncrementalStats:
@@ -1205,6 +1235,8 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
         return stats
 
     work_overrides = _load_work_overrides(library)
+    scan_started = datetime.now(timezone.utc)
+    stats.scan_started = scan_started
 
     # Build index of existing tracks: (folder_id, relative_path) → Track
     existing: dict[tuple[int, str], Track] = {}
@@ -1340,8 +1372,10 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
                 conductor=raw.conductor or None, ensemble=raw.ensemble or None,
                 work_tag=raw.work or None, mb_work_id=raw.mb_work_id or None,
                 file_mtime=f_mtime, file_size=f_size,
+                first_seen=scan_started,
             )
             stats.files_added += 1
+            stats.added_paths.append(rel_path)
 
     # Delete removed tracks and clean up orphan works/albums
     with database.atomic():
@@ -1461,8 +1495,11 @@ def _process_album_group(
     file_group: list[tuple[SourceFolder, Path, RawTags]],
     work_overrides: dict[str, str],
     stats: ScanStats,
+    first_seen_map: dict | None = None,
+    scan_started=None,
 ) -> None:
     """Process a group of files belonging to one album folder."""
+    first_seen_map = first_seen_map or {}
     # Use first file's tags for album metadata
     _, first_path, first_tags = file_group[0]
     album_title = first_tags.album or Path(album_key).name or album_key
@@ -1514,6 +1551,7 @@ def _process_album_group(
             mb_work_id=raw.mb_work_id or None,
             file_mtime=f_mtime,
             file_size=f_size,
+            first_seen=first_seen_map.get(rel_path, scan_started),
         )
         stats.tracks_created += 1
 

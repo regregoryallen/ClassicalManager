@@ -405,6 +405,110 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         except Exception as exc:
             messagebox.showerror("Playback Error", str(exc))
 
+    def _show_in_folder(self, path):
+        """Open the system file manager at *path*, selecting it if possible.
+
+        Windows and macOS can highlight the file itself. On Linux the
+        freedesktop FileManager1 D-Bus interface does the same for
+        Nautilus/Dolphin/Thunar; when that is unavailable (no D-Bus, an
+        unusual file manager) it falls back to just opening the folder,
+        which is the useful part anyway.
+        """
+        import subprocess
+        path = Path(path)
+        if not path.exists():
+            # A folder may survive when a file does not, so offer that.
+            if path.parent.exists():
+                path = path.parent
+            else:
+                messagebox.showerror(
+                    "Not Found",
+                    f"This location no longer exists:\n{path}")
+                return
+
+        target = str(path)
+        folder = str(path if path.is_dir() else path.parent)
+        _sys = platform.system()
+        try:
+            if _sys == "Windows":
+                if path.is_dir():
+                    subprocess.Popen(["explorer", target])
+                else:
+                    # /select, takes the path as one token, comma-joined.
+                    subprocess.Popen(f'explorer /select,"{target}"')
+            elif _sys == "Darwin":
+                subprocess.Popen(["open", "-R", target] if not path.is_dir()
+                                 else ["open", target])
+            else:
+                if path.is_dir() or not self._linux_reveal(target):
+                    subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            messagebox.showerror("Could Not Open Folder", str(exc))
+
+    @staticmethod
+    def _linux_reveal(file_path):
+        """Ask the desktop's file manager to show and select a file.
+
+        Returns True when the request was delivered. Uses the standard
+        org.freedesktop.FileManager1 interface so it works across
+        Nautilus, Dolphin, Thunar, Nemo, etc. without special-casing.
+        """
+        import shutil
+        import subprocess
+        from urllib.parse import quote
+
+        if not shutil.which("gdbus"):
+            return False
+        uri = "file://" + quote(file_path)
+        try:
+            result = subprocess.run(
+                ["gdbus", "call", "--session",
+                 "--dest", "org.freedesktop.FileManager1",
+                 "--object-path", "/org/freedesktop/FileManager1",
+                 "--method", "org.freedesktop.FileManager1.ShowItems",
+                 f"['{uri}']", ""],
+                capture_output=True, timeout=5)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _show_track_in_folder(self, track_id):
+        """Reveal a track's file."""
+        from music_manager.core.database import Track
+        try:
+            track = Track.get_by_id(track_id)
+        except Track.DoesNotExist:
+            return
+        self._show_in_folder(
+            Path(track.folder.root_path) / track.relative_path)
+
+    def _show_album_in_folder(self, album_id):
+        """Reveal an album's folder.
+
+        album_key IS the folder path relative to the source root, so the
+        containing directory is derivable without touching a track.
+        """
+        from music_manager.core.database import Album
+        try:
+            album = Album.get_by_id(album_id)
+        except Album.DoesNotExist:
+            return
+        self._show_in_folder(Path(album.folder.root_path) / album.album_key)
+
+    def _show_work_in_folder(self, work_id):
+        """Reveal a work by way of its first track's file."""
+        from music_manager.core.database import Track, Work
+        try:
+            work = Work.get_by_id(work_id)
+        except Work.DoesNotExist:
+            return
+        track = (Track.select().where(Track.work == work)
+                 .order_by(Track.disc_number, Track.track_number).first())
+        if track is None:
+            self._show_album_in_folder(work.album_id)
+        else:
+            self._show_track_in_folder(track.id)
+
     @contextmanager
     def _busy(self):
         """Show a wait/watch cursor while a blocking operation runs.
@@ -570,7 +674,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.scan_status = ctk.CTkLabel(self.sidebar, text="")
         self.scan_status.pack(padx=15, anchor="w")
 
-        ctk.CTkButton(self.sidebar, text="Re-detect Works",
+        ctk.CTkButton(self.sidebar, text="Regroup Works",
                       command=self._redetect_works).pack(
             padx=15, pady=(3, 0), fill="x")
 
@@ -1101,14 +1205,27 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.root.after(0, lambda: self.scan_status.configure(
                 text=f"[{current}/{total}] {message}"))
 
+        import_profile_name = None
         try:
             stats = scan_incremental(library, progress_callback=progress)
-            if stats.files_added or stats.files_updated or stats.files_removed:
-                apply_overrides(library)
+            # Unconditionally: overrides added since the last scan must
+            # take effect even when no FILES changed. The old condition
+            # meant a Quick scan on an unchanged library silently did
+            # nothing with them.
+            apply_overrides(library)
             msg = (f"Done: +{stats.files_added} added, "
                    f"~{stats.files_updated} updated, "
                    f"-{stats.files_removed} removed, "
                    f"{stats.files_unchanged} unchanged")
+            # Record what arrived as its own profile, so newly imported
+            # music can be browsed and assigned instead of hunted for.
+            if stats.added_paths:
+                from music_manager.core.selection import create_import_profile
+                created = create_import_profile(
+                    library, stats.added_paths, when=stats.scan_started)
+                if created is not None:
+                    import_profile_name = created.name
+                    msg += f" — saved as '{created.name}'"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
                 failed = list(stats.files_failed)
@@ -1126,6 +1243,14 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
+            if import_profile_name:
+                messagebox.showinfo(
+                    "New Music Imported",
+                    f"{stats.files_added} new track(s) were saved as the "
+                    f"profile:\n\n    {import_profile_name}\n\n"
+                    f"Pick it under \"Show:\" above the Library pane to "
+                    f"browse and assign them. Rename it to keep it as a "
+                    f"normal playlist, or delete it when you are done.")
             if failed:
                 self._report_failed_files(failed)
 
@@ -1138,10 +1263,14 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             return
 
         if not messagebox.askyesno(
-                "Re-detect Works",
-                f"Re-run work detection for '{self.active_library.name}'?\n\n"
-                "This will regroup tracks into works based on\n"
-                "current tag data and detection rules."):
+                "Regroup Works",
+                f"Regroup tracks into works for "
+                f"'{self.active_library.name}'?\n\n"
+                "Re-runs work detection from current tag data and "
+                "overrides.\nThis changes work grouping, not track "
+                "details \u2014 use Apply Corrections on the Cleanup tab "
+                "for those.\n\nPlaylist rules that point at works are "
+                "remapped automatically where possible."):
             return
 
         from music_manager.core.scanner import redetect_works
@@ -1150,13 +1279,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_cleanup()
         messagebox.showinfo(
-            "Re-detect Complete",
+            "Regroup Complete",
             f"Albums processed: {result['albums_processed']}\n"
             f"Override: {result['override']}  |  "
             f"MB Work ID: {result['mb_workid']}  |  "
             f"Work Tag: {result['work_tag']}\n"
             f"Heuristic: {result['heuristic']}  |  "
-            f"Standalone: {result['standalone']}")
+            f"Standalone: {result['standalone']}"
+            + (f"\n\nPlaylist rules: {result['selections_remapped']} "
+               f"remapped, {result['selections_orphaned']} orphaned"
+               if result.get("selections_remapped")
+               or result.get("selections_orphaned") else ""))
+        self._invalidate_library_index()
+        self._refresh_builder_tree()
 
     def _run_integrity_check(self):
         """Run integrity checks and show results in a popup."""

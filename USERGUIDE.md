@@ -257,11 +257,22 @@ metadata drift.
 Quick scan is unavailable until one full rebuild has run, since it needs stored
 file timestamps; the dialog explains this rather than failing later.
 
-### Re-detect Works
+### Regroup Works
 
-Re-runs all five work detection steps (override, MusicBrainz, WORK tag, heuristic,
-standalone) using tag data already in the database, without rescanning files from disk.
-Useful after editing overrides or when detection logic has been updated.
+Re-runs work detection from stored tag data and overrides, without reading
+files. Use it when a correction changes **which tracks belong together** — for
+example setting the same work name across tracks that currently sit in two
+different works. Renaming alone cannot merge them; regrouping can.
+
+It rebuilds every work, so playlist rules that point at works are remapped
+automatically where possible, and the summary reports how many were remapped or
+orphaned.
+
+> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
+> tracks form a work). **Apply Corrections**, on the Cleanup tab, re-applies
+> stored overrides that change *details* (composer, titles, numbering).
+> Individual edits already apply themselves, so you rarely need either button —
+> Apply Corrections is mainly for after importing an overrides JSON.
 
 ### Source Folders
 
@@ -316,7 +327,7 @@ The main workspace for creating playlists.
 
 The status strip at the bottom right shows **• unsaved** whenever the current
 playlist differs from its saved version. Any action that would replace the
-builder's contents — **New**, **Load**, switching libraries, **Find Unused**,
+builder's contents — **New**, **Load**, switching libraries,
 or quitting — prompts first:
 
 - **Yes** saves the profile (asking for a name if it doesn't have one yet)
@@ -385,6 +396,14 @@ Browse the full library in a hierarchical tree: Albums > Works > Tracks.
 
 - **Columns**: Name, Composer, Genre, Year (albums), Info (track count or duration). Works appear in track order within each album.
 - **Toolbar**: ⟳ reloads the tree, +/− expand/collapse. Filter fields have a ✕ clear button, and Ctrl+A selects all in any text field.
+- **Show**: narrows the pane to a scope — *Entire library* (default),
+  *Unassigned (no profile)* to find music no playlist uses, or any profile
+  to work within it. **Show**, **Filter**, and **Hide 1-track** combine: each
+  narrows what the others left. Ctrl+A in the tree selects everything shown,
+  so you can add a whole scope in one gesture.
+
+  Two workflows this enables: pick an *Imports* profile to assign newly added
+  music, or pick playlist A while building playlist B to copy items across.
 - **Color coding**: Blue = included, Amber = partially included, Gray = excluded.
   A container (album or work) is blue when *every* track under it is included —
   including when you have added all of its children individually — and amber only
@@ -424,7 +443,6 @@ and scroll position are preserved when items are added or removed.
 | **Export M3U** | Save as an M3U playlist file |
 | **Export JSON** | Save as a JSON file with full metadata |
 | **Push to Plex** | Create or update a playlist on your Plex server (updates in place, preserving the playlist ID) |
-| **Find Unused** | Populate the builder with all tracks not included in any saved profile. Creates an unnamed profile so you can browse, preview, and decide where items belong. |
 | **Find Similar** | Find tracks that sound similar to your current selections (see below). Requires an audio analysis pass the first time. |
 
 ### Find Similar Tracks
@@ -463,8 +481,8 @@ Actions:
   selections.
 - **Re-search (include accepted)**: Re-run using the widened seed set.
 - **Sort results**: double-click any column header to rank by Match, Agreement, or Volatility (numeric-aware).
-- **Right-click** a result for **Play** or **Details** (metadata popup) to audition and
-  inspect before accepting.
+- **Right-click** a result for **Play**, **Details** (metadata popup), or
+  **Show in Folder** to audition and inspect before accepting.
 
 Find Similar analyzes any tracks that still need it before searching. For a small
 number it just runs; for a large backlog it warns with a time estimate first, so a
@@ -529,11 +547,53 @@ healed automatically when the profile is saved or loaded.
 
 ---
 
+### Imported Music
+
+After a Quick scan that adds files, those tracks are saved as their own
+profile named like `Imports 2026-07-28 14:30`, and the app tells you so.
+Pick it under **Show** to browse and assign the new music.
+
+Import profiles are ordinary, editable profiles with one exception: they never
+count as evidence that a track is *already assigned*, so **Show → Unassigned**
+still finds their tracks. That is deliberate — an import profile exists to help
+you assign music, not to claim it.
+
+To keep one as a real playlist, save it under a new name; you are then offered
+the chance to remove the original. Delete the ones you have finished with — the
+Delete Profile dialog accepts multiple selections.
+
+
 ## Cleanup / Overlay Tab
 
 Review, correct, and manage work groupings and metadata overrides.
 
+### How Works Are Detected
+
+Tracks are grouped into works by the first rule that matches: a manual override,
+a MusicBrainz work ID, a WORK tag, then the title-prefix heuristic, and finally
+standalone (one track = one work).
+
+**Why didn't my album group?** The title-prefix heuristic is deliberately
+conservative — a wrong grouping is harder to notice than a missing one. It groups
+tracks only when the shared title prefix is **at least 5 characters and at least
+3 words**, the tracks are **adjacent by track number**, and either the prefix ends
+in a delimiter (`:`, `-`) or both remainders begin with a movement marker
+(`I.`, `Allegro`, `No. 2`…).
+
+So an album titled `Magnificat: Quia respexit`, `Magnificat: Et misericordia`… does
+*not* group: the shared prefix `Magnificat:` is a single word. Correct these here —
+select the tracks and **Set Work Name** — rather than expecting the scanner to
+catch them. Loosening the rule would risk merging unrelated tracks on albums where
+every title begins with the composer's name.
+
 ### Works Browser
+
+- **Show**: narrows the browser to a scope — the whole library, unassigned
+  tracks, or a single profile. Picking an *Imports* profile is the quickest way
+  to review just-added music for grouping problems. A work appears when *any* of
+  its tracks is in scope and then lists all of them: you are judging whether the
+  grouping is right, so the work's full contents matter (the Builder filters
+  individual tracks instead, because there you are picking them).
 
 The top section lists works with filtering and search controls:
 
@@ -541,7 +601,7 @@ The top section lists works with filtering and search controls:
   Override, MB Work ID, or Work Tag
 - **Search field**: Live filtering by work name, album title, or composer
 - **Hide 1-track**: Hides standalone works to focus on multi-track groupings
-  (enabled by default)
+  (off by default)
 - **+/−**: Expand or collapse all tree nodes
 - **Multi-select**: Ctrl+click or Shift+click to select multiple works
 
@@ -795,7 +855,7 @@ If the scanner grouped tracks incorrectly:
 3. Find the work and right-click > **Show Album** to see the full album context
 4. To merge tracks into one work: select tracks, set the same **Group Key** for all
 5. To split an incorrect grouping: select the work(s) and click **Make Standalone**
-6. Click **Re-detect Works** in the sidebar to apply
+6. Click **Regroup Works** in the sidebar to apply
 
 ### Suppressing Erroneous Work Tags
 
@@ -804,7 +864,7 @@ Some files have incorrect WORK tags (e.g., "PMEDIA" from bulk tagging tools):
 1. Switch the Source dropdown to **Work Tag** or **MB Work ID**
 2. Multi-select the incorrect works (Ctrl+click or Shift+click)
 3. Click **Make Standalone**
-4. Click **Re-detect Works** to apply
+4. Click **Regroup Works** to apply
 
 ### Migrating from Simple Playlists
 
@@ -1282,7 +1342,7 @@ method and the search field to find specific works. Right-click > **Details** to
 inspect metadata, or **Show Album** for the full album context.
 
 Use **Set Group Key** to merge tracks, or **Make Standalone** to split them. Click
-**Re-detect Works** to apply changes without a full rescan.
+**Regroup Works** to apply grouping changes without a full rescan.
 
 ### Scan takes too long
 

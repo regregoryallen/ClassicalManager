@@ -163,6 +163,20 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         )
         logger.info("Migrated: added separation columns to playlist_profiles")
 
+    if "auto_generated" not in profile_cols:
+        run_migrate(
+            migrator.add_column("playlist_profiles", "auto_generated",
+                                pw.BooleanField(null=True, default=False)),
+        )
+        logger.info("Migrated: added auto_generated to playlist_profiles")
+
+    if "first_seen" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "first_seen",
+                                pw.DateTimeField(null=True)),
+        )
+        logger.info("Migrated: added first_seen to tracks")
+
     from music_manager.core.similarity import ensure_table
     ensure_table()
 
@@ -304,6 +318,10 @@ class Track(BaseModel):
     mb_work_id = pw.TextField(null=True)        # per-track MusicBrainz work ID from file
     file_mtime = pw.FloatField(null=True)       # file modification time (os.stat)
     file_size = pw.IntegerField(null=True)       # file size in bytes
+    # When this track first entered the library. Set on INSERT only and
+    # preserved across full rescans — file_mtime is the FILE's time and
+    # cannot answer "what did the last scan add" (v3.3).
+    first_seen = pw.DateTimeField(null=True)
 
     class Meta:
         table_name = "tracks"
@@ -331,6 +349,12 @@ class PlaylistProfile(BaseModel):
     separate_composers = pw.BooleanField(default=False)
     separate_albums = pw.BooleanField(default=False)
     separate_forms = pw.BooleanField(default=False)
+    # True for machine-created profiles (e.g. per-import track sets).
+    # These are excluded from "is this track used by any profile?"
+    # questions — otherwise an import profile would instantly mark every
+    # newly imported track as assigned and silence Find Unused, which is
+    # the workflow the import profile exists to support (v3.3).
+    auto_generated = pw.BooleanField(default=False, null=True)
 
     class Meta:
         table_name = "playlist_profiles"

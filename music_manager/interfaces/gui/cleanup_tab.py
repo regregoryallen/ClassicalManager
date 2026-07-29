@@ -19,6 +19,7 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    SCOPE_ALL, SCOPE_UNASSIGNED,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ class CleanupTabMixin:
                       command=self._export_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Import Overrides JSON", width=180,
                       command=self._import_overrides).pack(side="left", padx=5)
+        ctk.CTkButton(top, text="Apply Corrections", width=150,
+                      command=self._apply_overrides_now).pack(side="left", padx=5)
         ctk.CTkButton(top, text="?", width=28, height=28,
                       font=ctk.CTkFont(size=14, weight="bold"),
                       fg_color="gray30", hover_color="gray40",
@@ -51,12 +54,12 @@ class CleanupTabMixin:
             side="left", padx=5)
         ctk.CTkButton(filter_frame, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.works_tree, True)
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(filter_frame, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.works_tree, False)
                       ).pack(side="left")
 
@@ -67,11 +70,22 @@ class CleanupTabMixin:
                                 width=200).pack(side="right", padx=5)
         self._cleanup_search_after = None
 
-        self.cleanup_hide_single = tk.BooleanVar(value=True)
+        self.cleanup_hide_single = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(filter_frame, text="Hide 1-track",
                         variable=self.cleanup_hide_single,
                         command=self._refresh_works_list,
                         width=20).pack(side="right", padx=5)
+
+        # Scope filter, same vocabulary as the Builder's Library pane —
+        # the point is to review, say, an Imports profile for grouping
+        # problems without wading through the whole library.
+        self._cleanup_scope_var = tk.StringVar(value=SCOPE_ALL)
+        self.cleanup_scope_menu = ctk.CTkOptionMenu(
+            filter_frame, variable=self._cleanup_scope_var,
+            values=[SCOPE_ALL, SCOPE_UNASSIGNED], width=190,
+            command=lambda _v: self._refresh_works_list())
+        self.cleanup_scope_menu.pack(side="right", padx=5)
+        ctk.CTkLabel(filter_frame, text="Show:").pack(side="right", padx=(5, 0))
 
         _SOURCE_OPTIONS = ["All Works", "Heuristic", "Standalone",
                            "Override", "MB Work ID", "Work Tag"]
@@ -189,6 +203,7 @@ class CleanupTabMixin:
 
     def _refresh_cleanup(self):
         """Reload works list and overrides."""
+        self._refresh_scope_choices()
         self._refresh_works_list()
         self._refresh_overrides_list()
 
@@ -224,16 +239,33 @@ class CleanupTabMixin:
         if source_label in source_map:
             query = query.where(Work.work_source == source_map[source_label])
 
-        query = query.order_by(Album.title, Work.work_name)
+        query = query.order_by(Album.title)
 
         search = self._cleanup_search_var.get().strip().lower()
         hide_single = self.cleanup_hide_single.get()
+        restrict = self._scope_track_ids(self._cleanup_scope_var.get())
 
+        # Collect first, then order works by their first track's position
+        # within each album. Ordering by work_name put an album's works in
+        # alphabetical order, which reads as scrambled when you search for
+        # an album and expect to see it as it plays. (work_sequence is no
+        # help either — it follows detection order; see
+        # selection.works_in_track_order.)
+        entries = []
         for work in query:
             tracks = list(Track.select().where(Track.work == work)
                           .order_by(Track.disc_number, Track.track_number))
 
             if hide_single and len(tracks) <= 1:
+                continue
+
+            # A work qualifies when ANY of its tracks is in scope, and
+            # then shows ALL of them: you are judging whether the
+            # grouping is right, so hiding some of its tracks would
+            # misrepresent the work. (The Builder filters tracks too,
+            # because there you are picking them.)
+            if restrict is not None and not any(t.id in restrict
+                                                for t in tracks):
                 continue
 
             composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
@@ -243,6 +275,14 @@ class CleanupTabMixin:
                 if search not in haystack:
                     continue
 
+            position = ((tracks[0].disc_number, tracks[0].track_number)
+                        if tracks else (10 ** 9, work.work_sequence or 0))
+            entries.append(((work.album.title or "").lower(), position,
+                            work, tracks, composer))
+
+        entries.sort(key=lambda e: (e[0], e[1]))
+
+        for _album_sort, _pos, work, tracks, composer in entries:
             work_iid = self.works_tree.insert(
                 "", "end", text=work.work_name,
                 values=(work.work_source, work.album.title, len(tracks), composer))
@@ -347,6 +387,10 @@ class CleanupTabMixin:
                          command=lambda: self._show_work_details(work_id))
         menu.add_command(label="Show Album",
                          command=lambda: self._show_album_popup(work.album_id))
+        menu.add_command(
+            label="Show in Folder",
+            command=(lambda: self._show_track_in_folder(track_id)) if track_id
+            else (lambda: self._show_work_in_folder(work_id)))
         menu.add_separator()
         menu.add_command(label="Set Work Name...",
                          command=lambda: self.edit_work_name.focus_set())
@@ -579,11 +623,18 @@ class CleanupTabMixin:
             if not entry:
                 return
             level, eid = entry
+            menu = tk.Menu(popup, tearoff=0)
             if level == "track":
-                menu = tk.Menu(popup, tearoff=0)
                 menu.add_command(label="Play",
                                  command=lambda: self._play_track(eid))
-                menu.tk_popup(event.x_root, event.y_root)
+                menu.add_command(
+                    label="Show in Folder",
+                    command=lambda: self._show_track_in_folder(eid))
+            else:
+                menu.add_command(
+                    label="Show in Folder",
+                    command=lambda: self._show_work_in_folder(eid))
+            menu.tk_popup(event.x_root, event.y_root)
 
         album_tree.bind("<Button-3>", _album_popup_context_menu)
 
@@ -669,7 +720,7 @@ class CleanupTabMixin:
             messagebox.showinfo(
                 "Done",
                 f"Marked {len(tracks)} track(s) as standalone.\n"
-                f"Re-detect Works or Rescan to apply.",
+                f"Use Regroup Works (sidebar) to apply the new grouping.",
                 parent=popup)
             self._refresh_overrides_list()
 
@@ -701,12 +752,15 @@ class CleanupTabMixin:
                     match_relative_path=t.relative_path,
                     match_mb_id=t.musicbrainz_recording_id,
                 )
+            from music_manager.core.overrides import apply_overrides
+            apply_overrides(self.active_library)
             messagebox.showinfo(
                 "Done",
-                f"Set composer to '{comp}' for {len(tracks)} track(s).\n"
-                f"Rescan or apply overrides to update.",
+                f"Set composer to '{comp}' for {len(tracks)} track(s).",
                 parent=popup)
+            self._invalidate_library_index()
             self._refresh_overrides_list()
+            _refresh_popup_tree()
 
         ctk.CTkButton(row_c, text="Set for Selected", width=130,
                       command=_set_composer).pack(side="left", padx=5)
@@ -792,7 +846,7 @@ class CleanupTabMixin:
 
         messagebox.showinfo("Done", f"Marked {total} tracks across "
                            f"{len(work_ids)} work(s) as standalone. "
-                           f"Re-detect or rescan to apply.")
+                           f"Use Regroup Works in the sidebar to apply.")
         self._refresh_cleanup()
 
     def _set_composer_override(self):
@@ -820,10 +874,41 @@ class CleanupTabMixin:
                 )
             total += len(tracks)
 
+        # Apply at once. Storing the override and telling the user to
+        # rescan was a trap: a Quick scan that finds no file changes
+        # skipped applying overrides entirely, so the composer silently
+        # never appeared.
+        from music_manager.core.overrides import apply_overrides
+        apply_overrides(self.active_library)
+
         messagebox.showinfo("Done", f"Set composer to '{composer_name}' "
-                           f"for {total} tracks across {len(work_ids)} work(s). "
-                           f"Rescan or apply overrides to update.")
+                           f"for {total} tracks across {len(work_ids)} work(s).")
+        self._invalidate_library_index()
         self._refresh_cleanup()
+
+    def _apply_overrides_now(self):
+        """Re-apply every stored override to the scanned data.
+
+        Individual edits apply themselves, so this is a repair tool: use
+        it after importing an overrides JSON, or if scanned data has
+        drifted from the corrections.
+        """
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+        from music_manager.core.overrides import apply_overrides
+        with self._busy():
+            counts = apply_overrides(self.active_library)
+        self._invalidate_library_index()
+        self._refresh_cleanup()
+        self._refresh_builder_tree()
+        messagebox.showinfo(
+            "Corrections Applied",
+            f"Applied {counts['tracks_updated']} track and "
+            f"{counts['albums_updated']} album override(s)."
+            + (f"\n{counts['skipped']} could not be matched to a track "
+               f"(the file may have been removed or renamed)."
+               if counts["skipped"] else ""))
 
     def _delete_override(self):
         """Delete the selected override."""

@@ -315,6 +315,27 @@ each needs its own design pass before work starts.
     process reading the file mid-write.
   * Scope choice: everything, a selected album, or the current scope filter
     — the Show mechanism from v3.3 already gives a natural selection UI.
+  * **The real motivation (user, 2026-07-28): curation work should outlive
+    the database.** Today every correction lives only in
+    music_manager.db (with overrides-JSON export as an app-specific
+    backup). Written into tags, the work becomes portable — Plex, Picard,
+    players and any future install read it natively, and a fresh scan on a
+    new machine reproduces the corrections with no import step.
+  * That reframes the override table itself: it stops being a permanent
+    overlay and becomes a **staging area** — pending corrections not yet
+    committed to the files, much like a working tree versus commits. Which
+    in turn answers the "delete or keep after writing?" question above:
+    written overrides are history, not active state. Note this only holds
+    for overrides that are *meaningful in a file* — app-specific grouping
+    decisions (notably `__standalone__`) stay database-only, so the table
+    never fully empties.
+  * **Round-trip fidelity becomes a hard requirement**, not a nicety: write
+    the tag, re-read it with `extract_tags`, and confirm the value comes
+    back identical. The reader has format-specific preferences (ID3 takes
+    TXXX:Work before TIT1/GRP1; Vorbis reads WORK; MP4 reads ©wrk), so a
+    writeback must target exactly what the reader prefers per format or the
+    value silently fails to round-trip and the correction appears to
+    "not stick" after the next scan.
 
 - **Preserve audio analyses across file moves/renames** (found 2026-07-28
   while answering how a Picard multi-disc merge behaves). `TrackAnalysis`

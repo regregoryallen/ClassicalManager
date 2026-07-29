@@ -38,6 +38,8 @@ class CleanupTabMixin:
                       command=self._export_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Import Overrides JSON", width=180,
                       command=self._import_overrides).pack(side="left", padx=5)
+        ctk.CTkButton(top, text="Apply Overrides", width=140,
+                      command=self._apply_overrides_now).pack(side="left", padx=5)
         ctk.CTkButton(top, text="?", width=28, height=28,
                       font=ctk.CTkFont(size=14, weight="bold"),
                       fg_color="gray30", hover_color="gray40",
@@ -739,12 +741,15 @@ class CleanupTabMixin:
                     match_relative_path=t.relative_path,
                     match_mb_id=t.musicbrainz_recording_id,
                 )
+            from music_manager.core.overrides import apply_overrides
+            apply_overrides(self.active_library)
             messagebox.showinfo(
                 "Done",
-                f"Set composer to '{comp}' for {len(tracks)} track(s).\n"
-                f"Rescan or apply overrides to update.",
+                f"Set composer to '{comp}' for {len(tracks)} track(s).",
                 parent=popup)
+            self._invalidate_library_index()
             self._refresh_overrides_list()
+            _refresh_popup_tree()
 
         ctk.CTkButton(row_c, text="Set for Selected", width=130,
                       command=_set_composer).pack(side="left", padx=5)
@@ -858,10 +863,41 @@ class CleanupTabMixin:
                 )
             total += len(tracks)
 
+        # Apply at once. Storing the override and telling the user to
+        # rescan was a trap: a Quick scan that finds no file changes
+        # skipped applying overrides entirely, so the composer silently
+        # never appeared.
+        from music_manager.core.overrides import apply_overrides
+        apply_overrides(self.active_library)
+
         messagebox.showinfo("Done", f"Set composer to '{composer_name}' "
-                           f"for {total} tracks across {len(work_ids)} work(s). "
-                           f"Rescan or apply overrides to update.")
+                           f"for {total} tracks across {len(work_ids)} work(s).")
+        self._invalidate_library_index()
         self._refresh_cleanup()
+
+    def _apply_overrides_now(self):
+        """Re-apply every stored override to the scanned data.
+
+        Individual edits apply themselves, so this is a repair tool: use
+        it after importing an overrides JSON, or if scanned data has
+        drifted from the corrections.
+        """
+        if not self.active_library:
+            messagebox.showwarning("No Library", "Select a library first.")
+            return
+        from music_manager.core.overrides import apply_overrides
+        with self._busy():
+            counts = apply_overrides(self.active_library)
+        self._invalidate_library_index()
+        self._refresh_cleanup()
+        self._refresh_builder_tree()
+        messagebox.showinfo(
+            "Overrides Applied",
+            f"Applied {counts['tracks_updated']} track and "
+            f"{counts['albums_updated']} album override(s)."
+            + (f"\n{counts['skipped']} could not be matched to a track "
+               f"(the file may have been removed or renamed)."
+               if counts["skipped"] else ""))
 
     def _delete_override(self):
         """Delete the selected override."""

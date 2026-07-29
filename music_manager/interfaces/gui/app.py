@@ -1104,8 +1104,11 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         import_profile_name = None
         try:
             stats = scan_incremental(library, progress_callback=progress)
-            if stats.files_added or stats.files_updated or stats.files_removed:
-                apply_overrides(library)
+            # Unconditionally: overrides added since the last scan must
+            # take effect even when no FILES changed. The old condition
+            # meant a Quick scan on an unchanged library silently did
+            # nothing with them.
+            apply_overrides(library)
             msg = (f"Done: +{stats.files_added} added, "
                    f"~{stats.files_updated} updated, "
                    f"-{stats.files_removed} removed, "

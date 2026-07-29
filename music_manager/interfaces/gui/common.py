@@ -46,3 +46,16 @@ class _GUILogHandler(logging.Handler):
 
     def clear(self):
         self.buffer = io.StringIO()
+
+
+# ---------------------------------------------------------------------------
+# Tree scope filtering (v3.3)
+# ---------------------------------------------------------------------------
+# Shared by the Builder's Library pane and the Cleanup Works Browser, so
+# the two dropdowns always offer the same vocabulary.
+
+# "Entire library" rather than "All"/"Any profile": the latter read as
+# "tracks in at least one profile", which is the inverse of the
+# unassigned option sitting right below it.
+SCOPE_ALL = "Entire library"
+SCOPE_UNASSIGNED = "Unassigned (no profile)"

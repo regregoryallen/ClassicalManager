@@ -19,6 +19,7 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    SCOPE_ALL, SCOPE_UNASSIGNED,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,17 @@ class CleanupTabMixin:
                         variable=self.cleanup_hide_single,
                         command=self._refresh_works_list,
                         width=20).pack(side="right", padx=5)
+
+        # Scope filter, same vocabulary as the Builder's Library pane —
+        # the point is to review, say, an Imports profile for grouping
+        # problems without wading through the whole library.
+        self._cleanup_scope_var = tk.StringVar(value=SCOPE_ALL)
+        self.cleanup_scope_menu = ctk.CTkOptionMenu(
+            filter_frame, variable=self._cleanup_scope_var,
+            values=[SCOPE_ALL, SCOPE_UNASSIGNED], width=190,
+            command=lambda _v: self._refresh_works_list())
+        self.cleanup_scope_menu.pack(side="right", padx=5)
+        ctk.CTkLabel(filter_frame, text="Show:").pack(side="right", padx=(5, 0))
 
         _SOURCE_OPTIONS = ["All Works", "Heuristic", "Standalone",
                            "Override", "MB Work ID", "Work Tag"]
@@ -189,6 +201,7 @@ class CleanupTabMixin:
 
     def _refresh_cleanup(self):
         """Reload works list and overrides."""
+        self._refresh_scope_choices()
         self._refresh_works_list()
         self._refresh_overrides_list()
 
@@ -228,6 +241,7 @@ class CleanupTabMixin:
 
         search = self._cleanup_search_var.get().strip().lower()
         hide_single = self.cleanup_hide_single.get()
+        restrict = self._scope_track_ids(self._cleanup_scope_var.get())
 
         # Collect first, then order works by their first track's position
         # within each album. Ordering by work_name put an album's works in
@@ -241,6 +255,15 @@ class CleanupTabMixin:
                           .order_by(Track.disc_number, Track.track_number))
 
             if hide_single and len(tracks) <= 1:
+                continue
+
+            # A work qualifies when ANY of its tracks is in scope, and
+            # then shows ALL of them: you are judging whether the
+            # grouping is right, so hiding some of its tracks would
+            # misrepresent the work. (The Builder filters tracks too,
+            # because there you are picking them.)
+            if restrict is not None and not any(t.id in restrict
+                                                for t in tracks):
                 continue
 
             composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""

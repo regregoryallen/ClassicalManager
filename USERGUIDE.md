@@ -577,6 +577,13 @@ every title begins with the composer's name.
 
 ### Works Browser
 
+- **Show**: narrows the browser to a scope — the whole library, unassigned
+  tracks, or a single profile. Picking an *Imports* profile is the quickest way
+  to review just-added music for grouping problems. A work appears when *any* of
+  its tracks is in scope and then lists all of them: you are judging whether the
+  grouping is right, so the work's full contents matter (the Builder filters
+  individual tracks instead, because there you are picking them).
+
 The top section lists works with filtering and search controls:
 
 - **Source dropdown**: Filter by detection method — All Works, Heuristic, Standalone,

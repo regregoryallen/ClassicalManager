@@ -19,16 +19,10 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    SCOPE_ALL, SCOPE_UNASSIGNED,
 )
 
 logger = logging.getLogger(__name__)
-
-# Library-pane scope choices. "Entire library" is deliberate: "All" or
-# "Any profile" would be confusable with the unassigned option, which is
-# the inverse of "in some profile".
-SCOPE_ALL = "Entire library"
-SCOPE_UNASSIGNED = "Unassigned (no profile)"
-
 
 class BuilderTabMixin:
     # ------------------------------------------------------------------
@@ -133,15 +127,12 @@ class BuilderTabMixin:
         self._mark_builder_clean()
         return True
 
-    def _restrict_ids(self):
-        """Track ids the library pane is limited to, or None for all.
+    def _scope_track_ids(self, scope):
+        """Track ids a Show scope selects, or None for no restriction.
 
-        Drives the Show dropdown: the whole library, only unassigned
-        tracks (what the old Find Unused button surfaced, now
-        non-destructive), or the membership of a chosen profile.
+        Shared by the Builder's Library pane and the Cleanup Works
+        Browser so both dropdowns mean exactly the same thing.
         """
-        scope = (self._lib_scope_var.get()
-                 if hasattr(self, "_lib_scope_var") else SCOPE_ALL)
         if scope == SCOPE_ALL or not self.active_library:
             return None
 
@@ -158,14 +149,18 @@ class BuilderTabMixin:
             return None  # profile vanished (deleted/renamed) — show all
         return resolve_selections(profile).track_ids
 
-    def _refresh_scope_choices(self):
-        """Reload the Show dropdown: fixed scopes, then profiles.
+    def _restrict_ids(self):
+        """Track ids the Builder library pane is limited to."""
+        scope = (self._lib_scope_var.get()
+                 if hasattr(self, "_lib_scope_var") else SCOPE_ALL)
+        return self._scope_track_ids(scope)
+
+    def _scope_values(self):
+        """Show-dropdown vocabulary: fixed scopes, then profiles.
 
         User profiles come first, then import profiles (newest first) —
         imports accumulate, so they must not bury the playlists.
         """
-        if not hasattr(self, "lib_scope_menu"):
-            return
         values = [SCOPE_ALL, SCOPE_UNASSIGNED]
         if self.active_library:
             from music_manager.core.database import PlaylistProfile
@@ -178,9 +173,21 @@ class BuilderTabMixin:
             imports = sorted((p.name for p in profiles if p.auto_generated),
                              reverse=True)
             values += user + imports
-        self.lib_scope_menu.configure(values=values)
-        if self._lib_scope_var.get() not in values:
-            self._lib_scope_var.set(SCOPE_ALL)
+        return values
+
+    def _refresh_scope_choices(self):
+        """Reload every Show dropdown from the current profile list."""
+        values = self._scope_values()
+        for menu_attr, var_attr in (("lib_scope_menu", "_lib_scope_var"),
+                                    ("cleanup_scope_menu",
+                                     "_cleanup_scope_var")):
+            menu = getattr(self, menu_attr, None)
+            var = getattr(self, var_attr, None)
+            if menu is None or var is None:
+                continue
+            menu.configure(values=values)
+            if var.get() not in values:
+                var.set(SCOPE_ALL)
 
     def _on_scope_changed(self):
         """Re-render the library pane for the newly chosen scope."""

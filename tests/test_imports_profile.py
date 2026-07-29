@@ -214,3 +214,59 @@ def test_naive_timestamps_are_left_alone(lib):
     naive = datetime(2026, 7, 28, 14, 30)
     profile = create_import_profile(lib, ["A/Alb1/01.flac"], when=naive)
     assert profile.name == "Imports 2026-07-28 14:30"
+
+
+# ---------------------------------------------------------------------------
+# Shared scope vocabulary (Builder library pane + Cleanup works browser)
+# ---------------------------------------------------------------------------
+
+class _ScopeApp:
+    """Minimal stand-in exercising the shared scope helpers."""
+
+    from music_manager.interfaces.gui.builder_tab import BuilderTabMixin
+    _scope_track_ids = BuilderTabMixin._scope_track_ids
+    _scope_values = BuilderTabMixin._scope_values
+
+    def __init__(self, library):
+        self.active_library = library
+
+
+def test_scope_track_ids_for_each_kind(lib):
+    from music_manager.interfaces.gui.common import (
+        SCOPE_ALL, SCOPE_UNASSIGNED,
+    )
+    album = make_album(lib, "A/Alb1", [("Work One", 3)])
+    app = _ScopeApp(lib)
+
+    assert app._scope_track_ids(SCOPE_ALL) is None
+
+    p = make_profile(lib, name="Morning Mix")
+    add_sel(p, "track", "A/Alb1/02.flac")
+    assert len(app._scope_track_ids("Morning Mix")) == 1
+    assert len(app._scope_track_ids(SCOPE_UNASSIGNED)) == 2
+
+    # A deleted/renamed profile must not blank the pane.
+    assert app._scope_track_ids("No Such Profile") is None
+
+
+def test_scope_values_put_imports_after_playlists(lib):
+    from music_manager.interfaces.gui.common import (
+        SCOPE_ALL, SCOPE_UNASSIGNED,
+    )
+    from datetime import datetime
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    make_profile(lib, name="Zebra Mix")
+    make_profile(lib, name="alpha mix")
+    make_profile(lib, name="__autosave__")
+    create_import_profile(lib, ["A/Alb1/01.flac"],
+                          when=datetime(2026, 7, 27, 9, 0))
+    create_import_profile(lib, ["A/Alb1/02.flac"],
+                          when=datetime(2026, 7, 28, 9, 0))
+
+    values = _ScopeApp(lib)._scope_values()
+
+    assert values[0] == SCOPE_ALL and values[1] == SCOPE_UNASSIGNED
+    assert values[2:4] == ["alpha mix", "Zebra Mix"]      # case-insensitive
+    assert all(v.startswith("Imports ") for v in values[4:])
+    assert values[4] > values[5], "newest import first"
+    assert "__autosave__" not in values

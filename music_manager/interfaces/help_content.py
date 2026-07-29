@@ -378,6 +378,11 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Works Browser")
     bullet("Works are listed in track order within each album")
+    bullet("Show \u2014 narrow to a scope: the whole library, unassigned "
+           "tracks, or one profile. Pick an Imports profile to review "
+           "just-added music for grouping problems. A work appears when "
+           "ANY of its tracks is in scope, and then shows all of them \u2014 "
+           "you are judging the grouping, so its full contents matter")
     bullet("Source dropdown \u2014 filter by: All Works, Heuristic, Standalone, Override, MB Work ID, Work Tag")
     bullet("Search field \u2014 live filtering by work name, album, or composer")
     bullet("Hide 1-track \u2014 hides standalone works (enabled by default)")

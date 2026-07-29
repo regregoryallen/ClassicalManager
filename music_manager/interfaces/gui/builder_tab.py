@@ -456,17 +456,17 @@ class BuilderTabMixin:
             side="left")
         ctk.CTkButton(lib_header, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_lib_tree, True)
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(lib_header, text="\u27f3", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=self._refresh_builder_tree,
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(lib_header, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_lib_tree, False)
                       ).pack(side="left")
         # Second header row: the three filters live together because they
@@ -477,7 +477,7 @@ class BuilderTabMixin:
         lib_filters.pack(fill="x", padx=5, pady=(0, 2))
 
         ctk.CTkLabel(lib_filters, text="Show:",
-                     text_color="gray70").pack(side="left", padx=(0, 3))
+                     text_color=("gray25", "gray70")).pack(side="left", padx=(0, 3))
         self._lib_scope_var = tk.StringVar(value=SCOPE_ALL)
         self.lib_scope_menu = ctk.CTkOptionMenu(
             lib_filters, variable=self._lib_scope_var,
@@ -490,7 +490,7 @@ class BuilderTabMixin:
         self._make_filter_entry(lib_filters, self._lib_filter_var).pack(
             side="right")
         ctk.CTkLabel(lib_filters, text="Filter:",
-                     text_color="gray70").pack(side="right", padx=(0, 3))
+                     text_color=("gray25", "gray70")).pack(side="right", padx=(0, 3))
 
         self.builder_hide_single = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(lib_filters, text="Hide 1-track",
@@ -559,12 +559,17 @@ class BuilderTabMixin:
             side="left")
         ctk.CTkButton(pl_header, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_pl_tree, True)
+                      ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(pl_header, text="\u27f3", width=24, height=24,
+                      fg_color="transparent", hover_color="gray40",
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
+                      command=self._refresh_builder_tree,
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(pl_header, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.builder_pl_tree, False)
                       ).pack(side="left")
         self._pl_filter_var = tk.StringVar()
@@ -572,7 +577,7 @@ class BuilderTabMixin:
         self._make_filter_entry(pl_header, self._pl_filter_var).pack(
             side="right")
         ctk.CTkLabel(pl_header, text="Filter:",
-                     text_color="gray70").pack(side="right", padx=(0, 3))
+                     text_color=("gray25", "gray70")).pack(side="right", padx=(0, 3))
 
         self._pl_hide_warning = ctk.CTkLabel(
             pl_header, text="  (filter may hide items)",

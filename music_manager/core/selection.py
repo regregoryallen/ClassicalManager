@@ -101,7 +101,12 @@ def create_import_profile(library, relative_paths, when=None):
     if not paths:
         return None
 
+    # Name in LOCAL time: the scan records first_seen in UTC (right for
+    # storage), but a profile called "Imports 19:42" when the user's
+    # clock says 14:42 is just confusing.
     when = when or datetime.now()
+    if when.tzinfo is not None:
+        when = when.astimezone()
     name = f"Imports {when:%Y-%m-%d %H:%M}"
     # Two scans within the same minute must not collide.
     base, suffix = name, 2

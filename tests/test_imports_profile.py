@@ -192,3 +192,25 @@ def test_restrict_composes_with_hide_single(lib):
                              restrict_ids=all_ids)
     (album_row,) = rows
     assert [w.text for w in album_row.children] == ["Big"]
+
+
+def test_import_profile_name_uses_local_time(lib):
+    """The scan records first_seen in UTC (right for storage), but the
+    profile NAME must read in the user's own clock."""
+    from datetime import datetime, timedelta, timezone
+
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    # A UTC instant that lands on a different hour (and date) locally.
+    utc_when = datetime(2026, 7, 28, 2, 30, tzinfo=timezone.utc)
+    profile = create_import_profile(lib, ["A/Alb1/01.flac"], when=utc_when)
+
+    expected = utc_when.astimezone().strftime("Imports %Y-%m-%d %H:%M")
+    assert profile.name == expected
+
+
+def test_naive_timestamps_are_left_alone(lib):
+    from datetime import datetime
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    naive = datetime(2026, 7, 28, 14, 30)
+    profile = create_import_profile(lib, ["A/Alb1/01.flac"], when=naive)
+    assert profile.name == "Imports 2026-07-28 14:30"

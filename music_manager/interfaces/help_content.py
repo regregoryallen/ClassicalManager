@@ -350,7 +350,34 @@ def build_help_content(text: tk.Text) -> None:
     heading("cleanup", "Cleanup / Overlay")
     body("Review, correct, and manage work groupings and metadata overrides.\n")
 
+    subheading("How Works Are Detected")
+    body(
+        "Tracks are grouped into works by the first rule that matches: a "
+        "manual override, a MusicBrainz work ID, a WORK tag, then the "
+        "title-prefix heuristic, and finally standalone (one track = one "
+        "work).\n"
+    )
+    bold("Why didn't my album group? ")
+    body(
+        "The title-prefix heuristic is deliberately conservative — a wrong "
+        "grouping is harder to spot than a missing one. It only groups "
+        "tracks when the shared title prefix is at least 5 characters AND "
+        "at least 3 words long, the tracks are adjacent by track number, "
+        "and either the prefix ends in a delimiter (\":\", \"-\") or both "
+        "remainders start with a movement marker (\"I.\", \"Allegro\", "
+        "\"No. 2\"...).\n"
+    )
+    body(
+        "So titles like \"Magnificat: Quia respexit\" do NOT group: the "
+        "shared prefix \"Magnificat:\" is only one word. Fix these here — "
+        "select the tracks and Set Work Name — rather than expecting the "
+        "scanner to catch them. Loosening the rule would risk merging "
+        "unrelated tracks on albums where every title starts with the "
+        "composer's name.\n"
+    )
+
     subheading("Works Browser")
+    bullet("Works are listed in track order within each album")
     bullet("Source dropdown \u2014 filter by: All Works, Heuristic, Standalone, Override, MB Work ID, Work Tag")
     bullet("Search field \u2014 live filtering by work name, album, or composer")
     bullet("Hide 1-track \u2014 hides standalone works (enabled by default)")

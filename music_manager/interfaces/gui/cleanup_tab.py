@@ -51,12 +51,12 @@ class CleanupTabMixin:
             side="left", padx=5)
         ctk.CTkButton(filter_frame, text="+", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.works_tree, True)
                       ).pack(side="left", padx=(6, 0))
         ctk.CTkButton(filter_frame, text="\u2013", width=24, height=24,
                       fg_color="transparent", hover_color="gray40",
-                      text_color="gray70", font=ctk.CTkFont(size=14),
+                      text_color=("gray25", "gray70"), font=ctk.CTkFont(size=14),
                       command=lambda: self._toggle_tree(self.works_tree, False)
                       ).pack(side="left")
 
@@ -224,11 +224,18 @@ class CleanupTabMixin:
         if source_label in source_map:
             query = query.where(Work.work_source == source_map[source_label])
 
-        query = query.order_by(Album.title, Work.work_name)
+        query = query.order_by(Album.title)
 
         search = self._cleanup_search_var.get().strip().lower()
         hide_single = self.cleanup_hide_single.get()
 
+        # Collect first, then order works by their first track's position
+        # within each album. Ordering by work_name put an album's works in
+        # alphabetical order, which reads as scrambled when you search for
+        # an album and expect to see it as it plays. (work_sequence is no
+        # help either — it follows detection order; see
+        # selection.works_in_track_order.)
+        entries = []
         for work in query:
             tracks = list(Track.select().where(Track.work == work)
                           .order_by(Track.disc_number, Track.track_number))
@@ -243,6 +250,14 @@ class CleanupTabMixin:
                 if search not in haystack:
                     continue
 
+            position = ((tracks[0].disc_number, tracks[0].track_number)
+                        if tracks else (10 ** 9, work.work_sequence or 0))
+            entries.append(((work.album.title or "").lower(), position,
+                            work, tracks, composer))
+
+        entries.sort(key=lambda e: (e[0], e[1]))
+
+        for _album_sort, _pos, work, tracks, composer in entries:
             work_iid = self.works_tree.insert(
                 "", "end", text=work.work_name,
                 values=(work.work_source, work.album.title, len(tracks), composer))

@@ -556,6 +556,25 @@ Delete Profile dialog accepts multiple selections.
 
 Review, correct, and manage work groupings and metadata overrides.
 
+### How Works Are Detected
+
+Tracks are grouped into works by the first rule that matches: a manual override,
+a MusicBrainz work ID, a WORK tag, then the title-prefix heuristic, and finally
+standalone (one track = one work).
+
+**Why didn't my album group?** The title-prefix heuristic is deliberately
+conservative — a wrong grouping is harder to notice than a missing one. It groups
+tracks only when the shared title prefix is **at least 5 characters and at least
+3 words**, the tracks are **adjacent by track number**, and either the prefix ends
+in a delimiter (`:`, `-`) or both remainders begin with a movement marker
+(`I.`, `Allegro`, `No. 2`…).
+
+So an album titled `Magnificat: Quia respexit`, `Magnificat: Et misericordia`… does
+*not* group: the shared prefix `Magnificat:` is a single word. Correct these here —
+select the tracks and **Set Work Name** — rather than expecting the scanner to
+catch them. Loosening the rule would risk merging unrelated tracks on albums where
+every title begins with the composer's name.
+
 ### Works Browser
 
 The top section lists works with filtering and search controls:

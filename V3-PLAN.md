@@ -281,6 +281,28 @@ avoiding profiles.
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
 
+- **Disc-spanning works — investigated 2026-07-29, NOT automated.** The
+  heuristic cannot group a work split across a disc boundary:
+  `_assign_by_heuristic` buckets `by_disc` first, and `_contiguous_runs`
+  requires the same disc, so each half becomes its own Work (often with
+  byte-identical names). A manual work_name override on all the tracks DOES
+  merge them — the override step has no disc or contiguity restriction —
+  followed by Regroup Works; verified by simulation.
+  A candidate auto-rule was evaluated against the full library: merge two
+  same-named works in one album when the second begins at **track 1 of the
+  immediately following disc**. Of 92 disc boundaries and 62 same-named
+  cross-disc pairs, that rule selects exactly the 4 genuine splits and
+  rejects all the false ones (Dowland's many "Galliard"s, a Simon &
+  Garfunkel box set repeating songs across discs). **Not built**: only 5
+  real cases exist in ~6,400 tracks, and the 5th (The Three Cornered Hat,
+  one ballet over three single-track discs with differing titles) is
+  invisible to the rule anyway — so the code path would add failure modes
+  while still leaving manual work. Revisit only if the pattern becomes
+  common. Note the deeper fix would be letting the prefix heuristic look
+  across disc boundaries when tracks are contiguous in album order, which
+  would catch the ballet too — a bigger change to a deliberately
+  conservative heuristic (see the 3-word guard the user chose to keep).
+
 - **Write overrides back to source file tags** (user, 2026-07-28). A way to
   push meaningful corrections — work name, composer, and similar — into the
   files themselves, so other tools (Plex, Picard, players) see them too.

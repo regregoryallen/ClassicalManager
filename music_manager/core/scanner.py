@@ -886,6 +886,13 @@ class ScanStats:
     tracks_no_duration: int = 0
     heuristic_works: int = 0
     analyses_preserved: int = 0  # similarity analyses carried across rescan
+    # Files seen during the walk whose extension is not in
+    # AUDIO_EXTENSIONS, counted per extension. Surfaced so an unreadable
+    # or unsupported format is visible instead of silently ignored.
+    skipped_extensions: dict = field(default_factory=dict)
+    # Tracks imported without a track number — a reliable sign the tags
+    # were not read properly (it broke work detection for .ape files).
+    tracks_no_track_number: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1189,8 +1196,14 @@ def scan_library(library: Library, progress_callback=None) -> ScanStats:
             logger.warning("Source folder does not exist: %s", root)
             continue
         for fpath in sorted(root.rglob("*")):
-            if fpath.is_file() and fpath.suffix.lower() in AUDIO_EXTENSIONS:
+            if not fpath.is_file():
+                continue
+            ext = fpath.suffix.lower()
+            if ext in AUDIO_EXTENSIONS:
                 all_files.append((sf, fpath))
+            else:
+                stats.skipped_extensions[ext] = (
+                    stats.skipped_extensions.get(ext, 0) + 1)
 
     stats.files_found = len(all_files)
     logger.info("Found %d audio files in %d source folders",
@@ -1274,6 +1287,8 @@ class IncrementalStats:
     files_removed: int = 0
     files_failed: list[str] = field(default_factory=list)
     albums_affected: int = 0
+    skipped_extensions: dict = field(default_factory=dict)
+    tracks_no_track_number: int = 0
     # Relative paths of tracks this scan added — drives the per-import
     # profile (v3.3). Paths rather than ids so the caller resolves them
     # after the scan's own transactions have settled.
@@ -1319,8 +1334,14 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             logger.warning("Source folder does not exist: %s", root)
             continue
         for fpath in sorted(root.rglob("*")):
-            if fpath.is_file() and fpath.suffix.lower() in AUDIO_EXTENSIONS:
+            if not fpath.is_file():
+                continue
+            ext = fpath.suffix.lower()
+            if ext in AUDIO_EXTENSIONS:
                 disk_files.append((sf, fpath))
+            else:
+                stats.skipped_extensions[ext] = (
+                    stats.skipped_extensions.get(ext, 0) + 1)
 
     stats.files_found = len(disk_files)
 
@@ -1410,6 +1431,8 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             old_track.file_size = f_size
             old_track.save()
             stats.files_updated += 1
+            if not raw.track_number:
+                stats.tracks_no_track_number += 1
         else:
             # Need to find or create the album
             album = Album.get_or_none(
@@ -1439,6 +1462,8 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             )
             stats.files_added += 1
             stats.added_paths.append(rel_path)
+            if not raw.track_number:
+                stats.tracks_no_track_number += 1
 
     # Delete removed tracks and clean up orphan works/albums
     with database.atomic():
@@ -1622,6 +1647,8 @@ def _process_album_group(
             stats.tracks_no_composer += 1
         if raw.duration_ms == 0:
             stats.tracks_no_duration += 1
+        if not raw.track_number:
+            stats.tracks_no_track_number += 1
 
         pt = PendingTrack(db_track=track, tags=raw)
         # Check for work_name override (drives grouping)

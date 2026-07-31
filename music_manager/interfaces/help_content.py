@@ -154,6 +154,15 @@ def build_help_content(text: tk.Text) -> None:
         "rebuild has run, because it needs stored file timestamps. Either "
         "mode can be cancelled while running.\n"
     )
+    body(
+        "Every scan ends with a Scan Report: what was imported, plus a "
+        "\"Needs attention\" section listing only real problems \u2014 files "
+        "that could not be read, tracks imported with no track number "
+        "(a sign their tags were not readable, which also stops works "
+        "grouping), tracks lacking a composer, and works detected by "
+        "heuristic. It also lists non-audio files it skipped, by "
+        "extension. Copy report puts the whole thing on the clipboard.\n"
+    )
     bold("Regroup Works")
     body(
         " \u2014 re-runs work detection from stored tag data and "

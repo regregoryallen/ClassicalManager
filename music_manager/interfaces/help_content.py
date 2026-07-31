@@ -92,7 +92,8 @@ def build_help_content(text: tk.Text) -> None:
     subheading("3. Scan the Library")
     body("Click Scan Library... and choose Full rebuild (the only option "
          "for a new library). The scanner will:\n")
-    bullet("Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, etc.)")
+    bullet("Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, "
+           "WAV, WMA, Monkey's Audio .ape, WavPack .wv, etc.)")
     bullet("Extract metadata: title, artist, album, composer, genre, conductor, ensemble")
     bullet("Read MusicBrainz identifiers if present")
     bullet("Group tracks into albums (one album per folder)")

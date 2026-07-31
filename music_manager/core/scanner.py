@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import mutagen
+from mutagen.apev2 import APEv2
 from mutagen.id3 import ID3
 from mutagen.mp4 import MP4
 from mutagen.oggvorbis import OggVorbis
@@ -139,6 +140,9 @@ def extract_tags(filepath: Path) -> RawTags | None:
         _extract_mp4(audio.tags or {}, tags)
     elif isinstance(audio, (OggVorbis, FLAC)):
         _extract_vorbis(audio.tags or {}, tags)
+    elif isinstance(getattr(audio, "tags", None), APEv2):
+        # Monkey's Audio (.ape) and WavPack (.wv)
+        _extract_ape(audio.tags, tags)
     else:
         # Try easy interface as fallback
         try:
@@ -330,6 +334,65 @@ def _extract_vorbis(vorbis_tags: dict, tags: RawTags) -> None:
     tags.movement_name = get("MOVEMENTNAME")
     tags.movement_number = _parse_int(get("MOVEMENT"))
     tags.movement_total = _parse_int(get("MOVEMENTTOTAL"))
+
+
+def _extract_ape(ape_tags, tags: RawTags) -> None:
+    """Extract tags from APEv2 (Monkey's Audio .ape, WavPack .wv).
+
+    Without this these formats fell through to the "easy" fallback,
+    which probes Vorbis-style key names. APEv2 uses different ones —
+    `Track` not `tracknumber`, `Disc` not `discnumber` — so titles came
+    through (the names happen to coincide) while track and disc numbers
+    silently became 0/1 and MusicBrainz IDs were dropped entirely.
+
+    mutagen's APEv2 mapping is case-insensitive, so lowercase probes
+    match Picard's mixed-case keys.
+    """
+    def get(key: str) -> str:
+        val = ape_tags.get(key)
+        if val is None:
+            return ""
+        # Whitespace-only values are common filler in APE tags.
+        return str(val).strip()
+
+    tags.title = get("title")
+    tags.artist = get("artist")
+    tags.album_artist = get("album artist") or get("albumartist")
+    tags.album = get("album")
+    tags.composer = get("composer")
+    tags.genre = get("genre")
+    tags.conductor = get("conductor")
+    tags.ensemble = get("ensemble") or get("orchestra")
+
+    year_str = get("year") or get("date") or get("originalyear")
+    if year_str:
+        try:
+            tags.year = int(str(year_str)[:4])
+        except ValueError:
+            pass
+
+    tags.track_number = _parse_int(get("track"), 0)
+
+    dn_str = get("disc")
+    if dn_str:
+        dn = _parse_int(dn_str)
+        if dn is not None:
+            tags.disc_number = dn
+            tags.disc_from_tag = True
+        if "/" in dn_str:
+            tags.disc_total = _parse_int(dn_str.split("/", 1)[1])
+
+    # Picard writes the recording id as musicbrainz_trackid here, the
+    # same convention the Vorbis reader assumes.
+    tags.mb_album_id = get("musicbrainz_albumid")
+    tags.mb_recording_id = (get("musicbrainz_trackid")
+                            or get("musicbrainz_recordingid"))
+    tags.mb_work_id = get("musicbrainz_workid")
+
+    tags.work = get("work")
+    tags.movement_name = get("movementname")
+    tags.movement_number = _parse_int(get("movement"))
+    tags.movement_total = _parse_int(get("movementtotal"))
 
 
 def _extract_easy(easy_tags: dict, tags: RawTags) -> None:

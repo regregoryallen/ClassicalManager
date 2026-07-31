@@ -176,7 +176,8 @@ under these folders will be discovered during scanning.
 Click **Scan Library...** and choose **Full rebuild** (the only option for a
 brand-new library). The scanner will:
 
-- Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC, etc.)
+- Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC,
+  Monkey's Audio `.ape`, WavPack `.wv`, etc.)
 - Extract metadata: title, artist, album, composer, genre, conductor, ensemble,
   track/disc numbers, duration
 - Read MusicBrainz identifiers if present

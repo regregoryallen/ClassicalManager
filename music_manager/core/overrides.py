@@ -85,10 +85,12 @@ def set_override(
     if existing:
         existing.value = value
         existing.updated_at = now
-        # Update match keys if we now have both
-        if match_mb_id and not existing.match_mb_id:
+        # Refresh the match keys. _find_existing_override only returns a row
+        # for this same file, or an orphaned one being carried across a
+        # rename — in which case the stale path must be brought up to date.
+        if match_mb_id:
             existing.match_mb_id = match_mb_id
-        if match_relative_path and not existing.match_relative_path:
+        if match_relative_path:
             existing.match_relative_path = match_relative_path
         existing.save()
         logger.info("Updated override: %s.%s = %r", scope, field, value)
@@ -111,28 +113,57 @@ def _find_existing_override(
     library: Library, scope: str, field: str,
     match_mb_id: str | None, match_relative_path: str | None,
 ) -> Override | None:
-    """Find an existing override matching the given keys."""
+    """Find the existing override for the SAME FILE, if any.
+
+    An override identifies one file. The relative path is the primary key
+    for that: a MusicBrainz recording ID does NOT identify a file, because
+    the same recording is reused across compilations and reissues (common
+    in classical). Matching on the MB ID alone made a correction aimed at
+    one file silently retarget the row belonging to a different album's
+    copy of that recording.
+
+    The MB ID is still what carries a correction across a rename, so it is
+    used as a fallback — but only for a row whose own path has gone away,
+    which is what a rename looks like. A row whose path still resolves to
+    a file in the library belongs to that file, not to this one.
+    """
     query = Override.select().where(
         (Override.library == library) &
         (Override.scope == scope) &
         (Override.field == field)
     )
 
-    # Match by MB ID first
-    if match_mb_id:
-        try:
-            return query.where(Override.match_mb_id == match_mb_id).get()
-        except Override.DoesNotExist:
-            pass
-
-    # Then by relative path
+    # Same file, by path.
     if match_relative_path:
-        try:
-            return query.where(
-                Override.match_relative_path == match_relative_path
-            ).get()
-        except Override.DoesNotExist:
-            pass
+        existing = query.where(
+            Override.match_relative_path == match_relative_path
+        ).first()
+        if existing:
+            return existing
+
+    if not match_mb_id:
+        return None
+
+    candidates = list(query.where(Override.match_mb_id == match_mb_id))
+    if not candidates:
+        return None
+
+    # No path to go on: the MB ID is all we have.
+    if not match_relative_path:
+        return candidates[0]
+
+    # Same recording, different (or absent) path. Adopt the row only if it
+    # is orphaned — its file is no longer in the library, i.e. a rename.
+    # Otherwise this is a second copy of the recording and needs its own row.
+    for existing in candidates:
+        if not existing.match_relative_path:
+            return existing
+        still_present = Track.select().where(
+            (Track.library == library) &
+            (Track.relative_path == existing.match_relative_path)
+        ).exists()
+        if not still_present:
+            return existing
 
     return None
 
@@ -253,24 +284,35 @@ def _apply_album_override(library: Library, ov: Override) -> bool:
 
 def _match_track(library: Library, mb_id: str | None,
                  rel_path: str | None) -> Track | None:
-    """Match a track by MB recording ID first, then relative path."""
-    if mb_id:
-        try:
-            return Track.get(
-                (Track.library == library) &
-                (Track.musicbrainz_recording_id == mb_id)
-            )
-        except Track.DoesNotExist:
-            pass
+    """Match the one file this override belongs to.
 
+    Path first: it identifies a file, whereas an MB recording ID identifies
+    a performance that may sit on several albums. Falling back to the MB ID
+    is what carries an override across a rename, but if it matches more than
+    one track there is no basis for choosing between them — applying to an
+    arbitrary one would silently edit an album the user never touched, so
+    the override is skipped instead.
+    """
     if rel_path:
-        try:
-            return Track.get(
-                (Track.library == library) &
-                (Track.relative_path == rel_path)
-            )
-        except Track.DoesNotExist:
-            pass
+        track = Track.get_or_none(
+            (Track.library == library) &
+            (Track.relative_path == rel_path)
+        )
+        if track is not None:
+            return track
+
+    if mb_id:
+        matches = list(Track.select().where(
+            (Track.library == library) &
+            (Track.musicbrainz_recording_id == mb_id)
+        ).limit(2))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            logger.warning(
+                "Override matches %d tracks by recording ID %s and its path "
+                "%r is not in the library; skipping rather than guessing.",
+                len(matches), mb_id, rel_path)
 
     return None
 

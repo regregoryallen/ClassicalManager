@@ -140,6 +140,14 @@ class CleanupTabMixin:
         ctk.CTkLabel(row_e1, text="Work Name:").pack(side="left", padx=5)
         self.edit_work_name = ctk.CTkEntry(row_e1, width=300)
         self.edit_work_name.pack(side="left", padx=5)
+        # These hold a current value the user means to replace: select it
+        # on focus so typing overwrites, and let Return submit instead of
+        # forcing a trip to the mouse.
+        self._select_on_focus(self.edit_work_name)
+        self.edit_work_name.bind(
+            "<Return>", lambda _e: self._set_work_name_override())
+        self.edit_work_name.bind(
+            "<KP_Enter>", lambda _e: self._set_work_name_override())
         ctk.CTkButton(row_e1, text="Set Work Name", width=120,
                       command=self._set_work_name_override).pack(side="left", padx=5)
 
@@ -153,6 +161,11 @@ class CleanupTabMixin:
         ctk.CTkLabel(row_e3, text="Composer:").pack(side="left", padx=5)
         self.edit_composer = ctk.CTkEntry(row_e3, width=300)
         self.edit_composer.pack(side="left", padx=5)
+        self._select_on_focus(self.edit_composer)
+        self.edit_composer.bind(
+            "<Return>", lambda _e: self._set_composer_override())
+        self.edit_composer.bind(
+            "<KP_Enter>", lambda _e: self._set_composer_override())
         ctk.CTkButton(row_e3, text="Set Composer", width=120,
                       command=self._set_composer_override).pack(side="left", padx=5)
 

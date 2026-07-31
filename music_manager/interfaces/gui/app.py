@@ -561,6 +561,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         bind_class covers all current and future Entry widgets; CTkEntry
         wraps a plain tk.Entry, so the "TEntry"/"Entry" classes apply.
         """
+        # Tk already ships a working select-all for Entry, but binds it to
+        # the virtual event <<SelectAll>> which on X11 maps to Ctrl+/ —
+        # not Ctrl+A. Teaching the virtual event the expected keys is the
+        # supported route and covers Text widgets too.
+        for seq in ("<Control-a>", "<Control-A>",
+                    "<Command-a>", "<Command-A>"):
+            try:
+                self.root.event_add("<<SelectAll>>", seq)
+            except tk.TclError:
+                pass  # already mapped (e.g. Ctrl+/ on some platforms)
+
+        # Belt and braces: an explicit class binding, in case a platform
+        # or theme does not route the virtual event.
         def select_all(event):
             w = event.widget
             try:
@@ -575,6 +588,24 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.root.bind_class(cls, "<Control-A>", select_all)
             self.root.bind_class(cls, "<Command-a>", select_all)
             self.root.bind_class(cls, "<Command-A>", select_all)
+
+    @staticmethod
+    def _select_on_focus(entry):
+        """Select an entry's contents when it gains focus.
+
+        For fields that hold a current value to be replaced (work name,
+        composer), clicking or tabbing in and typing should overwrite —
+        without needing a keyboard shortcut at all.
+        """
+        def on_focus(event):
+            w = event.widget
+            try:
+                w.select_range(0, "end")
+                w.icursor("end")
+            except tk.TclError:
+                pass
+        # CTkEntry proxies bind() to its internal tk.Entry.
+        entry.bind("<FocusIn>", on_focus)
 
     def _make_filter_entry(self, parent, textvar, *, placeholder="Filter...",
                            width=150):

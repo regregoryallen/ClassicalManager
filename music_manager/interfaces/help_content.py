@@ -413,6 +413,9 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Search field \u2014 live filtering by work name, album, or composer")
     bullet("Hide 1-track \u2014 hides standalone works (off by default)")
     bullet("Multi-select with Ctrl+click or Shift+click")
+    bullet("Work Name / Composer fields: clicking or tabbing in selects the "
+           "current value, so typing replaces it; press Return to apply "
+           "without reaching for the button")
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open track in default player")

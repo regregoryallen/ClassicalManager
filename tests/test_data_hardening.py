@@ -193,8 +193,7 @@ def test_resnapshot_updates_rows_without_losing_leftovers(lib):
 # ---------------------------------------------------------------------------
 
 def test_fresh_database_gets_both_indexes(db):
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "idx_tracks_library_relpath" in names
     assert "uq_tracks_folder_relpath" in names
 
@@ -228,15 +227,13 @@ def test_duplicates_are_a_hard_stop_D3(lib, db):
     assert "A/Alb1/01.flac" in str(exc_info.value)
 
     # No unique index was sneaked in alongside the failure.
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "uq_tracks_folder_relpath" not in names
 
     # After the user fixes the duplicate, startup succeeds.
     Track.delete().where(Track.title == "dup").execute()
     _ensure_track_indexes()
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "uq_tracks_folder_relpath" in names
 
 

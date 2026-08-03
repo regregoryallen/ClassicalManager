@@ -40,23 +40,37 @@ def _setup_logging(verbose: bool = False) -> None:
 def _init_database():
     """Initialize the database, with a clear error if it fails."""
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import get_db_path, ConfigError
+    from music_manager.core.config import resolve_db_settings, ConfigError
     try:
-        db_path = get_db_path()
+        settings = resolve_db_settings()
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
     try:
-        initialize_database(db_path)
+        initialize_database(settings=settings)
     except Exception as exc:
-        typer.echo(f"Error: cannot open database: {db_path}", err=True)
+        typer.echo(f"Error: cannot open database: {settings.describe()}", err=True)
         typer.echo(f"  {exc}", err=True)
         typer.echo("", err=True)
         typer.echo("Possible causes:", err=True)
-        typer.echo("  - The app is open on another machine (database locked)", err=True)
-        typer.echo("  - The network share or drive is not mounted", err=True)
-        typer.echo("  - The db_path in config.json is incorrect", err=True)
+        for cause in _db_failure_causes(settings.backend):
+            typer.echo(f"  - {cause}", err=True)
         raise typer.Exit(1)
+
+
+def _db_failure_causes(backend: str) -> list[str]:
+    """Plausible reasons a connection failed, per backend."""
+    if backend == "mysql":
+        return [
+            "The database server is unreachable (host, port, or firewall)",
+            "The user, password, or database name in config.json is wrong",
+            "The user is not granted access from this machine's address",
+        ]
+    return [
+        "The app is open on another machine (database locked)",
+        "The network share or drive is not mounted",
+        "The db_path in config.json is incorrect",
+    ]
 
 
 def _get_library(name: str):

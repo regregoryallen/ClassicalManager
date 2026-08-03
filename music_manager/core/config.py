@@ -8,10 +8,16 @@ target/connection settings (§12).
 
 import json
 import logging
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+VALID_BACKENDS = ("sqlite", "mysql")
+DEFAULT_DB_PORT = 3306
+DEFAULT_DB_CHARSET = "utf8mb4"
 
 # Resolve project root (two levels up from this file)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -93,6 +99,111 @@ def get_db_path() -> Path:
     return DATABASE_PATH
 
 
+@dataclass(frozen=True)
+class DbSettings:
+    """Where the database lives, resolved from config plus environment.
+
+    One object covers both backends so callers never branch on the backend
+    to work out what to connect to.
+    """
+
+    backend: str
+    path: Path | None = None          # sqlite only
+    host: str = ""                    # mysql only, below
+    port: int = DEFAULT_DB_PORT
+    name: str = ""
+    user: str = ""
+    password: str = ""
+    charset: str = DEFAULT_DB_CHARSET
+
+    def describe(self) -> str:
+        """A description safe to log or show in an error — no password."""
+        if self.backend == "sqlite":
+            return str(self.path)
+        return f"mysql://{self.user}@{self.host}:{self.port}/{self.name}"
+
+
+def resolve_db_settings(config: dict[str, Any] | None = None) -> DbSettings:
+    """Work out which database to use.
+
+    A missing or unreadable config falls back to the default SQLite file,
+    matching get_db_path() — the app has always started without a config.
+    An explicit config path override still raises, so a deliberate override
+    that is wrong is not silently ignored.
+    """
+    from music_manager.core.database import DATABASE_PATH
+
+    if config is None:
+        try:
+            config = load_config()
+        except ConfigError:
+            if _config_path_override is not None:
+                raise
+            return DbSettings(backend="sqlite", path=DATABASE_PATH)
+
+    db = config.get("database")
+    if not isinstance(db, dict) or db.get("backend", "sqlite") == "sqlite":
+        configured = (db or {}).get("path") or config.get("db_path")
+        return DbSettings(backend="sqlite",
+                          path=Path(configured) if configured else DATABASE_PATH)
+
+    # The password may live in the environment instead of the file, so a
+    # shared or backed-up config need not carry the credential.
+    password = db.get("password", "")
+    env_name = db.get("password_env")
+    if env_name:
+        from_env = os.environ.get(env_name)
+        if from_env:
+            password = from_env
+        elif not password:
+            raise ConfigError(
+                f"database.password_env names {env_name!r} but that variable "
+                f"is not set, and no 'database.password' was given.")
+
+    return DbSettings(
+        backend="mysql",
+        host=db.get("host", "localhost"),
+        port=db.get("port", DEFAULT_DB_PORT),
+        name=db["name"],
+        user=db.get("user", ""),
+        password=password,
+        charset=db.get("charset", DEFAULT_DB_CHARSET),
+    )
+
+
+def _validate_database(db: dict, path: Path) -> None:
+    """Validate the optional database section."""
+    if not isinstance(db, dict):
+        raise ConfigError(f"{path}: 'database' must be a JSON object")
+
+    backend = db.get("backend", "sqlite")
+    if backend not in VALID_BACKENDS:
+        raise ConfigError(
+            f"{path}: 'database.backend' must be one of {VALID_BACKENDS}, "
+            f"got {backend!r}")
+
+    if backend == "sqlite":
+        if "path" in db and not isinstance(db["path"], str):
+            raise ConfigError(f"{path}: 'database.path' must be a string")
+        return
+
+    if "name" not in db:
+        raise ConfigError(
+            f"{path}: 'database.name' is required when backend is 'mysql'")
+    for key in ("host", "name", "user", "password", "password_env", "charset"):
+        if key in db and not isinstance(db[key], str):
+            raise ConfigError(f"{path}: 'database.{key}' must be a string")
+    if "port" in db:
+        port = db["port"]
+        if not isinstance(port, int) or port < 1 or port > 65535:
+            raise ConfigError(
+                f"{path}: 'database.port' must be an integer 1-65535, "
+                f"got {port!r}")
+    if "password" not in db and "password_env" not in db:
+        raise ConfigError(
+            f"{path}: 'database' requires either 'password' or 'password_env'")
+
+
 def _validate(config: dict[str, Any], path: Path) -> None:
     """Validate the structure and values of the loaded config.
 
@@ -125,6 +236,10 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     # -- targets.m3u ----------------------------------------------------------
     if "m3u" in targets:
         _validate_m3u(targets["m3u"], path)
+
+    # -- database (optional; absent means SQLite at db_path) ------------------
+    if "database" in config:
+        _validate_database(config["database"], path)
 
     # -- cron (optional) ------------------------------------------------------
     if "cron" in config:

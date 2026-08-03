@@ -235,6 +235,76 @@
   settled it was replaying the exact loop against a copy of the production
   database and logging each call's create-vs-update outcome.*
 
+## v3.5 — MySQL/MariaDB backend (branch `v3.5-dev`, started 2026-08-03)
+
+Server: MariaDB 10.6.7 at `mariadb.lan` (10.10.0.130). Database
+`classical_manager`, charset utf8mb4, **collation utf8mb4_bin**, user
+`cmanager`@`%`. The box also hosts the user's Kodi databases — all changes
+stay additive. Driver: `PyMySQL==1.2.0`.
+
+**Facts established by testing the server, not by assumption:**
+
+- The server default `utf8mb4_general_ci` is case- AND accent-insensitive:
+  `Bach`=`bach` *and* `Dvořák`=`Dvorak` both compare equal (so does
+  `utf8mb4_unicode_ci`). That would merge distinct composers under the
+  unique index on `composers(library, norm_key)`. MariaDB 10.6 offers only
+  `utf8mb4_bin`/`utf8mb4_nopad_bin` as non-`ci` options, so utf8mb4_bin it
+  is — which also matches SQLite's binary comparison. Measured on the real
+  library: 0 case collisions, 0 accent collisions today, so migrating now
+  is safe; the divergence would appear later.
+- **The client connects as latin1 by default.** `charset="utf8mb4"` must be
+  passed explicitly or accented names corrupt on write. ASCII test data
+  hides this.
+- **Index width: cap indexed text at VARCHAR(512).** InnoDB's 3072-byte key
+  limit is real — a non-unique index on `(INT, VARCHAR(768))` fails with
+  error 1071. UNIQUE indexes appear to escape it only because MariaDB 10.4+
+  silently rewrites over-long unique keys as `USING HASH`; verified in the
+  generated DDL, where `composers` came out
+  `UNIQUE KEY (...) USING HASH` over a `text` column. That is MariaDB-only
+  (MySQL 8 errors) and a hash index cannot serve ordered or prefix scans.
+  512 keeps every index a real B-tree and stays MySQL-portable. Longest
+  observed `relative_path`: 300 chars (p99 232).
+
+**Export/import does NOT cover migration** (audited 2026-08-03).
+`export_library` omits: all `TrackAnalysis` (6,373 rows, ~4 MB — the
+expensive librosa work), `Track.file_mtime`/`file_size` (so the next scan
+re-reads everything), `genre`/`performer`/`conductor`/`ensemble`,
+`disc_total`, `work_tag`, `mb_work_id`, `first_seen`,
+`PlaylistProfile.auto_generated`, and `Override.updated_at`. It also
+assigns every imported album to the *first* source folder — a latent bug
+for multi-folder libraries. Hence migration is a direct row copy (Phase 3),
+not a JSON round trip; the JSON export stays a portable curation backup.
+
+- [x] **Phase 1 — Backend abstraction** — done 2026-08-03 (212 tests green).
+  `pw.DatabaseProxy()` replaces the module-level `SqliteDatabase(None)`;
+  `_make_database()` builds SQLite (with the WAL/FK pragmas) or MySQL (with
+  the mandatory charset). `initialize_database(db_path=None, settings=None)`
+  keeps the old path-based calls working for tests and the GUI's
+  fall-back-to-local. New `config.DbSettings` + `resolve_db_settings()`;
+  optional `database` config section, absent = SQLite as before;
+  `password_env` beats `password` so a shared config need not carry the
+  credential; `describe()` never includes the password. Migrator chosen per
+  backend. `PRAGMA index_list` replaced with portable `get_indexes()` (also
+  in the tests), and `CREATE INDEX IF NOT EXISTS` dropped since MySQL
+  rejects it. CLI and GUI connection-failure hints are now backend-aware.
+  Verified against the live server: config → connection → DDL, failing only
+  at `_ensure_track_indexes`' non-unique index on a `text` column — exactly
+  Phase 2's scope.
+- [ ] **Phase 2 — Schema portability.** Indexed `TextField`s → `CharField`
+  (512; `norm_key` 255). `ProfileSelection.track_paths` stays TEXT — 6,040
+  chars observed, not indexed. Add a scanner hard stop for paths over the
+  cap, in the spirit of D3: silent truncation would corrupt track identity.
+  Assert the created DDL contains no `USING HASH` — that is the signal a
+  limit was exceeded.
+- [ ] **Phase 3 — Migration command.** Direct table-by-table copy in FK
+  order, preserving primary keys, batched under the server's 16 MB
+  `max_allowed_packet`, with a dry run and a verification pass reporting
+  per-table row counts and checksums. Must carry `TrackAnalysis`.
+- [ ] **Phase 4 — Close the export/import gaps** listed above. Independent
+  value: it fixes the backup, not just migration.
+- [ ] **Phase 5 — Test matrix.** Run the suite against both backends,
+  skipping MariaDB when the server is unreachable.
+
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 
 Two features that are really one capability seen from two angles: knowing

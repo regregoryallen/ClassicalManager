@@ -23,7 +23,27 @@ logger = logging.getLogger(__name__)
 
 DATABASE_PATH = PROJECT_ROOT / "music_manager.db"
 
-database = pw.SqliteDatabase(None)
+# A proxy, so the concrete backend (SQLite file or MySQL/MariaDB server) can
+# be chosen at startup while the models below stay bound to one object.
+database = pw.DatabaseProxy()
+
+
+def _make_database(settings) -> pw.Database:
+    """Build the concrete peewee database for the resolved settings."""
+    if settings.backend == "mysql":
+        return pw.MySQLDatabase(
+            settings.name,
+            host=settings.host, port=settings.port,
+            user=settings.user, password=settings.password,
+            # The server hands out latin1 connections by default; without
+            # this, accented composer names are corrupted on write.
+            charset=settings.charset,
+        )
+    # SQLite only: WAL for concurrent readers, and FKs are off by default.
+    return pw.SqliteDatabase(str(settings.path), pragmas={
+        "journal_mode": "wal",
+        "foreign_keys": 1,
+    })
 
 
 class DuplicateTracksError(Exception):
@@ -51,15 +71,16 @@ def _ensure_track_indexes() -> None:
       Duplicates are a hard stop (D3): raise with the offending rows so
       the user can fix the underlying files/DB and restart.
     """
-    database.execute_sql(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_library_relpath "
-        "ON tracks (library_id, relative_path)"
-    )
+    # get_indexes() works on every backend; PRAGMA index_list does not, and
+    # CREATE INDEX IF NOT EXISTS is not portable either (MySQL rejects it).
+    index_names = {ix.name for ix in database.get_indexes("tracks")}
 
-    index_names = {
-        row[1] for row in
-        database.execute_sql("PRAGMA index_list('tracks')").fetchall()
-    }
+    if "idx_tracks_library_relpath" not in index_names:
+        database.execute_sql(
+            "CREATE INDEX idx_tracks_library_relpath "
+            "ON tracks (library_id, relative_path)"
+        )
+
     if "uq_tracks_folder_relpath" in index_names:
         return  # uniqueness already enforced; no duplicates possible
 
@@ -87,23 +108,28 @@ def _ensure_track_indexes() -> None:
     logger.info("Created unique index on tracks (folder_id, relative_path)")
 
 
-def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
+def initialize_database(db_path: Path | None = None,
+                        settings=None) -> pw.Database:
     """Initialize the database connection and create tables.
 
     Args:
-        db_path: Optional override for the database file location.
-                 Defaults to <project_root>/music_manager.db.
+        db_path: A SQLite file to use, bypassing config entirely. Tests and
+                 the GUI's fall-back-to-local path rely on this.
+        settings: A resolved config.DbSettings. Takes precedence over
+                 db_path; when both are omitted, config decides.
 
     Returns:
-        The initialized SqliteDatabase instance.
+        The connected peewee database.
     """
-    path = db_path or DATABASE_PATH
-    database.init(str(path), pragmas={
-        "journal_mode": "wal",
-        "foreign_keys": 1,
-    })
-    database.connect()
-    logger.info("Database connected: %s", path)
+    from music_manager.core.config import DbSettings, resolve_db_settings
+
+    if settings is None:
+        settings = (DbSettings(backend="sqlite", path=Path(db_path))
+                    if db_path is not None else resolve_db_settings())
+
+    database.initialize(_make_database(settings))
+    database.connect(reuse_if_open=True)
+    logger.info("Database connected: %s", settings.describe())
 
     database.create_tables([
         Library,
@@ -121,8 +147,10 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
     # IMPORTANT: always use null=True in migration field definitions — Peewee's
     # SqliteMigrator adds a NOT NULL constraint via _update_column, which drops
     # and recreates the table, triggering ON DELETE CASCADE on related tables.
-    from playhouse.migrate import SqliteMigrator, migrate as run_migrate
-    migrator = SqliteMigrator(database)
+    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
+                                   migrate as run_migrate)
+    migrator = (MySQLMigrator(database) if settings.backend == "mysql"
+                else SqliteMigrator(database))
     columns = {col.name for col in database.get_columns("libraries")}
     if "plex_section" not in columns:
         run_migrate(migrator.add_column("libraries", "plex_section",

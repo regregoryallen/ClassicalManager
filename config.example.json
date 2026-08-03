@@ -2,6 +2,23 @@
   "active_library": 1,
   "db_path": "",
   "autosave_interval": 60,
+  "_database_comment": [
+    "Optional. Omit this section entirely to use SQLite at db_path.",
+    "For MySQL/MariaDB, set backend to 'mysql' and fill in the rest.",
+    "Use either 'password' or 'password_env' (an environment variable",
+    "name); password_env wins when the variable is set, so a shared or",
+    "backed-up config need not carry the credential."
+  ],
+  "database": {
+    "backend": "sqlite",
+    "host": "your-db-server",
+    "port": 3306,
+    "name": "classical_manager",
+    "user": "cmanager",
+    "password": "",
+    "password_env": "CM_DB_PASSWORD",
+    "charset": "utf8mb4"
+  },
   "targets": {
     "plex": {
       "base_url": "http://your-plex-server:32400",

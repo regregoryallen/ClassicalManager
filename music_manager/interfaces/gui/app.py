@@ -41,7 +41,7 @@ def launch_gui():
         return
 
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import get_db_path
+    from music_manager.core.config import resolve_db_settings
     prefs = _load_prefs()
 
     # Migrate db_path from gui_prefs.json to config.json (one-time)
@@ -57,22 +57,29 @@ def launch_gui():
         except Exception:
             pass
 
-    db_path = get_db_path()
+    settings = resolve_db_settings()
     try:
-        initialize_database(db_path)
+        initialize_database(settings=settings)
     except Exception as exc:
         import tkinter as _tk
         _tk.Tk().withdraw()
         from tkinter import messagebox as _mb
         from music_manager.core.database import DATABASE_PATH
-        msg = (f"Cannot open database:\n{db_path}\n\n"
+        if settings.backend == "mysql":
+            causes = ("  - The database server is unreachable "
+                      "(host, port, or firewall)\n"
+                      "  - The user, password, or database name is wrong\n"
+                      "  - The user is not granted access from this machine\n\n"
+                      "Check the 'database' section of config.json.")
+        else:
+            causes = ("  - The app is open on another machine (database locked)\n"
+                      "  - The network share or drive is not mounted\n"
+                      "  - The path in config.json is incorrect\n\n"
+                      "Close the app on other machines and ensure the path is "
+                      "accessible, or update db_path in config.json.")
+        msg = (f"Cannot open database:\n{settings.describe()}\n\n"
                f"Error: {exc}\n\n"
-               f"Possible causes:\n"
-               f"  - The app is open on another machine (database locked)\n"
-               f"  - The network share or drive is not mounted\n"
-               f"  - The path in config.json is incorrect\n\n"
-               f"Close the app on other machines and ensure the path is "
-               f"accessible, or update db_path in config.json.\n\n"
+               f"Possible causes:\n{causes}\n\n"
                f"Fall back to the local default database?")
         if _mb.askyesno("Database Error", msg):
             initialize_database(DATABASE_PATH)

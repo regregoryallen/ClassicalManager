@@ -22,7 +22,8 @@ from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
 
 from music_manager.core.database import (
-    database, Library, SourceFolder, Composer, Album, Work, Track, Override,
+    MAX_PATH_LENGTH, database, Library, SourceFolder, Composer, Album, Work,
+    Track, Override,
 )
 
 logger = logging.getLogger(__name__)
@@ -893,6 +894,11 @@ class ScanStats:
     # Tracks imported without a track number — a reliable sign the tags
     # were not read properly (it broke work detection for .ape files).
     tracks_no_track_number: int = 0
+    # Files whose relative path exceeds MAX_PATH_LENGTH. SQLite would store
+    # them (it ignores column widths), a server backend would not, so they
+    # are reported rather than silently creating a library that cannot be
+    # migrated. Truncating instead would collide two tracks onto one key.
+    paths_too_long: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1289,6 +1295,8 @@ class IncrementalStats:
     albums_affected: int = 0
     skipped_extensions: dict = field(default_factory=dict)
     tracks_no_track_number: int = 0
+    # See ScanStats.paths_too_long — a quick scan hits the same guard.
+    paths_too_long: list[str] = field(default_factory=list)
     # Relative paths of tracks this scan added — drives the per-import
     # profile (v3.3). Paths rather than ids so the caller resolves them
     # after the scan's own transactions have settled.
@@ -1358,7 +1366,12 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
 
         rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
         key = (sf.id, rel_path)
+        # Keep the key seen even when over-length, so an existing row for
+        # this file is not mistaken for a deleted file and removed.
         seen_keys.add(key)
+        if len(rel_path) > MAX_PATH_LENGTH:
+            stats.paths_too_long.append(rel_path)
+            continue
 
         old_track = existing.get(key)
         if old_track:
@@ -1610,6 +1623,10 @@ def _process_album_group(
     pending_tracks: list[PendingTrack] = []
     for sf_file, fpath, raw in file_group:
         rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
+        if len(rel_path) > MAX_PATH_LENGTH:
+            stats.paths_too_long.append(rel_path)
+            continue  # skip this file only; the rest of the album is fine
+
         composer = get_or_create_composer(library, raw.composer)
 
         try:

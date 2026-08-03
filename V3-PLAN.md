@@ -290,12 +290,34 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   Verified against the live server: config → connection → DDL, failing only
   at `_ensure_track_indexes`' non-unique index on a `text` column — exactly
   Phase 2's scope.
-- [ ] **Phase 2 — Schema portability.** Indexed `TextField`s → `CharField`
-  (512; `norm_key` 255). `ProfileSelection.track_paths` stays TEXT — 6,040
-  chars observed, not indexed. Add a scanner hard stop for paths over the
-  cap, in the spirit of D3: silent truncation would corrupt track identity.
-  Assert the created DDL contains no `USING HASH` — that is the signal a
-  limit was exceeded.
+- [x] **Phase 2 — Schema portability** — done 2026-08-03 (214 tests green on
+  SQLite, 7 more against the live server). `MAX_PATH_LENGTH = 512` /
+  `MAX_KEY_LENGTH = 255` in `database.py`; every column taking part in an
+  index is now a `CharField`: `Track.relative_path`, `Album.album_key`,
+  `Composer.norm_key`, `ProfileSelection.key`, `ProfileSelection.level`
+  (16), `AnalysisSnapshot.relative_path`. `track_paths` stays TEXT — 6,040
+  chars, unindexed. No migration needed: SQLite ignores column widths, so
+  existing databases keep working untouched (verified against a copy of the
+  production library — 7,279 tracks, 431 albums, 758 composers, 6,373
+  analyses all read back, prefix queries included).
+
+  Scanner guard: a relative path over the cap is recorded in
+  `paths_too_long` and skipped, on both the full and quick paths, and
+  surfaced in the scan report. Skipping beats truncating (which would
+  collide two tracks onto one identity) and beats erroring mid-scan. In the
+  quick path the key is still added to `seen_keys`, so an existing row is
+  not mistaken for a deleted file.
+
+  *`ProfileSelection.level` was missed on the first pass and the DDL test
+  caught it* — its unique index is `(profile, level, key)`, and `level` was
+  still TEXT, so MariaDB silently made the whole index `USING HASH`. Nothing
+  else would have reported this: no error, no warning, and every test
+  passed. The `USING HASH` assertion is the only reason it surfaced; keep
+  it.
+- [ ] **Phase 2a — real-data shakedown (do with Phase 3).** Verified so far
+  only that the schema is *creatable* and enforces the right things. Real
+  paths, unicode, and volume land when Phase 3 migrates a copy of the
+  production library into MariaDB.
 - [ ] **Phase 3 — Migration command.** Direct table-by-table copy in FK
   order, preserving primary keys, batched under the server's 16 MB
   `max_allowed_packet`, with a dry run and a verification pass reporting

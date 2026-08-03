@@ -260,3 +260,35 @@ def test_scan_counts_skipped_non_audio_extensions(lib, tmp_path):
     assert stats.skipped_extensions == {".jpg": 2, ".txt": 1, ".flac_save": 1}
     assert stats.files_found == 0          # none were audio
     assert stats.tracks_no_track_number == 0
+
+
+def test_scan_skips_and_reports_over_long_paths(lib, tmp_path):
+    """A path longer than the indexed-column cap cannot live on a server
+    backend. SQLite would store it happily (it ignores column widths), so
+    the guard is what stops a library being built that cannot migrate.
+    Truncating instead would collide two tracks onto one identity."""
+    from music_manager.core.database import MAX_PATH_LENGTH, SourceFolder
+    from music_manager.core.scanner import scan_incremental
+
+    folder = tmp_path / "music"
+    deep = folder
+    # 3 nested components of 200 chars each clears 512 without exceeding
+    # any single-component filesystem limit (255).
+    for _ in range(3):
+        deep = deep / ("d" * 200)
+    deep.mkdir(parents=True)
+    (deep / "01.flac").write_bytes(b"x")
+    (folder / "Album").mkdir()
+    (folder / "Album" / "01.flac").write_bytes(b"x")
+
+    SourceFolder.delete().where(SourceFolder.library == lib).execute()
+    SourceFolder.create(library=lib, root_path=str(folder))
+
+    stats = scan_incremental(lib)
+
+    assert len(stats.paths_too_long) == 1
+    assert len(stats.paths_too_long[0]) > MAX_PATH_LENGTH
+    assert stats.paths_too_long[0].endswith("01.flac")
+    # The short path was still processed (it fails on tags, not on length),
+    # so one bad path does not abandon the rest of the scan.
+    assert any("Album/01.flac" in p for p in stats.files_failed)

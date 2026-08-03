@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 DATABASE_PATH = PROJECT_ROOT / "music_manager.db"
 
+# Text that takes part in an index must have a declared width on MySQL.
+# 512 is the largest that keeps a composite index inside InnoDB's 3072-byte
+# key limit: (INT, VARCHAR(512)) at utf8mb4 is 2052 bytes, while VARCHAR(768)
+# overflows it. Going wider would not fail loudly on MariaDB — it silently
+# rewrites over-long UNIQUE keys as USING HASH, which MySQL rejects outright
+# and which cannot serve ordered or prefix scans. SQLite ignores the width
+# entirely (type affinity), so this only ever binds on a server backend.
+MAX_PATH_LENGTH = 512
+MAX_KEY_LENGTH = 255
+
 # A proxy, so the concrete backend (SQLite file or MySQL/MariaDB server) can
 # be chosen at startup while the models below stay bound to one object.
 database = pw.DatabaseProxy()
@@ -259,7 +269,7 @@ class Composer(BaseModel):
     library = pw.ForeignKeyField(Library, backref="composers", on_delete="CASCADE")
     name = pw.TextField()          # display form as tagged
     sort_name = pw.TextField(null=True)  # e.g. "Beethoven, Ludwig van"
-    norm_key = pw.TextField()      # normalized key for dedup/matching
+    norm_key = pw.CharField(max_length=MAX_KEY_LENGTH)  # normalized key for dedup/matching
 
     class Meta:
         table_name = "composers"
@@ -282,7 +292,7 @@ class Album(BaseModel):
 
     library = pw.ForeignKeyField(Library, backref="albums", on_delete="CASCADE")
     folder = pw.ForeignKeyField(SourceFolder, backref="albums", on_delete="CASCADE")
-    album_key = pw.TextField()             # folder's relative path = album identity
+    album_key = pw.CharField(max_length=MAX_PATH_LENGTH)  # folder's relative path = album identity
     title = pw.TextField()                 # from tags; folder name as fallback
     album_artist = pw.TextField(null=True)
     year = pw.IntegerField(null=True)
@@ -331,7 +341,7 @@ class Track(BaseModel):
     work = pw.ForeignKeyField(Work, backref="tracks", null=True, on_delete="SET NULL")
     composer = pw.ForeignKeyField(Composer, backref="tracks", null=True, on_delete="SET NULL")
     title = pw.TextField()
-    relative_path = pw.TextField()  # POSIX, relative to SourceFolder.root_path
+    relative_path = pw.CharField(max_length=MAX_PATH_LENGTH)  # POSIX, relative to SourceFolder.root_path
     disc_number = pw.IntegerField(default=1)
     disc_total = pw.IntegerField(null=True)
     track_number = pw.IntegerField()
@@ -405,8 +415,8 @@ class ProfileSelection(BaseModel):
 
     profile = pw.ForeignKeyField(PlaylistProfile, backref="selections",
                                  on_delete="CASCADE")
-    level = pw.TextField()          # 'album' / 'work' / 'track'
-    key = pw.TextField()            # stable text key (album_key, composite work key, or relative_path)
+    level = pw.CharField(max_length=16)  # 'album' / 'work' / 'track'
+    key = pw.CharField(max_length=MAX_PATH_LENGTH)  # stable text key (album_key, composite work key, or relative_path)
     excluded = pw.BooleanField(default=False)  # False=add, True=exception
     pin_position = pw.IntegerField(null=True)  # 1-5 or NULL; only for level='work'
     track_paths = pw.TextField(null=True)  # JSON list of relative_paths; work-level only.

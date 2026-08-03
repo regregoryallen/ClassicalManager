@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 
 import peewee as pw
 
-from music_manager.core.database import BaseModel, Library, Track, SourceFolder
+from music_manager.core.database import (
+    MAX_PATH_LENGTH, BaseModel, Library, Track, SourceFolder)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class AnalysisSnapshot(BaseModel):
 
     library = pw.ForeignKeyField(Library, on_delete="CASCADE")
     folder_id = pw.IntegerField()
-    relative_path = pw.TextField()
+    relative_path = pw.CharField(max_length=MAX_PATH_LENGTH)
     features = pw.TextField()
     volatility = pw.FloatField(null=True)
     analyzed_at = pw.DateTimeField()

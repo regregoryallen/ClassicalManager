@@ -148,8 +148,12 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """
         base = "Classical Music Playlist Manager"
         try:
-            from music_manager.core.config import get_db_path
-            db_name = Path(get_db_path()).name
+            from music_manager.core.config import resolve_db_settings
+            settings = resolve_db_settings()
+            # A server backend needs host and schema to be identifiable;
+            # the file name alone would name a database that isn't in use.
+            db_name = (Path(settings.path).name if settings.backend == "sqlite"
+                       else f"{settings.name} @ {settings.host}")
         except Exception:
             return base
         suffix = " [dev]" if (PROJECT_ROOT / ".git").exists() else ""
@@ -1142,6 +1146,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         failed = list(getattr(stats, "files_failed", []) or [])
         skipped = dict(getattr(stats, "skipped_extensions", {}) or {})
         no_trk = getattr(stats, "tracks_no_track_number", 0)
+        too_long = list(getattr(stats, "paths_too_long", []) or [])
 
         imported = []
         if kind == "quick":
@@ -1175,6 +1180,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 f"{no_trk} track(s) imported with no track number. Their "
                 f"tags may not have been read, which also prevents works "
                 f"from grouping.")
+        if too_long:
+            from music_manager.core.database import MAX_PATH_LENGTH
+            problems.append(
+                f"{len(too_long)} file(s) have a path longer than "
+                f"{MAX_PATH_LENGTH} characters and were NOT imported. "
+                f"Shorten the folder or file name. Longest: "
+                f"{max(len(p) for p in too_long)} characters.")
         for label, count in (
                 ("tracks have no composer",
                  getattr(stats, "tracks_no_composer", 0)),
@@ -1189,7 +1201,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         popup.title("Scan Report")
         popup.transient(self.root)
         popup.configure(bg="#2b2b2b")
-        self._center_on_main(popup, 760, 560 if (failed or skipped) else 420)
+        self._center_on_main(popup, 760,
+                             560 if (failed or skipped or too_long) else 420)
 
         def section(title):
             tk.Label(popup, text=title, bg="#2b2b2b", fg="white",

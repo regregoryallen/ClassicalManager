@@ -176,7 +176,8 @@ under these folders will be discovered during scanning.
 Click **Scan Library...** and choose **Full rebuild** (the only option for a
 brand-new library). The scanner will:
 
-- Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC, etc.)
+- Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, WMA, AAC,
+  Monkey's Audio `.ape`, WavPack `.wv`, etc.)
 - Extract metadata: title, artist, album, composer, genre, conductor, ensemble,
   track/disc numbers, duration
 - Read MusicBrainz identifiers if present
@@ -256,6 +257,27 @@ metadata drift.
 
 Quick scan is unavailable until one full rebuild has run, since it needs stored
 file timestamps; the dialog explains this rather than failing later.
+
+### Scan Report
+
+Every scan finishes with a report rather than just a status line:
+
+- **What was imported** — files found and scanned, albums, works and tracks
+  created (or added/updated/removed for a Quick scan), and how many audio
+  analyses were preserved.
+- **Needs attention** — shown only when there is something to say:
+  - *files that could not be read* — listed individually; they are **not** in
+    the library
+  - *tracks imported with no track number* — a reliable sign the file's tags
+    were not readable. This also prevents work detection from grouping them,
+    since the heuristic needs contiguous track numbers
+  - tracks with no composer, and works detected by heuristic (review these on
+    the Cleanup tab)
+- **Not audio — skipped** — a per-extension count of everything the scanner
+  ignored, so an unsupported format or a pile of stray files is visible.
+
+**Copy report** puts the whole thing on the clipboard, including the list of
+unreadable files.
 
 ### Regroup Works
 

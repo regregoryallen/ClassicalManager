@@ -92,7 +92,8 @@ def build_help_content(text: tk.Text) -> None:
     subheading("3. Scan the Library")
     body("Click Scan Library... and choose Full rebuild (the only option "
          "for a new library). The scanner will:\n")
-    bullet("Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, WAV, etc.)")
+    bullet("Discover all supported audio files (MP3, FLAC, OGG, OPUS, M4A, "
+           "WAV, WMA, Monkey's Audio .ape, WavPack .wv, etc.)")
     bullet("Extract metadata: title, artist, album, composer, genre, conductor, ensemble")
     bullet("Read MusicBrainz identifiers if present")
     bullet("Group tracks into albums (one album per folder)")
@@ -152,6 +153,15 @@ def build_help_content(text: tk.Text) -> None:
         "Quick scan is unavailable (and the dialog says so) until one full "
         "rebuild has run, because it needs stored file timestamps. Either "
         "mode can be cancelled while running.\n"
+    )
+    body(
+        "Every scan ends with a Scan Report: what was imported, plus a "
+        "\"Needs attention\" section listing only real problems \u2014 files "
+        "that could not be read, tracks imported with no track number "
+        "(a sign their tags were not readable, which also stops works "
+        "grouping), tracks lacking a composer, and works detected by "
+        "heuristic. It also lists non-audio files it skipped, by "
+        "extension. Copy report puts the whole thing on the clipboard.\n"
     )
     bold("Regroup Works")
     body(
@@ -412,6 +422,9 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Search field \u2014 live filtering by work name, album, or composer")
     bullet("Hide 1-track \u2014 hides standalone works (off by default)")
     bullet("Multi-select with Ctrl+click or Shift+click")
+    bullet("Work Name / Composer fields: clicking or tabbing in selects the "
+           "current value, so typing replaces it; press Return to apply "
+           "without reaching for the button")
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open track in default player")

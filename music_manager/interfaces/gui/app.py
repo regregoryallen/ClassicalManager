@@ -561,6 +561,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         bind_class covers all current and future Entry widgets; CTkEntry
         wraps a plain tk.Entry, so the "TEntry"/"Entry" classes apply.
         """
+        # Tk already ships a working select-all for Entry, but binds it to
+        # the virtual event <<SelectAll>> which on X11 maps to Ctrl+/ —
+        # not Ctrl+A. Teaching the virtual event the expected keys is the
+        # supported route and covers Text widgets too.
+        for seq in ("<Control-a>", "<Control-A>",
+                    "<Command-a>", "<Command-A>"):
+            try:
+                self.root.event_add("<<SelectAll>>", seq)
+            except tk.TclError:
+                pass  # already mapped (e.g. Ctrl+/ on some platforms)
+
+        # Belt and braces: an explicit class binding, in case a platform
+        # or theme does not route the virtual event.
         def select_all(event):
             w = event.widget
             try:
@@ -575,6 +588,24 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self.root.bind_class(cls, "<Control-A>", select_all)
             self.root.bind_class(cls, "<Command-a>", select_all)
             self.root.bind_class(cls, "<Command-A>", select_all)
+
+    @staticmethod
+    def _select_on_focus(entry):
+        """Select an entry's contents when it gains focus.
+
+        For fields that hold a current value to be replaced (work name,
+        composer), clicking or tabbing in and typing should overwrite —
+        without needing a keyboard shortcut at all.
+        """
+        def on_focus(event):
+            w = event.widget
+            try:
+                w.select_range(0, "end")
+                w.icursor("end")
+            except tk.TclError:
+                pass
+        # CTkEntry proxies bind() to its internal tk.Entry.
+        entry.bind("<FocusIn>", on_focus)
 
     def _make_filter_entry(self, parent, textvar, *, placeholder="Filter...",
                            width=150):
@@ -1093,49 +1124,130 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         dialog.wait_window()
         return result["mode"]
 
-    def _report_failed_files(self, failed):
-        """Show which files a scan could not read.
+    def _show_scan_report(self, stats, kind):
+        """Report what a scan actually did, not just a one-line summary.
 
-        Scans counted failures but never named them, so a file silently
-        missing from the library was undiagnosable from the GUI. Causes
-        are usually outside the app — an unreadable file on a network
-        share, a truncated download, a genuinely corrupt file.
+        Counts alone hid real problems: a file that could not be read, or
+        one whose tags were unreadable (which is how seven .ape tracks
+        ended up with no track numbers and silently failed to group),
+        showed up only as a number nobody looked at.
         """
+        failed = list(getattr(stats, "files_failed", []) or [])
+        skipped = dict(getattr(stats, "skipped_extensions", {}) or {})
+        no_trk = getattr(stats, "tracks_no_track_number", 0)
+
+        imported = []
+        if kind == "quick":
+            imported = [
+                ("Files found", stats.files_found),
+                ("Unchanged", stats.files_unchanged),
+                ("Added", stats.files_added),
+                ("Updated", stats.files_updated),
+                ("Removed", stats.files_removed),
+                ("Albums affected", stats.albums_affected),
+            ]
+        else:
+            imported = [
+                ("Files found", stats.files_found),
+                ("Files scanned", stats.files_scanned),
+                ("Albums created", stats.albums_created),
+                ("Works created", stats.works_created),
+                ("Tracks created", stats.tracks_created),
+            ]
+            if stats.analyses_preserved:
+                imported.append(("Analyses preserved", stats.analyses_preserved))
+
+        # Only non-zero problems, so a clean scan shows a short report.
+        problems = []
+        if failed:
+            problems.append(
+                f"{len(failed)} file(s) could not be read — listed below. "
+                f"They are NOT in the library.")
+        if no_trk:
+            problems.append(
+                f"{no_trk} track(s) imported with no track number. Their "
+                f"tags may not have been read, which also prevents works "
+                f"from grouping.")
+        for label, count in (
+                ("tracks have no composer",
+                 getattr(stats, "tracks_no_composer", 0)),
+                ("tracks have zero duration",
+                 getattr(stats, "tracks_no_duration", 0)),
+                ("works were detected by heuristic — review on the "
+                 "Cleanup tab", getattr(stats, "heuristic_works", 0))):
+            if count:
+                problems.append(f"{count} {label}.")
+
         popup = tk.Toplevel(self.root)
-        popup.title(f"{len(failed)} file(s) could not be read")
+        popup.title("Scan Report")
         popup.transient(self.root)
         popup.configure(bg="#2b2b2b")
-        self._center_on_main(popup, 820, 400)
+        self._center_on_main(popup, 760, 560 if (failed or skipped) else 420)
 
-        tk.Label(
-            popup,
-            text=(f"{len(failed)} file(s) were skipped and are NOT in the "
-                  f"library.\nThe file exists but could not be opened or "
-                  f"parsed — check the share, or re-copy the file, then "
-                  f"scan again."),
-            bg="#2b2b2b", fg="white", justify="left",
-            font=("Segoe UI", 11)).pack(anchor="w", padx=14, pady=(12, 8))
+        def section(title):
+            tk.Label(popup, text=title, bg="#2b2b2b", fg="white",
+                     font=("Segoe UI", 12, "bold")).pack(
+                anchor="w", padx=16, pady=(12, 4))
 
-        frame = tk.Frame(popup, bg="#2b2b2b")
-        frame.pack(fill="both", expand=True, padx=14)
-        text = tk.Text(frame, bg="#1e1e1e", fg="#e0e0e0", wrap="none",
-                       font=("monospace", 9), height=12)
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
-        text.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        text.pack(side="left", fill="both", expand=True)
-        text.insert("1.0", "\n".join(str(f) for f in failed))
-        text.configure(state="disabled")
+        section("Quick scan" if kind == "quick" else "Full rebuild")
+        grid = tk.Frame(popup, bg="#2b2b2b")
+        grid.pack(anchor="w", padx=28)
+        for i, (label, value) in enumerate(imported):
+            tk.Label(grid, text=label, bg="#2b2b2b", fg="gray75",
+                     font=("Segoe UI", 11)).grid(row=i, column=0, sticky="w")
+            tk.Label(grid, text=str(value), bg="#2b2b2b", fg="white",
+                     font=("Segoe UI", 11)).grid(row=i, column=1,
+                                                 sticky="e", padx=(24, 0))
+
+        if problems:
+            section("Needs attention")
+            for line in problems:
+                tk.Label(popup, text="\u26a0  " + line, bg="#2b2b2b",
+                         fg="#e0b050", justify="left", wraplength=700,
+                         font=("Segoe UI", 11)).pack(anchor="w", padx=28)
+
+        if skipped:
+            total = sum(skipped.values())
+            top = ", ".join(
+                f"{ext or '(none)'} \u00d7{n}"
+                for ext, n in sorted(skipped.items(),
+                                     key=lambda kv: -kv[1])[:8])
+            section(f"Not audio — skipped ({total} files)")
+            tk.Label(popup, text=top, bg="#2b2b2b", fg="gray70",
+                     justify="left", wraplength=700,
+                     font=("Segoe UI", 10)).pack(anchor="w", padx=28)
+
+        if failed:
+            section("Files that could not be read")
+            frame = tk.Frame(popup, bg="#2b2b2b")
+            frame.pack(fill="both", expand=True, padx=16)
+            text = tk.Text(frame, bg="#1e1e1e", fg="#e0e0e0", wrap="none",
+                           font=("monospace", 9), height=8)
+            scroll = ttk.Scrollbar(frame, orient="vertical",
+                                   command=text.yview)
+            text.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            text.pack(side="left", fill="both", expand=True)
+            text.insert("1.0", "\n".join(str(f) for f in failed))
+            text.configure(state="disabled")
+
+        def copy_report():
+            lines = [f"{label}: {value}" for label, value in imported]
+            lines += ["", *problems]
+            if skipped:
+                lines += ["", "Skipped (not audio):"]
+                lines += [f"  {e or '(none)'}: {n}"
+                          for e, n in sorted(skipped.items(),
+                                             key=lambda kv: -kv[1])]
+            if failed:
+                lines += ["", "Unreadable files:", *[str(f) for f in failed]]
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(lines))
 
         bot = tk.Frame(popup, bg="#2b2b2b")
-        bot.pack(fill="x", padx=14, pady=10)
-
-        def copy_list():
-            self.root.clipboard_clear()
-            self.root.clipboard_append("\n".join(str(f) for f in failed))
-
-        tk.Button(bot, text="Copy list", bg="#3b3b3b", fg="white",
-                  command=copy_list).pack(side="left")
+        bot.pack(fill="x", padx=16, pady=12)
+        tk.Button(bot, text="Copy report", bg="#3b3b3b", fg="white",
+                  command=copy_report).pack(side="left")
         tk.Button(bot, text="Close", bg="#3b3b3b", fg="white",
                   command=popup.destroy).pack(side="right")
 
@@ -1149,7 +1261,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         from music_manager.core.scanner import scan_library
         from music_manager.core.overrides import apply_overrides
 
-        failed = []
+        result = {"stats": None}
 
         def progress(current, total, message):
             if self._scan_cancel.is_set():
@@ -1169,7 +1281,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 msg += f", {stats.analyses_preserved} analyses kept"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
-                failed = list(stats.files_failed)
+            result["stats"] = stats
         except _ScanCancelled:
             msg = "Scan cancelled"
             logger.info("Scan cancelled by user")
@@ -1185,8 +1297,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             self._refresh_metrics()
             self._refresh_builder_tree()
             self._refresh_cleanup()
-            if failed:
-                self._report_failed_files(failed)
+            if result["stats"] is not None:
+                self._show_scan_report(result["stats"], "full")
 
         self.root.after(0, finish)
 
@@ -1195,7 +1307,6 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         from music_manager.core.scanner import scan_incremental
         from music_manager.core.overrides import apply_overrides
 
-        failed = []
 
         def progress(current, total, message):
             if self._scan_cancel.is_set():
@@ -1206,6 +1317,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 text=f"[{current}/{total}] {message}"))
 
         import_profile_name = None
+        result = {"stats": None}
         try:
             stats = scan_incremental(library, progress_callback=progress)
             # Unconditionally: overrides added since the last scan must
@@ -1228,7 +1340,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                     msg += f" — saved as '{created.name}'"
             if stats.files_failed:
                 msg += f", {len(stats.files_failed)} failed"
-                failed = list(stats.files_failed)
+            result["stats"] = stats
         except _ScanCancelled:
             msg = "Scan cancelled"
         except Exception as exc:
@@ -1251,8 +1363,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                     f"Pick it under \"Show:\" above the Library pane to "
                     f"browse and assign them. Rename it to keep it as a "
                     f"normal playlist, or delete it when you are done.")
-            if failed:
-                self._report_failed_files(failed)
+            if result["stats"] is not None:
+                self._show_scan_report(result["stats"], "quick")
 
         self.root.after(0, finish)
 

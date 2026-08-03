@@ -189,6 +189,52 @@
   Documented in help, USERGUIDE (with a Music Assistant HA snippet),
   main.py usage, and config.example.json.
 
+## v3.4 (branch `v3.4-dev`, started 2026-07-30)
+
+- [x] **APEv2 tags** — read Monkey's Audio (`.ape`) and WavPack (`.wv`).
+- [x] **Scan report dialog** — what a scan actually did, including files
+  skipped per extension and tracks with no track number.
+- [x] **Cleanup edit fields** — select-on-focus, Return applies, real
+  select-all; Ctrl+A in the works tree; live "N work(s), M track(s)
+  selected" so a short selection is visible before acting, not after.
+- [x] **A recording is not a file** (bug, 2026-07-31). Applying a composer
+  to all 18 tracks of "Waltzes (Prokofiev; Scottish National Orchestra,
+  Neeme Jarvi)" stored only 8 overrides.
+
+  Both `set_override` and `_match_track` treated the MusicBrainz *recording*
+  ID as if it identified a *file*. It doesn't: a compilation reuses
+  recordings that also sit on their original albums. Ten of the Waltzes
+  tracks share recording IDs with three other Järvi/SNO albums, so
+  `_find_existing_override` matched by MB ID first and updated the *other
+  album's* row, while `_match_track`'s `Track.get()` resolved the same ID to
+  one arbitrary track (lowest rowid). The other copies were unreachable.
+
+  Measured before fixing: 7,279 tracks, 10 recordings on more than one file
+  (20 files, 0.3%), 10 affected overrides, all `composer`. **No data was
+  corrupted** — only because the value written matched what the other row
+  already said. A different composer would have silently rewritten another
+  album.
+
+  **Decision (user, 2026-07-31): an override identifies a FILE.** Path is
+  the primary match key. The MB ID remains the fallback that carries a
+  correction across a rename, but only adopts a row whose own path is
+  orphaned; at apply time, an ambiguous MB ID with a missing path is
+  skipped and logged rather than applied to an arbitrary track. Explicit
+  "apply to all copies of this recording" stays a possible future action —
+  deliberate, not a silent side effect. Position-specific fields
+  (`disc_number`, `track_number`, `movement_number`) are why per-recording
+  semantics can't be the default.
+
+  Regression tests in `tests/test_overrides.py` cover: two copies get two
+  rows; different values on each copy stay put; every copy is reachable by
+  apply; renames still carry forward and refresh the stale path; ambiguous
+  match is skipped.
+
+  *Lesson: the reported symptom ("only some tracks took it") pointed at the
+  selection UI, and the first fix was aimed there and was wrong. What
+  settled it was replaying the exact loop against a copy of the production
+  database and logging each call's create-vs-update outcome.*
+
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 
 Two features that are really one capability seen from two angles: knowing

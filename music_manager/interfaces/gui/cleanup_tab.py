@@ -118,6 +118,13 @@ class CleanupTabMixin:
         w_scroll.pack(side="right", fill="y")
         self.works_tree.bind("<Button-3>", self._cleanup_work_context_menu)
         self._setup_tree_sort(self.works_tree)
+        # Ctrl+A here too — the Builder trees had it and this one did not,
+        # so select-all silently did nothing and bulk edits ran on
+        # whatever happened to be highlighted.
+        self._bind_tree_select_all(self.works_tree)
+        self.works_tree.bind("<<TreeviewSelect>>",
+                             lambda _e: self._update_cleanup_selection_label(),
+                             add="+")
 
         self._cleanup_work_map = {}  # iid → work.id (work-level items only)
         self._cleanup_track_map = {}  # iid → track.id (track-level children)
@@ -131,6 +138,11 @@ class CleanupTabMixin:
         ctk.CTkLabel(edit_top, text="Edit Selected Work",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(
             side="left", padx=0)
+        # How much a bulk edit will touch, visible before you press the
+        # button rather than reported afterwards.
+        self.cleanup_selection_label = ctk.CTkLabel(
+            edit_top, text="nothing selected", text_color=("gray25", "gray70"))
+        self.cleanup_selection_label.pack(side="left", padx=10)
         ctk.CTkButton(edit_top, text="Show Album", width=110,
                       command=self._show_album_for_selected).pack(
             side="right", padx=5)
@@ -140,6 +152,14 @@ class CleanupTabMixin:
         ctk.CTkLabel(row_e1, text="Work Name:").pack(side="left", padx=5)
         self.edit_work_name = ctk.CTkEntry(row_e1, width=300)
         self.edit_work_name.pack(side="left", padx=5)
+        # These hold a current value the user means to replace: select it
+        # on focus so typing overwrites, and let Return submit instead of
+        # forcing a trip to the mouse.
+        self._select_on_focus(self.edit_work_name)
+        self.edit_work_name.bind(
+            "<Return>", lambda _e: self._set_work_name_override())
+        self.edit_work_name.bind(
+            "<KP_Enter>", lambda _e: self._set_work_name_override())
         ctk.CTkButton(row_e1, text="Set Work Name", width=120,
                       command=self._set_work_name_override).pack(side="left", padx=5)
 
@@ -153,6 +173,11 @@ class CleanupTabMixin:
         ctk.CTkLabel(row_e3, text="Composer:").pack(side="left", padx=5)
         self.edit_composer = ctk.CTkEntry(row_e3, width=300)
         self.edit_composer.pack(side="left", padx=5)
+        self._select_on_focus(self.edit_composer)
+        self.edit_composer.bind(
+            "<Return>", lambda _e: self._set_composer_override())
+        self.edit_composer.bind(
+            "<KP_Enter>", lambda _e: self._set_composer_override())
         ctk.CTkButton(row_e3, text="Set Composer", width=120,
                       command=self._set_composer_override).pack(side="left", padx=5)
 
@@ -352,6 +377,30 @@ class CleanupTabMixin:
                 work_ids.append(wid)
                 seen.add(wid)
         return work_ids
+
+    def _update_cleanup_selection_label(self):
+        """Show how many works/tracks the edit buttons would affect."""
+        if not hasattr(self, "cleanup_selection_label"):
+            return
+        from music_manager.core.database import Track
+
+        work_ids, seen = [], set()
+        for iid in self.works_tree.selection():
+            if iid not in self._cleanup_work_map:
+                parent = self.works_tree.parent(iid)
+                if parent:
+                    iid = parent
+            wid = self._cleanup_work_map.get(iid)
+            if wid and wid not in seen:
+                seen.add(wid)
+                work_ids.append(wid)
+
+        if not work_ids:
+            self.cleanup_selection_label.configure(text="nothing selected")
+            return
+        n_tracks = Track.select().where(Track.work.in_(work_ids)).count()
+        self.cleanup_selection_label.configure(
+            text=f"{len(work_ids)} work(s), {n_tracks} track(s) selected")
 
     def _cleanup_work_context_menu(self, event):
         """Right-click context menu on the works tree."""

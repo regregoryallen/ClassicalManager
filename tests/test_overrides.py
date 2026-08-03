@@ -101,3 +101,106 @@ def test_export_import_round_trip(lib, tmp_path):
     counts = import_overrides(lib, out)
     assert counts == {"imported": 2, "updated": 0, "errors": 0}
     assert Override.select().count() == 2
+
+
+# ---------------------------------------------------------------------------
+# v3.4: a recording is not a file
+# ---------------------------------------------------------------------------
+#
+# A compilation reuses recordings that also sit on the original albums, so
+# one MusicBrainz recording ID can cover several files. Matching on it alone
+# meant a correction aimed at one file updated the row belonging to another
+# album's copy, and only one of the copies could ever be reached.
+# Found on "Waltzes (Prokofiev; Scottish National Orchestra, Neeme Jarvi)":
+# applying a composer to all 18 tracks stored 8 overrides (2026-07-31).
+
+def _shared_recording(lib, mbid="shared-rec-1"):
+    """Two albums whose first track is the same recording."""
+    a1 = make_album(lib, "A/Original", [("Work One", 2)])
+    a2 = make_album(lib, "B/Compilation", [("Work One", 2)])
+    for album in (a1, a2):
+        t = Track.get((Track.album == album) & (Track.track_number == 1))
+        t.musicbrainz_recording_id = mbid
+        t.save()
+    return a1, a2
+
+
+def test_same_recording_on_two_albums_gets_two_overrides(lib):
+    a1, a2 = _shared_recording(lib)
+    t1 = Track.get((Track.album == a1) & (Track.track_number == 1))
+    t2 = Track.get((Track.album == a2) & (Track.track_number == 1))
+
+    for t in (t1, t2):
+        set_override(library=lib, scope="track", field="composer",
+                     value="Prokofiev", match_relative_path=t.relative_path,
+                     match_mb_id=t.musicbrainz_recording_id)
+
+    assert Override.select().where(Override.field == "composer").count() == 2
+    assert {o.match_relative_path for o in Override.select()} == {
+        t1.relative_path, t2.relative_path}
+
+
+def test_override_on_one_copy_does_not_move_to_the_other(lib):
+    """The failure that hid the bug: writing the same value everywhere looks
+    harmless. A different value would have rewritten the other album."""
+    a1, a2 = _shared_recording(lib)
+    t1 = Track.get((Track.album == a1) & (Track.track_number == 1))
+    t2 = Track.get((Track.album == a2) & (Track.track_number == 1))
+
+    set_override(library=lib, scope="track", field="composer", value="Bach",
+                 match_relative_path=t1.relative_path, match_mb_id="shared-rec-1")
+    set_override(library=lib, scope="track", field="composer", value="Handel",
+                 match_relative_path=t2.relative_path, match_mb_id="shared-rec-1")
+
+    apply_overrides(lib)
+    assert Track.get_by_id(t1.id).composer.name == "Bach"
+    assert Track.get_by_id(t2.id).composer.name == "Handel"
+
+
+def test_every_copy_is_reachable_by_apply(lib):
+    a1, a2 = _shared_recording(lib)
+    for album in (a1, a2):
+        for t in Track.select().where(Track.album == album):
+            set_override(library=lib, scope="track", field="composer",
+                         value="Prokofiev", match_relative_path=t.relative_path,
+                         match_mb_id=t.musicbrainz_recording_id)
+
+    apply_overrides(lib)
+    composers = [t.composer.name if t.composer else None
+                 for t in Track.select().where(Track.album.in_([a1, a2]))]
+    assert composers == ["Prokofiev"] * 4
+
+
+def test_rename_still_carries_the_override_forward(lib):
+    """The MB ID fallback exists for renames and must keep working."""
+    album = make_album(lib, "A/Original", [("Work One", 1)])
+    track = Track.get(Track.album == album)
+    track.musicbrainz_recording_id = "rec-solo"
+    track.save()
+    set_override(library=lib, scope="track", field="composer", value="Bach",
+                 match_relative_path=track.relative_path, match_mb_id="rec-solo")
+
+    track.relative_path = "A/Original/01 renamed.flac"
+    track.save()
+
+    apply_overrides(lib)
+    assert Track.get_by_id(track.id).composer.name == "Bach"
+
+    # Re-setting it adopts the orphaned row and refreshes the stale path,
+    # rather than accumulating a second row for the same file.
+    set_override(library=lib, scope="track", field="composer", value="Handel",
+                 match_relative_path=track.relative_path, match_mb_id="rec-solo")
+    assert Override.select().where(Override.field == "composer").count() == 1
+    assert Override.get().match_relative_path == "A/Original/01 renamed.flac"
+
+
+def test_ambiguous_recording_with_missing_path_is_skipped(lib):
+    """If the path is gone and the MB ID matches several tracks, there is no
+    basis for choosing — skip rather than edit an arbitrary album."""
+    _shared_recording(lib)
+    set_override(library=lib, scope="track", field="composer", value="Bach",
+                 match_relative_path="A/Gone/01.flac", match_mb_id="shared-rec-1")
+
+    counts = apply_overrides(lib)
+    assert counts["skipped"] == 1
+    assert not any(t.composer for t in Track.select())

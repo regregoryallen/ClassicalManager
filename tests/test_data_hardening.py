@@ -238,3 +238,28 @@ def test_duplicates_are_a_hard_stop_D3(lib, db):
     names = {row[1] for row in
              db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
     assert "uq_tracks_folder_relpath" in names
+
+
+# ---------------------------------------------------------------------------
+# v3.4: scan report counters
+# ---------------------------------------------------------------------------
+
+def test_scan_counts_skipped_non_audio_extensions(lib, tmp_path):
+    """Files that are not audio are counted per extension, so a format
+    the scanner cannot read is visible instead of silently ignored."""
+    from music_manager.core.database import SourceFolder
+    from music_manager.core.scanner import scan_library
+
+    folder = tmp_path / "music"
+    (folder / "Album").mkdir(parents=True)
+    for name in ("cover.jpg", "back.jpg", "notes.txt", "01.flac_save"):
+        (folder / "Album" / name).write_bytes(b"x")
+
+    SourceFolder.delete().where(SourceFolder.library == lib).execute()
+    SourceFolder.create(library=lib, root_path=str(folder))
+
+    stats = scan_library(lib)
+
+    assert stats.skipped_extensions == {".jpg": 2, ".txt": 1, ".flac_save": 1}
+    assert stats.files_found == 0          # none were audio
+    assert stats.tracks_no_track_number == 0

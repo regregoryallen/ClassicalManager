@@ -696,6 +696,8 @@ def import_library_cmd(
     typer.echo(f"Imported '{final_name}': {result['albums']} albums, "
                f"{result['profiles']} profiles, {result['overrides']} overrides")
     typer.echo(f"Selections imported: {result['selections_imported']}")
+    if result.get("analyses_imported"):
+        typer.echo(f"Similarity analyses restored: {result['analyses_imported']}")
     if result.get('old_format_skipped'):
         typer.echo(f"Old-format rules skipped: {result['old_format_skipped']} "
                    f"(re-create selections manually)")

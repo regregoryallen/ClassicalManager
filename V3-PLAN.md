@@ -347,10 +347,28 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   22 of 24 playlists with track sets identical to SQLite; the other two
   differ between two *SQLite* runs as well, so that is the shuffle on
   length-limited profiles, not the backend.
-- [ ] **Phase 4 — Close the export/import gaps** listed above (analysis,
-  the ten missing `Track` columns, the album→folder mapping bug,
-  `auto_generated`, `updated_at`). Independent value: it fixes the JSON
-  backup, not just migration.
+- [x] **Phase 4 — Close the export/import gaps** — done 2026-08-03 (233 tests
+  green). `library_io` now writes `format_version: 2` carrying similarity
+  analyses (keyed by folder + relative path, so they survive a rebuild), the
+  ten missing `Track` columns, `folder_idx` per album,
+  `profile.auto_generated`, and `override.updated_at` (previously stamped
+  "now" on every restore, losing the history). Import accepts version 1
+  files unchanged — absent fields stay absent rather than being invented.
+
+  The album→folder bug is fixed: every imported album used to be assigned
+  to the *first* source folder, which for a multi-folder library is both
+  wrong and capable of colliding on UNIQUE (folder_id, relative_path). A
+  test now round-trips two folders holding the same relative path.
+
+  Verified on the real library: a 14.2 MB export re-imported into an empty
+  database gives byte-identical values for all 7,279 tracks across all 16
+  columns, all 6,373 analyses, and every work and composer assignment.
+
+  *Note on the verification itself: the first comparison reported 84
+  mismatching tracks and was wrong — it compared "first 300 rows by id" in
+  each database, but ids are assigned in import order, so the two samples
+  were different tracks. Match on `relative_path`, never on id, when
+  comparing across a rebuild.*
 - [ ] **Phase 5 — Test matrix.** Run the suite against both backends,
   skipping MariaDB when the server is unreachable. Today the MySQL suite
   runs only when `CM_TEST_MYSQL_URL` is set and is the *only* thing that

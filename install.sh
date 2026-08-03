@@ -546,18 +546,54 @@ print(json.dumps(cfg, indent=2))
     echo -e "  ${DIM}Press Enter to accept defaults shown in [brackets].${RESET}"
     echo ""
 
-    # --- Database path ---
+    # --- Database ---
     echo -e "${BOLD}Database${RESET}"
     echo "  The database stores your scanned library, works, and playlist profiles."
-    echo "  Leave empty to use the default location inside the install directory."
-    local cfg_db_path
-    ask "Database file path" cfg_db_path ""
-    if [ -n "$cfg_db_path" ]; then
-        # Validate parent directory exists
-        local db_parent
-        db_parent=$(dirname "$cfg_db_path")
-        if [ ! -d "$db_parent" ]; then
-            warn "Directory $db_parent does not exist — it will need to be created before first run."
+    echo ""
+    echo "    1) SQLite file  — no server needed. Best for a single machine."
+    echo "    2) MySQL/MariaDB — a shared server, so several machines can use"
+    echo "       one library. Needs a database and user created in advance."
+    echo ""
+    local cfg_db_backend="sqlite"
+    local cfg_db_path=""
+    local cfg_db_host="" cfg_db_port="3306" cfg_db_name=""
+    local cfg_db_user="" cfg_db_password="" cfg_db_password_env=""
+
+    local db_choice
+    ask "Database type (1 or 2)" db_choice "1"
+    if [ "$db_choice" = "2" ]; then
+        cfg_db_backend="mysql"
+        ask "Server hostname" cfg_db_host "localhost"
+        ask "Port" cfg_db_port "3306"
+        ask "Database name" cfg_db_name "classical_manager"
+        ask "Username" cfg_db_user "cmanager"
+        echo ""
+        echo "  The password can be stored in config.json, or read from an"
+        echo "  environment variable so the config file carries no credential."
+        if ask_yn "Read the password from an environment variable instead?" "n"; then
+            ask "Variable name" cfg_db_password_env "CM_DB_PASSWORD"
+        else
+            ask_secret "Password" cfg_db_password
+        fi
+        echo ""
+        echo -e "  ${DIM}The database and user must already exist. On the server:${RESET}"
+        echo -e "  ${DIM}  CREATE DATABASE $cfg_db_name CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;${RESET}"
+        echo -e "  ${DIM}  CREATE USER '$cfg_db_user'@'%' IDENTIFIED BY '...';${RESET}"
+        echo -e "  ${DIM}  GRANT ALL PRIVILEGES ON $cfg_db_name.* TO '$cfg_db_user'@'%';${RESET}"
+        echo ""
+        echo -e "  ${DIM}utf8mb4_bin matters: the usual default collation treats${RESET}"
+        echo -e "  ${DIM}Dvorak and Dvořák as the same composer.${RESET}"
+        echo ""
+    else
+        echo "  Leave empty to use the default location inside the install directory."
+        ask "Database file path" cfg_db_path ""
+        if [ -n "$cfg_db_path" ]; then
+            # Validate parent directory exists
+            local db_parent
+            db_parent=$(dirname "$cfg_db_path")
+            if [ ! -d "$db_parent" ]; then
+                warn "Directory $db_parent does not exist — it will need to be created before first run."
+            fi
         fi
     fi
     echo ""
@@ -691,6 +727,13 @@ print(json.dumps(cfg, indent=2))
 
     # Build the config via Python to avoid shell JSON quoting issues
     CFG_DB_PATH="$cfg_db_path" \
+    CFG_DB_BACKEND="$cfg_db_backend" \
+    CFG_DB_HOST="$cfg_db_host" \
+    CFG_DB_PORT="$cfg_db_port" \
+    CFG_DB_NAME="$cfg_db_name" \
+    CFG_DB_USER="$cfg_db_user" \
+    CFG_DB_PASSWORD="$cfg_db_password" \
+    CFG_DB_PASSWORD_ENV="$cfg_db_password_env" \
     CFG_PLEX_ENABLED="$cfg_plex_enabled" \
     CFG_PLEX_URL="$cfg_plex_url" \
     CFG_PLEX_TOKEN="$cfg_plex_token" \
@@ -716,6 +759,25 @@ config = {
     'autosave_interval': 60,
     'targets': {}
 }
+
+# Database backend. Omitting the section entirely means SQLite at db_path,
+# which is what every existing install already has.
+if os.environ.get('CFG_DB_BACKEND') == 'mysql':
+    db = {
+        'backend': 'mysql',
+        'host': os.environ.get('CFG_DB_HOST', 'localhost'),
+        'port': int(os.environ.get('CFG_DB_PORT') or 3306),
+        'name': os.environ.get('CFG_DB_NAME', ''),
+        'user': os.environ.get('CFG_DB_USER', ''),
+        'charset': 'utf8mb4',
+    }
+    password = os.environ.get('CFG_DB_PASSWORD', '')
+    password_env = os.environ.get('CFG_DB_PASSWORD_ENV', '')
+    if password_env:
+        db['password_env'] = password_env
+    else:
+        db['password'] = password
+    config['database'] = db
 
 # Plex target
 if os.environ.get('CFG_PLEX_ENABLED') == '1':
@@ -771,6 +833,45 @@ with open('$config_file', 'w') as f:
     maybe_sudo chmod 600 "$config_file"
 
     success "Configuration written to $config_file"
+
+    # A wrong host, password or missing GRANT should surface now rather than
+    # as a failure dialog the first time the app is launched.
+    if [ "$cfg_db_backend" = "mysql" ]; then
+        info "Testing the database connection..."
+        if CM_DB_PASSWORD="${cfg_db_password}" "$venv_python" -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+from music_manager.core.config import set_config_path, resolve_db_settings
+from pathlib import Path
+set_config_path(Path('$config_file'))
+settings = resolve_db_settings()
+import peewee as pw
+db = pw.MySQLDatabase(settings.name, host=settings.host, port=settings.port,
+                      user=settings.user, password=settings.password,
+                      charset=settings.charset)
+db.connect()
+collation = db.execute_sql('SELECT @@collation_database').fetchone()[0]
+db.close()
+print(collation)
+" > /tmp/cm_db_check.$$ 2>/tmp/cm_db_err.$$; then
+            local collation
+            collation=$(cat /tmp/cm_db_check.$$)
+            success "Connected to $cfg_db_name on $cfg_db_host (collation: $collation)"
+            if [ "$collation" != "utf8mb4_bin" ]; then
+                warn "Collation is $collation, not utf8mb4_bin."
+                warn "Case- and accent-insensitive collations merge distinct"
+                warn "composers (Dvorak and Dvořák) and distinct file paths."
+                warn "Fix before scanning:"
+                warn "  ALTER DATABASE $cfg_db_name COLLATE utf8mb4_bin;"
+            fi
+        else
+            warn "Could not connect to the database:"
+            sed 's/^/    /' /tmp/cm_db_err.$$ | tail -3 >&2
+            warn "The install is complete, but fix the 'database' section of"
+            warn "$config_file before launching."
+        fi
+        rm -f /tmp/cm_db_check.$$ /tmp/cm_db_err.$$
+    fi
 }
 
 # Collect path rewrite rules interactively, output as JSON array.
@@ -1008,8 +1109,13 @@ print_summary() {
 import json
 with open('$config_file') as f:
     cfg = json.load(f)
-db = cfg.get('db_path', '')
-print(db if db else '$INSTALL_DIR/music_manager.db')
+db = cfg.get('database') or {}
+if db.get('backend') == 'mysql':
+    # Never print the password, even to the terminal.
+    print(f\"{db.get('name','')} on {db.get('host','')}:{db.get('port',3306)} (MySQL)\")
+else:
+    path = db.get('path') or cfg.get('db_path', '')
+    print(path if path else '$INSTALL_DIR/music_manager.db')
 " 2>/dev/null || echo "$INSTALL_DIR/music_manager.db")
     echo -e "  ${BOLD}Database:${RESET}          $db_display"
     echo -e "  ${BOLD}CLI command:${RESET}       $APP_NAME"

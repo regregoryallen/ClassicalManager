@@ -26,17 +26,22 @@ MODELS = [Library, SourceFolder, Composer, Album, Work, Track,
           PlaylistProfile, ProfileSelection, Override]
 
 _URL = os.environ.get("CM_TEST_MYSQL_URL")
-pytestmark = pytest.mark.skipif(
-    not _URL, reason="set CM_TEST_MYSQL_URL to run MySQL schema tests")
 
 
 @pytest.fixture()
-def mysql_db():
-    """A connection with the schema built from scratch, dropped afterwards."""
-    u = urlparse(_URL)
+def mysql_db(mysql_settings):
+    """A connection with the schema built from scratch, dropped afterwards.
+
+    Gated on --backend=mysql rather than merely on CM_TEST_MYSQL_URL being
+    exported, so that a plain `pytest` run stays offline even in a shell
+    where the variable happens to be set.
+    """
+    if mysql_settings is None:
+        pytest.skip("run with --backend=mysql")
     db = pw.MySQLDatabase(
-        u.path.lstrip("/"), host=u.hostname, port=u.port or 3306,
-        user=u.username, password=u.password, charset="utf8mb4")
+        mysql_settings.name, host=mysql_settings.host,
+        port=mysql_settings.port, user=mysql_settings.user,
+        password=mysql_settings.password, charset="utf8mb4")
     database.initialize(db)
     db.connect()
     _drop_all(db)
@@ -148,7 +153,7 @@ def test_a_path_at_the_cap_is_storable(mysql_db):
 # Phase 3: a real cross-backend migration
 # ---------------------------------------------------------------------------
 
-def test_migration_round_trip_keeps_values_exact(mysql_db, tmp_path):
+def test_migration_round_trip_keeps_values_exact(mysql_db, mysql_settings, tmp_path):
     """The check SQLite cannot perform.
 
     peewee's FloatField maps to MySQL FLOAT — single precision, ~7
@@ -185,12 +190,9 @@ def test_migration_round_trip_keeps_values_exact(mysql_db, tmp_path):
                          analyzed_at=datetime.now(timezone.utc))
     database.close()
 
-    u = urlparse(_URL)
     report = migrate_database(
         DbSettings(backend="sqlite", path=source_path),
-        DbSettings(backend="mysql", host=u.hostname, port=u.port or 3306,
-                   name=u.path.lstrip("/"), user=u.username,
-                   password=u.password),
+        mysql_settings,
         force=True)
 
     assert report.ok, [t.mismatch for t in report.tables if t.mismatch]

@@ -287,12 +287,46 @@ echo  Let's configure Classical Manager.
 echo  Press Enter to accept defaults shown in [brackets].
 echo.
 
-REM --- Database path ---
+REM --- Database ---
 echo  Database
 echo    The database stores your scanned library, works, and playlist profiles.
-echo    Leave empty to use the default location inside the install directory.
+echo.
+echo      1^) SQLite file  - no server needed. Best for a single machine.
+echo      2^) MySQL/MariaDB - a shared server, so several machines can use
+echo         one library. Needs a database and user created in advance.
+echo.
 set "CFG_DB_PATH="
-set /p "CFG_DB_PATH=  Database file path: "
+set "CFG_DB_BACKEND=sqlite"
+set "CFG_DB_HOST="
+set "CFG_DB_PORT=3306"
+set "CFG_DB_NAME="
+set "CFG_DB_USER="
+set "CFG_DB_PASSWORD="
+set "CFG_DB_PASSWORD_ENV="
+set "DB_CHOICE=1"
+set /p "DB_CHOICE=  Database type (1 or 2) [1]: "
+if "!DB_CHOICE!"=="2" (
+    set "CFG_DB_BACKEND=mysql"
+    set "CFG_DB_HOST=localhost"
+    set /p "CFG_DB_HOST=  Server hostname [localhost]: "
+    set /p "CFG_DB_PORT=  Port [3306]: "
+    set "CFG_DB_NAME=classical_manager"
+    set /p "CFG_DB_NAME=  Database name [classical_manager]: "
+    set "CFG_DB_USER=cmanager"
+    set /p "CFG_DB_USER=  Username [cmanager]: "
+    set /p "CFG_DB_PASSWORD=  Password: "
+    echo.
+    echo    The database and user must already exist. On the server:
+    echo      CREATE DATABASE !CFG_DB_NAME! CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    echo      CREATE USER '!CFG_DB_USER!'@'%%' IDENTIFIED BY '...';
+    echo      GRANT ALL PRIVILEGES ON !CFG_DB_NAME!.* TO '!CFG_DB_USER!'@'%%';
+    echo.
+    echo    utf8mb4_bin matters: the usual default collation treats
+    echo    Dvorak and Dvorak-with-accent as the same composer.
+) else (
+    echo    Leave empty to use the default location inside the install directory.
+    set /p "CFG_DB_PATH=  Database file path: "
+)
 echo.
 
 REM --- Plex target ---
@@ -479,7 +513,9 @@ echo  +----------------------------------------------+
 echo.
 echo   Install location:   !INSTALL_DIR!
 echo   Config file:        !INSTALL_DIR!\config.json
-if "!CFG_DB_PATH!"=="" (
+if "!CFG_DB_BACKEND!"=="mysql" (
+    echo   Database:           !CFG_DB_NAME! on !CFG_DB_HOST!:!CFG_DB_PORT! ^(MySQL^)
+) else if "!CFG_DB_PATH!"=="" (
     echo   Database:           !INSTALL_DIR!\music_manager.db
 ) else (
     echo   Database:           !CFG_DB_PATH!
@@ -644,6 +680,21 @@ set "CFG_PY=%TEMP%\cm_config_gen.py"
 >> "!CFG_PY!" echo     'autosave_interval': 60,
 >> "!CFG_PY!" echo     'targets': {}
 >> "!CFG_PY!" echo }
+>> "!CFG_PY!" echo.
+>> "!CFG_PY!" echo if os.environ.get('CFG_DB_BACKEND') == 'mysql':
+>> "!CFG_PY!" echo     db = {
+>> "!CFG_PY!" echo         'backend': 'mysql',
+>> "!CFG_PY!" echo         'host': os.environ.get('CFG_DB_HOST', 'localhost'),
+>> "!CFG_PY!" echo         'port': int(os.environ.get('CFG_DB_PORT') or 3306),
+>> "!CFG_PY!" echo         'name': os.environ.get('CFG_DB_NAME', ''),
+>> "!CFG_PY!" echo         'user': os.environ.get('CFG_DB_USER', ''),
+>> "!CFG_PY!" echo         'charset': 'utf8mb4',
+>> "!CFG_PY!" echo     }
+>> "!CFG_PY!" echo     if os.environ.get('CFG_DB_PASSWORD_ENV'):
+>> "!CFG_PY!" echo         db['password_env'] = os.environ['CFG_DB_PASSWORD_ENV']
+>> "!CFG_PY!" echo     else:
+>> "!CFG_PY!" echo         db['password'] = os.environ.get('CFG_DB_PASSWORD', '')
+>> "!CFG_PY!" echo     config['database'] = db
 >> "!CFG_PY!" echo.
 >> "!CFG_PY!" echo if os.environ.get('CFG_PLEX_ENABLED') == '1':
 >> "!CFG_PY!" echo     plex = {

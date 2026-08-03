@@ -25,6 +25,30 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 
+def tracks_by_work(works):
+    """Group every track of `works` by work id, in one query.
+
+    Querying per work costs a network round trip each — about 2 ms against
+    a database server, against microseconds for a local SQLite file. That
+    turned a 5,420-work Cleanup refresh into 22 seconds. Composer is joined
+    for the same reason: reading track.composer.name lazily is another
+    round trip per work.
+    """
+    import peewee as pw
+    from music_manager.core.database import Track, Composer
+
+    works = list(works)
+    grouped: dict[int, list] = {w.id: [] for w in works}
+    if not works:
+        return grouped
+    for track in (Track.select(Track, Composer)
+                  .join(Composer, pw.JOIN.LEFT_OUTER)
+                  .where(Track.work.in_([w.id for w in works]))
+                  .order_by(Track.disc_number, Track.track_number)):
+        grouped.setdefault(track.work_id, []).append(track)
+    return grouped
+
+
 class CleanupTabMixin:
     def _build_cleanup_tab(self):
         """Build the Cleanup / Overlay tab."""
@@ -246,7 +270,8 @@ class CleanupTabMixin:
         if not self.active_library:
             return
 
-        from music_manager.core.database import Work, Album, Track
+        import peewee as pw
+        from music_manager.core.database import Work, Album, Track, Composer
 
         source_label = self.cleanup_source_var.get()
         source_map = {
@@ -276,10 +301,22 @@ class CleanupTabMixin:
         # an album and expect to see it as it plays. (work_sequence is no
         # help either — it follows detection order; see
         # selection.works_in_track_order.)
+        # Every track for the library in ONE query, grouped in Python.
+        # Querying per work used to cost 5,420 round trips plus a lazy
+        # composer load each — invisible on SQLite, but 22 seconds against
+        # a server at 2 ms a round trip. Composer is joined for the same
+        # reason. The global ordering is preserved within each group, so
+        # each work's tracks stay in (disc, track) order.
+        tracks_by_work: dict[int, list] = {}
+        for t in (Track.select(Track, Composer)
+                  .join(Composer, pw.JOIN.LEFT_OUTER)
+                  .where(Track.library == self.active_library)
+                  .order_by(Track.disc_number, Track.track_number)):
+            tracks_by_work.setdefault(t.work_id, []).append(t)
+
         entries = []
         for work in query:
-            tracks = list(Track.select().where(Track.work == work)
-                          .order_by(Track.disc_number, Track.track_number))
+            tracks = tracks_by_work.get(work.id, [])
 
             if hide_single and len(tracks) <= 1:
                 continue
@@ -633,9 +670,9 @@ class CleanupTabMixin:
 
         from music_manager.core.selection import works_in_track_order
         works = works_in_track_order(album)
+        grouped = tracks_by_work(works)
         for work in works:
-            tracks = list(Track.select().where(Track.work == work)
-                          .order_by(Track.disc_number, Track.track_number))
+            tracks = grouped.get(work.id, [])
             composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
             work_iid = album_tree.insert(
                 "", "end", text=work.work_name,
@@ -819,9 +856,10 @@ class CleanupTabMixin:
             album_tree.delete(*album_tree.get_children())
             popup_track_map.clear()
             from music_manager.core.selection import works_in_track_order
-            for work in works_in_track_order(album):
-                tracks = list(Track.select().where(Track.work == work)
-                              .order_by(Track.disc_number, Track.track_number))
+            popup_works = works_in_track_order(album)
+            popup_grouped = tracks_by_work(popup_works)
+            for work in popup_works:
+                tracks = popup_grouped.get(work.id, [])
                 composer = tracks[0].composer.name if tracks and tracks[0].composer_id else ""
                 w_iid = album_tree.insert(
                     "", "end", text=work.work_name,

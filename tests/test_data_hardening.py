@@ -192,9 +192,10 @@ def test_resnapshot_updates_rows_without_losing_leftovers(lib):
 # F9/D3: path indexes and the duplicate hard stop
 # ---------------------------------------------------------------------------
 
+@pytest.mark.sqlite_only  # index names are asserted per-backend in
+# test_mysql_schema.py; here the point is the SQLite bootstrap path
 def test_fresh_database_gets_both_indexes(db):
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "idx_tracks_library_relpath" in names
     assert "uq_tracks_folder_relpath" in names
 
@@ -208,6 +209,8 @@ def test_unique_index_blocks_duplicate_inserts(lib):
             disc_number=1, track_number=99, duration_ms=1)
 
 
+@pytest.mark.sqlite_only  # DROP INDEX without ON <table> is invalid MySQL;
+# the server-side equivalents live in test_mysql_schema.py
 def test_duplicates_are_a_hard_stop_D3(lib, db):
     """Simulate a pre-V3 database containing duplicates: the unique
     index must NOT be created and startup must fail with a report."""
@@ -228,15 +231,13 @@ def test_duplicates_are_a_hard_stop_D3(lib, db):
     assert "A/Alb1/01.flac" in str(exc_info.value)
 
     # No unique index was sneaked in alongside the failure.
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "uq_tracks_folder_relpath" not in names
 
     # After the user fixes the duplicate, startup succeeds.
     Track.delete().where(Track.title == "dup").execute()
     _ensure_track_indexes()
-    names = {row[1] for row in
-             db.execute_sql("PRAGMA index_list('tracks')").fetchall()}
+    names = {ix.name for ix in db.get_indexes("tracks")}
     assert "uq_tracks_folder_relpath" in names
 
 
@@ -263,3 +264,35 @@ def test_scan_counts_skipped_non_audio_extensions(lib, tmp_path):
     assert stats.skipped_extensions == {".jpg": 2, ".txt": 1, ".flac_save": 1}
     assert stats.files_found == 0          # none were audio
     assert stats.tracks_no_track_number == 0
+
+
+def test_scan_skips_and_reports_over_long_paths(lib, tmp_path):
+    """A path longer than the indexed-column cap cannot live on a server
+    backend. SQLite would store it happily (it ignores column widths), so
+    the guard is what stops a library being built that cannot migrate.
+    Truncating instead would collide two tracks onto one identity."""
+    from music_manager.core.database import MAX_PATH_LENGTH, SourceFolder
+    from music_manager.core.scanner import scan_incremental
+
+    folder = tmp_path / "music"
+    deep = folder
+    # 3 nested components of 200 chars each clears 512 without exceeding
+    # any single-component filesystem limit (255).
+    for _ in range(3):
+        deep = deep / ("d" * 200)
+    deep.mkdir(parents=True)
+    (deep / "01.flac").write_bytes(b"x")
+    (folder / "Album").mkdir()
+    (folder / "Album" / "01.flac").write_bytes(b"x")
+
+    SourceFolder.delete().where(SourceFolder.library == lib).execute()
+    SourceFolder.create(library=lib, root_path=str(folder))
+
+    stats = scan_incremental(lib)
+
+    assert len(stats.paths_too_long) == 1
+    assert len(stats.paths_too_long[0]) > MAX_PATH_LENGTH
+    assert stats.paths_too_long[0].endswith("01.flac")
+    # The short path was still processed (it fails on tags, not on length),
+    # so one bad path does not abandon the rest of the scan.
+    assert any("Album/01.flac" in p for p in stats.files_failed)

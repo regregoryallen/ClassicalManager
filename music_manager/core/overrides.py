@@ -196,10 +196,16 @@ def apply_overrides(library: Library) -> dict[str, int]:
     overrides = list(Override.select().where(Override.library == library))
     logger.info("Applying %d overrides for library '%s'", len(overrides), library.name)
 
+    # Matching each override by its own query, resolving each composer by
+    # its own query, and saving each track individually cost three round
+    # trips per override — fine on a local file, four seconds against a
+    # server. Everything needed is loaded once up front instead.
+    ctx = _ApplyContext(library)
+
     with database.atomic():
         for ov in overrides:
             if ov.scope == "track":
-                applied = _apply_track_override(library, ov)
+                applied = _apply_track_override(library, ov, ctx)
             elif ov.scope == "album":
                 applied = _apply_album_override(library, ov)
             else:
@@ -212,13 +218,99 @@ def apply_overrides(library: Library) -> dict[str, int]:
             else:
                 counts["skipped"] += 1
 
+    ctx.flush()
     logger.info("Overrides applied: %s", counts)
     return counts
 
 
-def _apply_track_override(library: Library, ov: Override) -> bool:
+class _ApplyContext:
+    """Everything apply_overrides would otherwise fetch one row at a time."""
+
+    def __init__(self, library):
+        self.library = library
+        self._composers = {c.norm_key: c for c in
+                           Composer.select().where(Composer.library == library)}
+        self._dirty_tracks: dict[int, Track] = {}
+        self._dirty_fields: set = set()
+
+        # work_name overrides fetched and saved a Work row each; there are
+        # 277 of them in the real library.
+        self.works = {w.id: w for w in
+                      Work.select().join(Album).where(Album.library == library)}
+        self._dirty_works: dict[int, Work] = {}
+
+        self.by_path: dict[str, Track] = {}
+        self.by_mb_id: dict[str, list] = {}
+        for track in Track.select().where(Track.library == library):
+            self.by_path[track.relative_path] = track
+            if track.musicbrainz_recording_id:
+                self.by_mb_id.setdefault(
+                    track.musicbrainz_recording_id, []).append(track)
+
+    def match_track(self, mb_id, rel_path):
+        """Same rule as _match_track, served from memory: path identifies a
+        file, an ambiguous recording id is skipped rather than guessed."""
+        if rel_path:
+            track = self.by_path.get(rel_path)
+            if track is not None:
+                return track
+        if mb_id:
+            matches = self.by_mb_id.get(mb_id, [])
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                logger.warning(
+                    "Override matches %d tracks by recording ID %s and its path "
+                    "%r is not in the library; skipping rather than guessing.",
+                    len(matches), mb_id, rel_path)
+        return None
+
+    def composer(self, name):
+        """Resolve by normalized key from a map loaded once.
+
+        A classical library has nearly as many distinct composer names as
+        overrides, so caching on the raw name barely helped — 579 of the
+        640 lookups still missed and hit the database.
+        """
+        from music_manager.core.scanner import normalize_composer_name
+        if not name.strip():
+            return None
+        norm = normalize_composer_name(name)
+        found = self._composers.get(norm)
+        if found is None:
+            found = get_or_create_composer(self.library, name)
+            self._composers[norm] = found
+        return found
+
+    def set_work_name(self, work_id, value):
+        work = self.works.get(work_id)
+        if work is None:
+            return
+        work.work_name = value
+        self._dirty_works[work_id] = work
+
+    def touch(self, track, *fields):
+        self._dirty_tracks[track.id] = track
+        self._dirty_fields.update(fields)
+
+    def flush(self):
+        """One batched UPDATE per 200 rows instead of one per override."""
+        if self._dirty_tracks:
+            fields = [getattr(Track, name) for name in sorted(self._dirty_fields)]
+            Track.bulk_update(list(self._dirty_tracks.values()),
+                              fields=fields, batch_size=200)
+            self._dirty_tracks.clear()
+            self._dirty_fields.clear()
+        if self._dirty_works:
+            Work.bulk_update(list(self._dirty_works.values()),
+                             fields=[Work.work_name], batch_size=200)
+            self._dirty_works.clear()
+
+
+def _apply_track_override(library: Library, ov: Override, ctx=None) -> bool:
     """Apply a single track-scope override. Returns True if matched."""
-    track = _match_track(library, ov.match_mb_id, ov.match_relative_path)
+    track = (ctx.match_track(ov.match_mb_id, ov.match_relative_path) if ctx
+             else _match_track(library, ov.match_mb_id, ov.match_relative_path))
     if track is None:
         logger.debug("No track match for override %d (%s / %s)",
                      ov.id, ov.match_mb_id, ov.match_relative_path)
@@ -227,33 +319,38 @@ def _apply_track_override(library: Library, ov: Override) -> bool:
     field = ov.field
     value = ov.value
 
+    def _set(attr, new_value):
+        setattr(track, attr, new_value)
+        if ctx is not None:
+            ctx.touch(track, attr)
+        else:
+            track.save()
+
     if field == "title":
-        track.title = value
-        track.save()
+        _set("title", value)
     elif field == "composer":
-        composer = get_or_create_composer(library, value)
-        track.composer = composer
-        track.save()
+        composer = (ctx.composer(value) if ctx
+                    else get_or_create_composer(library, value))
+        _set("composer", composer)
     elif field == "disc_number":
-        track.disc_number = int(value)
-        track.save()
+        _set("disc_number", int(value))
     elif field == "track_number":
-        track.track_number = int(value)
-        track.save()
+        _set("track_number", int(value))
     elif field == "movement_number":
-        track.movement_number = int(value) if value else None
-        track.save()
+        _set("movement_number", int(value) if value else None)
     elif field == "work_name":
         # Update the work name immediately for display.
         # Also drives grouping during scan/redetect (scanner reads these).
         # __standalone__ is a grouping directive, not a display name.
         if track.work_id and value != "__standalone__":
-            work = Work.get_by_id(track.work_id)
-            work.work_name = value
-            work.save()
+            if ctx is not None:
+                ctx.set_work_name(track.work_id, value)
+            else:
+                work = Work.get_by_id(track.work_id)
+                work.work_name = value
+                work.save()
     elif field in ("genre", "performer", "conductor", "ensemble"):
-        setattr(track, field, value or None)
-        track.save()
+        _set(field, value or None)
 
     return True
 

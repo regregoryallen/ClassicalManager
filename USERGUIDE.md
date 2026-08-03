@@ -908,12 +908,47 @@ for rescanning to work.
 
 ### Sharing a Database Across Systems
 
-You can place the database on a shared drive (set `db_path` in `config.json`) and
-access it from multiple machines — but only run the app on one machine at a time.
-SQLite does not support concurrent access over network filesystems.
+There are two ways, and they behave quite differently.
+
+**A shared SQLite file.** Set `db_path` to a path on a shared drive. Simple, but
+only one machine may run the app at a time — SQLite does not support concurrent
+access over a network filesystem.
+
+**A MySQL or MariaDB server.** Set the `database` section (see below) and several
+machines can use one library at once. This is also more robust: no `-wal` files
+to keep together when copying, and no lock errors when a share drops out.
+
+Create the database and user on the server first:
+
+```sql
+CREATE DATABASE classical_manager CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER 'cmanager'@'%' IDENTIFIED BY 'your-password';
+GRANT ALL PRIVILEGES ON classical_manager.* TO 'cmanager'@'%';
+```
+
+The `utf8mb4_bin` collation is not optional. The usual defaults
+(`utf8mb4_general_ci`, `utf8mb4_unicode_ci`) are case- *and* accent-insensitive,
+so they treat `Dvorak` and `Dvořák` as the same composer, and two file paths
+differing only in capitalisation as the same file.
+
+**Moving an existing library to a server** copies everything, including
+similarity analyses and the file timestamps incremental scanning relies on:
+
+```bash
+python main.py --cli migrate-db --target mysql://cmanager@dbhost:3306/classical_manager
+```
+
+Supply the password in `$CM_TARGET_DB_PASSWORD` rather than in the URL, where it
+would be visible in the process list. Add `--dry-run` first to see the row counts.
+Every table is verified by content hash after copying, and the source database is
+only ever read. Then set the `database` section in `config.json` and restart.
+
+The window title shows which database is open — a file name for SQLite, or
+`schema @ host` for a server — so there is no doubt which one you are looking at.
 
 If the app cannot open the database (locked by another instance, network share
-unmounted), it shows a diagnostic message. The GUI offers the option to fall back
+unmounted, server unreachable, wrong credentials), it shows a diagnostic message
+naming the likely causes for that backend. The GUI offers the option to fall back
 to the local default database; the CLI exits with an error.
 
 If source folders are at different paths on each machine (e.g., `/mnt/Music` on
@@ -930,6 +965,15 @@ can generate playlists using path rules to translate paths for its target.
 {
   "active_library": 1,
   "db_path": "/path/to/music_manager.db",
+  "database": {
+    "backend": "mysql",
+    "host": "dbhost",
+    "port": 3306,
+    "name": "classical_manager",
+    "user": "cmanager",
+    "password_env": "CM_DB_PASSWORD",
+    "charset": "utf8mb4"
+  },
   "targets": {
     "plex": {
       "base_url": "http://server:32400",
@@ -964,7 +1008,13 @@ can generate playlists using path rules to translate paths for its target.
 
 | Field | Notes |
 |-------|-------|
-| `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. |
+| `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. Ignored when `database.backend` is `mysql`. |
+| `database` | Optional. Omit entirely for SQLite at `db_path` — which is what every existing install does. |
+| `database.backend` | `sqlite` or `mysql`. `mysql` also covers MariaDB. |
+| `database.host` / `port` / `name` / `user` | Server connection. Port defaults to 3306. |
+| `database.password` | Stored in `config.json`, which the installer sets to mode 600. |
+| `database.password_env` | Name of an environment variable holding the password. Wins over `password` when the variable is set, so a shared or backed-up config need not carry the credential. |
+| `database.charset` | Defaults to `utf8mb4`. Do not lower it — the server hands out `latin1` connections by default, which corrupts accented names on write. |
 | `targets.plex` | Omit entirely if you don't use Plex. At least one of `token` or `token_env` is required. |
 | `targets.plex.music_section` | Optional if set per-library in the sidebar. |
 | `targets.m3u` | Controls M3U export path style and rewriting. |

@@ -59,11 +59,17 @@ def test_installed_copy_writes_desktop_entry(tmp_path, monkeypatch):
     assert "StartupWMClass=classical-manager" in text
 
 
+def _patch_settings(monkeypatch, **kwargs):
+    from music_manager.core.config import DbSettings
+    settings = DbSettings(**kwargs)
+    monkeypatch.setattr("music_manager.core.config.resolve_db_settings",
+                        lambda: settings)
+
+
 def test_title_names_the_database(tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(
-        "music_manager.core.config.get_db_path",
-        lambda: Path("/mnt/MediaLib/music_manager.db"))
+    _patch_settings(monkeypatch, backend="sqlite",
+                    path=Path("/mnt/MediaLib/music_manager.db"))
 
     title = App._window_title()
     assert "music_manager.db" in title
@@ -73,12 +79,23 @@ def test_title_names_the_database(tmp_path, monkeypatch):
 def test_title_flags_dev_checkout(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(app_mod, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(
-        "music_manager.core.config.get_db_path",
-        lambda: Path("/tmp/scratch.db"))
+    _patch_settings(monkeypatch, backend="sqlite", path=Path("/tmp/scratch.db"))
 
     title = App._window_title()
     assert title.endswith("scratch.db [dev]")
+
+
+def test_title_names_host_and_schema_on_mysql(tmp_path, monkeypatch):
+    """A file name would name a database that is not the one in use."""
+    monkeypatch.setattr(app_mod, "PROJECT_ROOT", tmp_path)
+    _patch_settings(monkeypatch, backend="mysql", host="mariadb.lan",
+                    name="classical_manager", user="cmanager",
+                    password="secret")
+
+    title = App._window_title()
+    assert "classical_manager @ mariadb.lan" in title
+    assert "music_manager.db" not in title
+    assert "secret" not in title
 
 
 def test_title_survives_config_failure(tmp_path, monkeypatch):
@@ -86,7 +103,7 @@ def test_title_survives_config_failure(tmp_path, monkeypatch):
 
     def boom():
         raise RuntimeError("no config")
-    monkeypatch.setattr("music_manager.core.config.get_db_path", boom)
+    monkeypatch.setattr("music_manager.core.config.resolve_db_settings", boom)
 
     assert App._window_title() == "Classical Music Playlist Manager"
 

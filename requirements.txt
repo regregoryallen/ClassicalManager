@@ -11,6 +11,7 @@ mutagen==1.47.0
 packaging==26.2
 peewee==4.0.8
 PlexAPI==4.18.1
+PyMySQL==1.2.0
 Pygments==2.20.0
 requests==2.34.2
 rich==15.0.0

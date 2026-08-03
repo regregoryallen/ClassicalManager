@@ -235,6 +235,198 @@
   settled it was replaying the exact loop against a copy of the production
   database and logging each call's create-vs-update outcome.*
 
+## v3.5 — MySQL/MariaDB backend (branch `v3.5-dev`, started 2026-08-03)
+
+Server: MariaDB 10.6.7 at `mariadb.lan` (10.10.0.130). Database
+`classical_manager`, charset utf8mb4, **collation utf8mb4_bin**, user
+`cmanager`@`%`. The box also hosts the user's Kodi databases — all changes
+stay additive. Driver: `PyMySQL==1.2.0`.
+
+**Facts established by testing the server, not by assumption:**
+
+- The server default `utf8mb4_general_ci` is case- AND accent-insensitive:
+  `Bach`=`bach` *and* `Dvořák`=`Dvorak` both compare equal (so does
+  `utf8mb4_unicode_ci`). That would merge distinct composers under the
+  unique index on `composers(library, norm_key)`. MariaDB 10.6 offers only
+  `utf8mb4_bin`/`utf8mb4_nopad_bin` as non-`ci` options, so utf8mb4_bin it
+  is — which also matches SQLite's binary comparison. Measured on the real
+  library: 0 case collisions, 0 accent collisions today, so migrating now
+  is safe; the divergence would appear later.
+- **The client connects as latin1 by default.** `charset="utf8mb4"` must be
+  passed explicitly or accented names corrupt on write. ASCII test data
+  hides this.
+- **Index width: cap indexed text at VARCHAR(512).** InnoDB's 3072-byte key
+  limit is real — a non-unique index on `(INT, VARCHAR(768))` fails with
+  error 1071. UNIQUE indexes appear to escape it only because MariaDB 10.4+
+  silently rewrites over-long unique keys as `USING HASH`; verified in the
+  generated DDL, where `composers` came out
+  `UNIQUE KEY (...) USING HASH` over a `text` column. That is MariaDB-only
+  (MySQL 8 errors) and a hash index cannot serve ordered or prefix scans.
+  512 keeps every index a real B-tree and stays MySQL-portable. Longest
+  observed `relative_path`: 300 chars (p99 232).
+
+**Export/import does NOT cover migration** (audited 2026-08-03).
+`export_library` omits: all `TrackAnalysis` (6,373 rows, ~4 MB — the
+expensive librosa work), `Track.file_mtime`/`file_size` (so the next scan
+re-reads everything), `genre`/`performer`/`conductor`/`ensemble`,
+`disc_total`, `work_tag`, `mb_work_id`, `first_seen`,
+`PlaylistProfile.auto_generated`, and `Override.updated_at`. It also
+assigns every imported album to the *first* source folder — a latent bug
+for multi-folder libraries. Hence migration is a direct row copy (Phase 3),
+not a JSON round trip; the JSON export stays a portable curation backup.
+
+- [x] **Phase 1 — Backend abstraction** — done 2026-08-03 (212 tests green).
+  `pw.DatabaseProxy()` replaces the module-level `SqliteDatabase(None)`;
+  `_make_database()` builds SQLite (with the WAL/FK pragmas) or MySQL (with
+  the mandatory charset). `initialize_database(db_path=None, settings=None)`
+  keeps the old path-based calls working for tests and the GUI's
+  fall-back-to-local. New `config.DbSettings` + `resolve_db_settings()`;
+  optional `database` config section, absent = SQLite as before;
+  `password_env` beats `password` so a shared config need not carry the
+  credential; `describe()` never includes the password. Migrator chosen per
+  backend. `PRAGMA index_list` replaced with portable `get_indexes()` (also
+  in the tests), and `CREATE INDEX IF NOT EXISTS` dropped since MySQL
+  rejects it. CLI and GUI connection-failure hints are now backend-aware.
+  Verified against the live server: config → connection → DDL, failing only
+  at `_ensure_track_indexes`' non-unique index on a `text` column — exactly
+  Phase 2's scope.
+- [x] **Phase 2 — Schema portability** — done 2026-08-03 (214 tests green on
+  SQLite, 7 more against the live server). `MAX_PATH_LENGTH = 512` /
+  `MAX_KEY_LENGTH = 255` in `database.py`; every column taking part in an
+  index is now a `CharField`: `Track.relative_path`, `Album.album_key`,
+  `Composer.norm_key`, `ProfileSelection.key`, `ProfileSelection.level`
+  (16), `AnalysisSnapshot.relative_path`. `track_paths` stays TEXT — 6,040
+  chars, unindexed. No migration needed: SQLite ignores column widths, so
+  existing databases keep working untouched (verified against a copy of the
+  production library — 7,279 tracks, 431 albums, 758 composers, 6,373
+  analyses all read back, prefix queries included).
+
+  Scanner guard: a relative path over the cap is recorded in
+  `paths_too_long` and skipped, on both the full and quick paths, and
+  surfaced in the scan report. Skipping beats truncating (which would
+  collide two tracks onto one identity) and beats erroring mid-scan. In the
+  quick path the key is still added to `seen_keys`, so an existing row is
+  not mistaken for a deleted file.
+
+  *`ProfileSelection.level` was missed on the first pass and the DDL test
+  caught it* — its unique index is `(profile, level, key)`, and `level` was
+  still TEXT, so MariaDB silently made the whole index `USING HASH`. Nothing
+  else would have reported this: no error, no warning, and every test
+  passed. The `USING HASH` assertion is the only reason it surfaced; keep
+  it.
+- [x] **Phase 3 — Migration command** — done 2026-08-03 (226 tests green on
+  SQLite, 8 against the live server). `music_manager/core/db_migrate.py` +
+  `main.py --cli migrate-db --target URL [--source FILE] [--dry-run]
+  [--force]`. Table-by-table copy in FK order preserving primary keys,
+  reading through raw SQL so values move untranslated, batched at 500 rows
+  (~0.3 MB against a 16 MB `max_allowed_packet`). Target password comes
+  from `$CM_TARGET_DB_PASSWORD`, not the URL, which is visible in `ps`. A
+  non-empty target is refused unless `--force`. Each table is verified by
+  re-reading it and comparing a content hash of normalized values.
+
+  **The verification immediately earned itself.** `Track.file_mtime` was a
+  `FloatField`, which peewee maps to MySQL `FLOAT` — single precision,
+  ~7 significant digits. A Unix timestamp needs 17, so `1666807963.287016`
+  came back as `1666810000.0`, over half an hour out. Every file would have
+  looked modified to an incremental scan, and analysis restore compares on
+  exactly this value, so the 6,373 analyses would have been re-computed.
+  Counts and row totals were all perfect; only the content hash caught it.
+  Fixed by moving every `FloatField` to `DoubleField` (`Track.file_mtime`,
+  `TrackAnalysis.volatility`, `AnalysisSnapshot.volatility` and
+  `.file_mtime`). SQLite is unaffected — it has one numeric type — which is
+  why this could only ever surface against a server.
+
+  The other two mismatches were representation, not loss: SQLite keeps
+  tz-aware timestamps as text with `+00:00` while MySQL `DATETIME` has no
+  timezone and stores whole seconds. Normalization compares instants, so
+  the values are equal; MySQL holds naive UTC.
+
+  **Real-data result:** a copy of the production library (22,701 rows —
+  7,279 tracks, 5,420 works, 6,373 analyses, 1,773 selections) migrates in
+  ~2.5 s with every table verified. `generate-all` against MariaDB produced
+  22 of 24 playlists with track sets identical to SQLite; the other two
+  differ between two *SQLite* runs as well, so that is the shuffle on
+  length-limited profiles, not the backend.
+- [x] **Phase 4 — Close the export/import gaps** — done 2026-08-03 (233 tests
+  green). `library_io` now writes `format_version: 2` carrying similarity
+  analyses (keyed by folder + relative path, so they survive a rebuild), the
+  ten missing `Track` columns, `folder_idx` per album,
+  `profile.auto_generated`, and `override.updated_at` (previously stamped
+  "now" on every restore, losing the history). Import accepts version 1
+  files unchanged — absent fields stay absent rather than being invented.
+
+  The album→folder bug is fixed: every imported album used to be assigned
+  to the *first* source folder, which for a multi-folder library is both
+  wrong and capable of colliding on UNIQUE (folder_id, relative_path). A
+  test now round-trips two folders holding the same relative path.
+
+  Verified on the real library: a 14.2 MB export re-imported into an empty
+  database gives byte-identical values for all 7,279 tracks across all 16
+  columns, all 6,373 analyses, and every work and composer assignment.
+
+  *Note on the verification itself: the first comparison reported 84
+  mismatching tracks and was wrong — it compared "first 300 rows by id" in
+  each database, but ids are assigned in import order, so the two samples
+  were different tracks. Match on `relative_path`, never on id, when
+  comparing across a rebuild.*
+- [x] **Phase 5 — Test matrix** — done 2026-08-03. `pytest --backend=mysql`
+  runs the **whole** suite against a server, not just the schema tests:
+  233 pass on SQLite (7 s), 239 on MariaDB (35 s; +8 schema tests that
+  SQLite skips, −2 marked `sqlite_only`). `./run-tests.sh --both` runs
+  both and resolves the target from `CM_TEST_MYSQL_URL` or from
+  `config.json`, always against its own `cm_test` schema so a real library
+  is never truncated.
+
+  Fixtures: MySQL builds the schema once per session and TRUNCATEs between
+  tests. Deliberately not drop-and-recreate — repeated DDL is slow and is
+  what wedged `dict_sys.latch` and took the server down. Two things had to
+  be handled that only appear in a full run: other suites rebind the global
+  proxy (the migration tests point it at their own target, the io tests
+  close it), so `db` re-points every test; and `test_mysql_schema.py`
+  legitimately drops every table, so `db` recreates the schema when it
+  finds it missing.
+
+  `sqlite_only` marks the two tests asserting SQLite's index bootstrap —
+  `DROP INDEX x` without `ON <table>` is invalid MySQL, and the server-side
+  equivalents already live in `test_mysql_schema.py`.
+
+  *Run `--both` before merging anything touching models or queries.* SQLite
+  cannot catch type-mapping faults at all: it has one numeric type and
+  ignores column widths, which is why it passed a FLOAT that shifted file
+  mtimes by half an hour and TEXT columns MySQL cannot index.
+
+## v3.5 — remaining (optional)
+
+- [x] **Regroup Works batched inserts** — done 2026-08-03. **21,464 → 1,945
+  queries; 45.1 s → ~4.1 s predicted on MySQL.** Works are built in memory
+  with locally reserved primary keys and inserted per album by
+  `_flush_works`, instead of one `Work.create` each. `redetect_works` also
+  clears the whole library in two statements rather than three per album,
+  and loads every track in one query instead of one per album.
+
+  Primary keys come from `_reserve_work_id`, a counter keyed on the database
+  object so switching databases recomputes it. Deletes cannot cause a
+  collision because the counter only ever rises.
+
+  Verified identical grouping across all 7,279 tracks against a baseline,
+  with no orphaned track→work references and every track assigned. Seven
+  new tests in `test_work_batching.py` cover id uniqueness across albums and
+  across repeated runs, non-collision with works in another library, every
+  column of the hand-built insert row, work_sequence, and that a part-way
+  failure cannot attach one album's works to the next. Both mutations
+  (omitting a column, handing out duplicate ids) were confirmed to fail
+  those tests before being reverted.
+
+  Left alone deliberately: `_next_work_sequence` still issues one MAX per
+  album (431 queries, ~0.9 s). Priming it from `redetect_works` would couple
+  the two for very little, and `detect_works` stays correct for any caller.
+- [ ] **`reconcile_selections`**: 637 queries (~1.3 s), runs on profile
+  load. `_tracks_for_work_key` is called once per work-level selection;
+  the work-key → tracks map that `load_library_index` already builds would
+  remove it.
+- [ ] **Cut over for real**: re-migrate from current production and switch
+  the installed config at `~/.local/share/classical-manager/config.json`.
+
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 
 Two features that are really one capability seen from two angles: knowing

@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 
 import peewee as pw
 
-from music_manager.core.database import BaseModel, Library, Track, SourceFolder
+from music_manager.core.database import (
+    MAX_PATH_LENGTH, Album, BaseModel, Composer, Library, Track, SourceFolder)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class TrackAnalysis(BaseModel):
 
     track = pw.ForeignKeyField(Track, unique=True, on_delete="CASCADE")
     features = pw.TextField()  # JSON list of floats
-    volatility = pw.FloatField(null=True)
+    volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
 
@@ -61,12 +62,15 @@ class AnalysisSnapshot(BaseModel):
 
     library = pw.ForeignKeyField(Library, on_delete="CASCADE")
     folder_id = pw.IntegerField()
-    relative_path = pw.TextField()
+    relative_path = pw.CharField(max_length=MAX_PATH_LENGTH)
     features = pw.TextField()
-    volatility = pw.FloatField(null=True)
+    volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
-    file_mtime = pw.FloatField(null=True)
+    # See Track.file_mtime: MySQL FLOAT keeps ~7 significant digits,
+    # far too few for a Unix timestamp, and this value is what decides
+    # whether an analysis can be restored after a rescan.
+    file_mtime = pw.DoubleField(null=True)
     file_size = pw.IntegerField(null=True)
 
     class Meta:
@@ -328,9 +332,16 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
 
     # Load ALL current-version analyses for the library (z-score normalization)
     seed_track = Track.get_by_id(list(seed_ids)[0])
+    # Composer and Album are joined, not left to lazy loading: the scoring
+    # loop below reads composer.name and album.title for every candidate,
+    # which was two round trips per analysis — ~9,800 queries over a
+    # 6,373-track library, or 20 seconds against a database server.
     all_analyses = list(
-        TrackAnalysis.select(TrackAnalysis, Track)
+        TrackAnalysis.select(TrackAnalysis, Track, Composer, Album)
         .join(Track)
+        .join(Composer, pw.JOIN.LEFT_OUTER, on=(Track.composer == Composer.id))
+        .switch(Track)
+        .join(Album, pw.JOIN.LEFT_OUTER, on=(Track.album == Album.id))
         .where((Track.library == seed_track.library) &
                (TrackAnalysis.feature_version == FEATURE_VERSION))
     )

@@ -1,0 +1,208 @@
+"""v3.5 Phase 2: the schema must be creatable on MySQL/MariaDB.
+
+SQLite cannot verify any of this. It ignores column widths entirely (type
+affinity), so a CharField(max_length=512) there accepts a 5,000-character
+value and every index succeeds — the constraints Phase 2 exists to satisfy
+are invisible until a server is involved.
+
+Skipped when no server is configured, so the default suite stays offline.
+Point it at one with CM_TEST_MYSQL_URL, e.g.
+    mysql://user:pass@host:3306/dbname
+"""
+
+import os
+from urllib.parse import urlparse
+
+import peewee as pw
+import pytest
+
+from music_manager.core.database import (
+    MAX_KEY_LENGTH, MAX_PATH_LENGTH, Album, Composer, Library, Override,
+    PlaylistProfile, ProfileSelection, SourceFolder, Track, Work,
+    _ensure_track_indexes, database,
+)
+
+MODELS = [Library, SourceFolder, Composer, Album, Work, Track,
+          PlaylistProfile, ProfileSelection, Override]
+
+_URL = os.environ.get("CM_TEST_MYSQL_URL")
+
+
+@pytest.fixture()
+def mysql_db(mysql_settings):
+    """A connection with the schema built from scratch, dropped afterwards.
+
+    Gated on --backend=mysql rather than merely on CM_TEST_MYSQL_URL being
+    exported, so that a plain `pytest` run stays offline even in a shell
+    where the variable happens to be set.
+    """
+    if mysql_settings is None:
+        pytest.skip("run with --backend=mysql")
+    db = pw.MySQLDatabase(
+        mysql_settings.name, host=mysql_settings.host,
+        port=mysql_settings.port, user=mysql_settings.user,
+        password=mysql_settings.password, charset="utf8mb4")
+    database.initialize(db)
+    db.connect()
+    _drop_all(db)
+    db.create_tables(MODELS)
+    from music_manager.core.similarity import ensure_table
+    ensure_table()
+    _ensure_track_indexes()
+    yield db
+    _drop_all(db)
+    db.close()
+
+
+def _drop_all(db):
+    db.execute_sql("SET FOREIGN_KEY_CHECKS=0")
+    for (name,) in db.execute_sql("SHOW TABLES").fetchall():
+        db.execute_sql(f"DROP TABLE IF EXISTS `{name}`")
+    db.execute_sql("SET FOREIGN_KEY_CHECKS=1")
+
+
+def _ddl(db, table):
+    return db.execute_sql(f"SHOW CREATE TABLE `{table}`").fetchone()[1]
+
+
+def test_every_table_and_index_is_created(mysql_db):
+    """Before Phase 2 this failed: _ensure_track_indexes' non-unique index
+    over a `text` column raised error 1071."""
+    tables = {row[0] for row in mysql_db.execute_sql("SHOW TABLES").fetchall()}
+    assert {m._meta.table_name for m in MODELS} <= tables
+    names = {ix.name for ix in mysql_db.get_indexes("tracks")}
+    assert "idx_tracks_library_relpath" in names
+    assert "uq_tracks_folder_relpath" in names
+
+
+def test_no_index_was_silently_rewritten_as_a_hash(mysql_db):
+    """MariaDB 10.4+ rescues an over-long UNIQUE key by making it USING HASH,
+    with no error and no warning. That is MariaDB-only (MySQL 8 rejects it)
+    and a hash index cannot serve ordered or prefix scans, so its presence
+    means a column is too wide — exactly what this phase capped."""
+    offenders = [t for t in ("composers", "albums", "tracks",
+                             "profile_selections", "track_analysis_snapshot")
+                 if "USING HASH" in _ddl(mysql_db, t)]
+    assert offenders == []
+
+
+def test_indexed_columns_are_bounded_varchars(mysql_db):
+    """TEXT cannot be indexed on MySQL without a prefix length."""
+    for table, column, width in (
+            ("tracks", "relative_path", MAX_PATH_LENGTH),
+            ("albums", "album_key", MAX_PATH_LENGTH),
+            ("composers", "norm_key", MAX_KEY_LENGTH),
+            ("profile_selections", "key", MAX_PATH_LENGTH),
+    ):
+        col = next(c for c in mysql_db.get_columns(table) if c.name == column)
+        assert col.data_type == "varchar", f"{table}.{column} is {col.data_type}"
+        assert f"`{column}` varchar({width})" in _ddl(mysql_db, table)
+
+
+def test_unindexed_long_text_is_still_text(mysql_db):
+    """track_paths holds a JSON list and runs to 6,040 chars in the real
+    library. It is not indexed, so it must NOT be capped."""
+    col = next(c for c in mysql_db.get_columns("profile_selections")
+               if c.name == "track_paths")
+    assert col.data_type in ("text", "longtext")
+
+
+def test_accented_names_survive_and_stay_distinct(mysql_db):
+    """The server hands out latin1 connections by default, and its default
+    collation treats Dvořák and Dvorak as equal — either would corrupt or
+    merge composers."""
+    lib = Library.create(name="L")
+    a = Composer.create(library=lib, name="Dvořák", norm_key="dvořák")
+    b = Composer.create(library=lib, name="Dvorak", norm_key="dvorak")
+    assert Composer.get_by_id(a.id).name == "Dvořák"
+    assert Composer.select().where(Composer.library == lib).count() == 2
+    # Case must stay significant too, matching SQLite.
+    Composer.create(library=lib, name="BACH", norm_key="BACH")
+    Composer.create(library=lib, name="bach", norm_key="bach")
+    assert Composer.select().where(Composer.library == lib).count() == 4
+    assert b.norm_key == "dvorak"
+
+
+def test_the_unique_track_path_index_is_enforced(mysql_db):
+    lib = Library.create(name="L")
+    sf = SourceFolder.create(library=lib, root_path="/music")
+    album = Album.create(library=lib, folder=sf, album_key="A", title="A")
+    fields = dict(library=lib, folder=sf, album=album, title="t",
+                  disc_number=1, track_number=1, duration_ms=1)
+    Track.create(relative_path="A/01.flac", **fields)
+    with pytest.raises(pw.IntegrityError):
+        Track.create(relative_path="A/01.flac", **fields)
+    # Differing only by case is a DIFFERENT file under utf8mb4_bin.
+    Track.create(relative_path="a/01.flac", **fields)
+
+
+def test_a_path_at_the_cap_is_storable(mysql_db):
+    """The cap must be usable to its stated limit, not one short."""
+    lib = Library.create(name="L")
+    sf = SourceFolder.create(library=lib, root_path="/music")
+    album = Album.create(library=lib, folder=sf, album_key="A", title="A")
+    path = "A/" + "x" * (MAX_PATH_LENGTH - 2)
+    assert len(path) == MAX_PATH_LENGTH
+    t = Track.create(library=lib, folder=sf, album=album, title="t",
+                     relative_path=path, disc_number=1, track_number=1,
+                     duration_ms=1)
+    assert Track.get_by_id(t.id).relative_path == path
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: a real cross-backend migration
+# ---------------------------------------------------------------------------
+
+def test_migration_round_trip_keeps_values_exact(mysql_db, mysql_settings, tmp_path):
+    """The check SQLite cannot perform.
+
+    peewee's FloatField maps to MySQL FLOAT — single precision, ~7
+    significant digits. A Unix mtime needs 17, so 1666807963.287016 came
+    back as 1666810000.0: every file would look modified to an incremental
+    scan, and analysis restore compares on exactly this value. DoubleField
+    is the fix; this pins it.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from music_manager.core.config import DbSettings
+    from music_manager.core.database import initialize_database, database
+    from music_manager.core.db_migrate import migrate_database
+
+    mtime = 1666807963.287016
+    source_path = tmp_path / "source.db"
+    initialize_database(source_path)
+    lib = Library.create(name="Src")
+    folder = SourceFolder.create(library=lib, root_path="/music")
+    composer = Composer.create(library=lib, name="Dvořák", norm_key="dvořák")
+    album = Album.create(library=lib, folder=folder, album_key="A", title="A")
+    work = Work.create(album=album, composer=composer, work_name="W",
+                       work_sequence=1, work_source="work_tag")
+    track = Track.create(library=lib, folder=folder, album=album, work=work,
+                         composer=composer, title="Träck",
+                         relative_path="A/01.flac", disc_number=1,
+                         track_number=1, duration_ms=60_000,
+                         file_mtime=mtime, file_size=99)
+    from music_manager.core.similarity import TrackAnalysis, ensure_table
+    ensure_table()
+    TrackAnalysis.create(track=track, features=json.dumps([0.125] * 31),
+                         volatility=0.31619941274198127,
+                         analyzed_at=datetime.now(timezone.utc))
+    database.close()
+
+    report = migrate_database(
+        DbSettings(backend="sqlite", path=source_path),
+        mysql_settings,
+        force=True)
+
+    assert report.ok, [t.mismatch for t in report.tables if t.mismatch]
+
+    database.initialize(mysql_db)
+    mysql_db.connect(reuse_if_open=True)
+    moved = Track.get(Track.relative_path == "A/01.flac")
+    assert moved.file_mtime == mtime, "FLOAT would truncate this"
+    assert moved.title == "Träck"
+    assert Composer.get(Composer.norm_key == "dvořák").name == "Dvořák"
+    analysis = TrackAnalysis.get(TrackAnalysis.track == moved)
+    assert analysis.volatility == 0.31619941274198127
+    assert len(json.loads(analysis.features)) == 31

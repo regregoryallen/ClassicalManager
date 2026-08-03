@@ -40,23 +40,37 @@ def _setup_logging(verbose: bool = False) -> None:
 def _init_database():
     """Initialize the database, with a clear error if it fails."""
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import get_db_path, ConfigError
+    from music_manager.core.config import resolve_db_settings, ConfigError
     try:
-        db_path = get_db_path()
+        settings = resolve_db_settings()
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
     try:
-        initialize_database(db_path)
+        initialize_database(settings=settings)
     except Exception as exc:
-        typer.echo(f"Error: cannot open database: {db_path}", err=True)
+        typer.echo(f"Error: cannot open database: {settings.describe()}", err=True)
         typer.echo(f"  {exc}", err=True)
         typer.echo("", err=True)
         typer.echo("Possible causes:", err=True)
-        typer.echo("  - The app is open on another machine (database locked)", err=True)
-        typer.echo("  - The network share or drive is not mounted", err=True)
-        typer.echo("  - The db_path in config.json is incorrect", err=True)
+        for cause in _db_failure_causes(settings.backend):
+            typer.echo(f"  - {cause}", err=True)
         raise typer.Exit(1)
+
+
+def _db_failure_causes(backend: str) -> list[str]:
+    """Plausible reasons a connection failed, per backend."""
+    if backend == "mysql":
+        return [
+            "The database server is unreachable (host, port, or firewall)",
+            "The user, password, or database name in config.json is wrong",
+            "The user is not granted access from this machine's address",
+        ]
+    return [
+        "The app is open on another machine (database locked)",
+        "The network share or drive is not mounted",
+        "The db_path in config.json is incorrect",
+    ]
 
 
 def _get_library(name: str):
@@ -682,6 +696,108 @@ def import_library_cmd(
     typer.echo(f"Imported '{final_name}': {result['albums']} albums, "
                f"{result['profiles']} profiles, {result['overrides']} overrides")
     typer.echo(f"Selections imported: {result['selections_imported']}")
+    if result.get("analyses_imported"):
+        typer.echo(f"Similarity analyses restored: {result['analyses_imported']}")
     if result.get('old_format_skipped'):
         typer.echo(f"Old-format rules skipped: {result['old_format_skipped']} "
                    f"(re-create selections manually)")
+
+
+@app.command("migrate-db")
+def migrate_db(
+    target: str = typer.Option(
+        ..., "--target",
+        help="Target URL, e.g. mysql://user@host:3306/dbname. Leave the "
+             "password out and supply it via --password-env."),
+    source: str = typer.Option(
+        None, "--source",
+        help="Source SQLite file. Defaults to the configured database."),
+    password_env: str = typer.Option(
+        "CM_TARGET_DB_PASSWORD", "--password-env",
+        help="Environment variable holding the target password. Preferred "
+             "over putting it in the URL, which is visible in the process list."),
+    dry_run: bool = typer.Option(False, "--dry-run",
+                                 help="Report what would be copied; write nothing."),
+    force: bool = typer.Option(False, "--force",
+                               help="DELETE existing rows in the target first."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Copy a whole library to another database backend.
+
+    Copies every table including similarity analyses, preserving primary
+    keys, then verifies each table by content hash. The source is only read.
+    """
+    _setup_logging(verbose)
+    import os
+    from pathlib import Path
+    from urllib.parse import urlparse, unquote
+    from music_manager.core.config import DbSettings, resolve_db_settings
+    from music_manager.core.db_migrate import migrate_database
+
+    if source:
+        source_settings = DbSettings(backend="sqlite", path=Path(source))
+    else:
+        source_settings = resolve_db_settings()
+
+    parsed = urlparse(target)
+    if parsed.scheme in ("mysql", "mariadb"):
+        password = os.environ.get(password_env) or unquote(parsed.password or "")
+        if not password:
+            typer.echo(f"Error: no target password. Set ${password_env} "
+                       f"or include it in the URL.", err=True)
+            raise typer.Exit(1)
+        target_settings = DbSettings(
+            backend="mysql", host=parsed.hostname or "localhost",
+            port=parsed.port or 3306, name=parsed.path.lstrip("/"),
+            user=unquote(parsed.username or ""), password=password)
+    elif parsed.scheme in ("sqlite", ""):
+        path = parsed.path if parsed.scheme else target
+        target_settings = DbSettings(backend="sqlite", path=Path(path))
+    else:
+        typer.echo(f"Error: unsupported target scheme {parsed.scheme!r}. "
+                   f"Use mysql:// or sqlite://.", err=True)
+        raise typer.Exit(1)
+
+    if (source_settings.backend == target_settings.backend == "sqlite"
+            and source_settings.path == target_settings.path):
+        typer.echo("Error: source and target are the same database.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Source: {source_settings.describe()}")
+    typer.echo(f"Target: {target_settings.describe()}")
+    if dry_run:
+        typer.echo("(dry run — nothing will be written)")
+    typer.echo("")
+
+    report = migrate_database(
+        source_settings, target_settings, dry_run=dry_run, force=force,
+        progress=lambda msg: typer.echo(f"  {msg}"))
+
+    if report.error:
+        typer.echo("")
+        typer.echo(f"Error: {report.error}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo("")
+    width = max((len(t.table) for t in report.tables), default=10)
+    for t in report.tables:
+        if dry_run:
+            typer.echo(f"  {t.table:<{width}}  {t.source_rows:>7} rows")
+            continue
+        mark = {True: "ok", False: "MISMATCH", None: "-"}[t.verified]
+        line = (f"  {t.table:<{width}}  {t.copied:>7} copied  "
+                f"{t.target_rows:>7} in target  [{mark}]")
+        typer.echo(line)
+        if t.mismatch:
+            typer.echo(f"      {t.mismatch}", err=True)
+
+    typer.echo("")
+    if dry_run:
+        total = sum(t.source_rows for t in report.tables)
+        typer.echo(f"Would copy {total} rows. Re-run without --dry-run.")
+    elif report.ok:
+        typer.echo(f"Migrated {report.total_rows} rows; every table verified.")
+    else:
+        typer.echo("Migration completed with verification failures above.",
+                   err=True)
+        raise typer.Exit(1)

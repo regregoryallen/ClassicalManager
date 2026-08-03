@@ -22,7 +22,8 @@ from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
 
 from music_manager.core.database import (
-    database, Library, SourceFolder, Composer, Album, Work, Track, Override,
+    MAX_PATH_LENGTH, database, Library, SourceFolder, Composer, Album, Work,
+    Track, Override,
 )
 
 logger = logging.getLogger(__name__)
@@ -535,6 +536,11 @@ def detect_works(album: Album, pending_tracks: list[PendingTrack]) -> None:
       3. Title-prefix heuristic — within album/disc, group by common prefix
       4. Standalone single-track work
     """
+    # Anything left over means a previous album raised part-way through;
+    # carrying it into this album would write works onto the wrong one.
+    _pending_works.clear()
+    _pending_track_writes.clear()
+
     if not pending_tracks:
         return
 
@@ -555,17 +561,43 @@ def detect_works(album: Album, pending_tracks: list[PendingTrack]) -> None:
     # --- Step 4: Standalone ---
     _assign_standalone(album, pending_tracks, assigned)
 
+    # One batched write for the whole album. The steps above decide grouping
+    # purely in memory, so deferring the writes to here cannot change what
+    # they decide. Works first — the tracks' foreign keys point at them.
+    _flush_works()
+    _flush_track_works()
+    _reset_work_sequence_cache(album.id)
+
+
+# Next work_sequence per album id, so building an album's works costs one
+# MAX query instead of one per work. Detection creates every work for an
+# album in a single pass, so the counter cannot go stale mid-album; it is
+# cleared per album by _reset_work_sequence_cache.
+_work_sequence_cache: dict[int, int] = {}
+
+
+def _reset_work_sequence_cache(album_id: int | None = None) -> None:
+    if album_id is None:
+        _work_sequence_cache.clear()
+    else:
+        _work_sequence_cache.pop(album_id, None)
+
 
 def _next_work_sequence(album: Album) -> int:
     """Return the next available work_sequence for an album."""
-    max_seq = (
-        Work.select(Work.work_sequence)
-        .where(Work.album == album)
-        .order_by(Work.work_sequence.desc())
-        .limit(1)
-        .scalar()
-    )
-    return (max_seq or 0) + 1
+    cached = _work_sequence_cache.get(album.id)
+    if cached is None:
+        max_seq = (
+            Work.select(Work.work_sequence)
+            .where(Work.album == album)
+            .order_by(Work.work_sequence.desc())
+            .limit(1)
+            .scalar()
+        )
+        cached = max_seq or 0
+    nxt = cached + 1
+    _work_sequence_cache[album.id] = nxt
+    return nxt
 
 
 def _create_work(album: Album, name: str, source: str,
@@ -577,10 +609,15 @@ def _create_work(album: Album, name: str, source: str,
     if composer is None and tracks:
         comp_ids = [pt.db_track.composer_id for pt in tracks if pt.db_track.composer_id]
         if comp_ids:
-            modal_id = Counter(comp_ids).most_common(1)[0][0]
-            composer = Composer.get_by_id(modal_id)
+            # The id is all the foreign key needs — fetching the Composer row
+            # only to hand it straight back was a query per work.
+            composer = Counter(comp_ids).most_common(1)[0][0]
 
-    work = Work.create(
+    # Built but not saved: the whole album's works go in as one INSERT by
+    # _flush_works. Creating them one at a time was 5,420 round trips on a
+    # real library. The primary key is reserved up front so tracks can point
+    # at a work that has not been written yet.
+    work = Work(
         album=album,
         composer=composer,
         work_name=name,
@@ -588,14 +625,76 @@ def _create_work(album: Album, name: str, source: str,
         work_source=source,
         musicbrainz_work_id=mb_work_id or None,
     )
+    work.id = _reserve_work_id()
+    _pending_works.append(work)
 
     if tracks:
-        track_ids = [pt.db_track.id for pt in tracks]
-        Track.update(work=work).where(Track.id.in_(track_ids)).execute()
         for pt in tracks:
             pt.db_track.work = work
+        # The rows are written once per album by _flush_track_works, not
+        # once per work: an UPDATE per work was 5,420 round trips on a real
+        # library. Callers that create works outside detect_works still get
+        # an immediate write via the fallback there.
+        _pending_track_writes.extend(pt.db_track for pt in tracks)
 
     return work
+
+
+# Works built in memory but not yet written, and the tracks pointing at them.
+_pending_works: list = []
+_pending_track_writes: list = []
+
+# Primary keys are handed out locally so a whole album's works can be
+# inserted in one statement. Keyed on the database in use, so switching
+# databases (tests, a migration) recomputes rather than carrying a counter
+# across. Deletes cannot cause a collision: the counter only ever rises.
+_work_id_state: dict = {"db": None, "next": 0}
+
+
+def _reserve_work_id() -> int:
+    current = getattr(database, "obj", database)
+    if _work_id_state["db"] is not current:
+        highest = Work.select(Work.id).order_by(Work.id.desc()).limit(1).scalar()
+        _work_id_state["db"] = current
+        _work_id_state["next"] = (highest or 0) + 1
+    work_id = _work_id_state["next"]
+    _work_id_state["next"] += 1
+    return work_id
+
+
+def _flush_works() -> int:
+    """Insert the album's works, primary keys included."""
+    if not _pending_works:
+        return 0
+    rows = [{
+        Work.id: w.id,
+        Work.album: w.album_id,
+        Work.composer: w.composer_id,
+        Work.work_name: w.work_name,
+        Work.work_sequence: w.work_sequence,
+        Work.work_source: w.work_source,
+        Work.musicbrainz_work_id: w.musicbrainz_work_id,
+    } for w in _pending_works]
+    written = len(rows)
+    for start in range(0, written, 200):
+        Work.insert_many(rows[start:start + 200]).execute()
+    _pending_works.clear()
+    return written
+
+
+def _flush_track_works() -> int:
+    """Write the deferred work assignments in as few statements as possible.
+
+    bulk_update builds one CASE-based UPDATE per batch, so a whole album —
+    or a whole library during redetect — costs a handful of statements
+    rather than one per work.
+    """
+    if not _pending_track_writes:
+        return 0
+    written = len(_pending_track_writes)
+    Track.bulk_update(_pending_track_writes, fields=[Track.work], batch_size=200)
+    _pending_track_writes.clear()
+    return written
 
 
 def _assign_by_override(album: Album, pending: list[PendingTrack],
@@ -893,6 +992,11 @@ class ScanStats:
     # Tracks imported without a track number — a reliable sign the tags
     # were not read properly (it broke work detection for .ape files).
     tracks_no_track_number: int = 0
+    # Files whose relative path exceeds MAX_PATH_LENGTH. SQLite would store
+    # them (it ignores column widths), a server backend would not, so they
+    # are reported rather than silently creating a library that cannot be
+    # migrated. Truncating instead would collide two tracks onto one key.
+    paths_too_long: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1021,22 +1125,26 @@ def redetect_works(library: Library,
               "work_tag": 0, "heuristic": 0, "standalone": 0}
 
     with database.atomic():
+        # Every album is rebuilt, so clear the whole library at once rather
+        # than three statements per album, and read the tracks in one query
+        # instead of one per album. On a 431-album library that is ~1,700
+        # round trips saved.
+        album_ids = [a.id for a in albums]
+        if album_ids:
+            Track.update(work=None).where(Track.library == library).execute()
+            Work.delete().where(Work.album.in_(album_ids)).execute()
+
+        tracks_by_album: dict[int, list] = {aid: [] for aid in album_ids}
+        for track in (Track.select().where(Track.library == library)
+                      .order_by(Track.disc_number, Track.track_number)):
+            tracks_by_album.setdefault(track.album_id, []).append(track)
+
         for idx, album in enumerate(albums):
             if progress_callback:
                 progress_callback(idx + 1, len(albums), album.title)
 
-            # Clear all works for this album
-            old_works = list(Work.select(Work.id).where(Work.album == album))
-            if old_works:
-                old_ids = [w.id for w in old_works]
-                Track.update(work=None).where(
-                    Track.work_id.in_(old_ids)
-                ).execute()
-                Work.delete().where(Work.id.in_(old_ids)).execute()
-
-            # Build PendingTrack list with tags reconstructed from DB
-            all_tracks = list(Track.select().where(Track.album == album)
-                              .order_by(Track.disc_number, Track.track_number))
+            # Ordering within each album is preserved by the global sort.
+            all_tracks = tracks_by_album.get(album.id, [])
             pending: list[PendingTrack] = []
             for t in all_tracks:
                 tags = RawTags(
@@ -1289,6 +1397,8 @@ class IncrementalStats:
     albums_affected: int = 0
     skipped_extensions: dict = field(default_factory=dict)
     tracks_no_track_number: int = 0
+    # See ScanStats.paths_too_long — a quick scan hits the same guard.
+    paths_too_long: list[str] = field(default_factory=list)
     # Relative paths of tracks this scan added — drives the per-import
     # profile (v3.3). Paths rather than ids so the caller resolves them
     # after the scan's own transactions have settled.
@@ -1358,7 +1468,12 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
 
         rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
         key = (sf.id, rel_path)
+        # Keep the key seen even when over-length, so an existing row for
+        # this file is not mistaken for a deleted file and removed.
         seen_keys.add(key)
+        if len(rel_path) > MAX_PATH_LENGTH:
+            stats.paths_too_long.append(rel_path)
+            continue
 
         old_track = existing.get(key)
         if old_track:
@@ -1610,6 +1725,10 @@ def _process_album_group(
     pending_tracks: list[PendingTrack] = []
     for sf_file, fpath, raw in file_group:
         rel_path = str(PurePosixPath(fpath.relative_to(sf.root_path)))
+        if len(rel_path) > MAX_PATH_LENGTH:
+            stats.paths_too_long.append(rel_path)
+            continue  # skip this file only; the rest of the album is fine
+
         composer = get_or_create_composer(library, raw.composer)
 
         try:

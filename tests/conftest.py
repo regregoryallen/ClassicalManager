@@ -1,8 +1,22 @@
-"""Shared fixtures: a fresh temp-file SQLite DB per test, plus row factories.
+"""Shared fixtures: a fresh database per test, plus row factories.
 
 Tests build library data by inserting rows directly — no file scanning,
 no mutagen, no audio files.
+
+The whole suite can run against either backend:
+
+    pytest                                        # SQLite (default, offline)
+    CM_TEST_MYSQL_URL=mysql://u:p@host/db \\
+        pytest --backend=mysql                    # the same tests on MySQL
+
+SQLite cannot catch type-mapping faults — it has one numeric type and
+ignores column widths — so it silently passed a FLOAT that truncated file
+mtimes by half an hour, and TEXT columns that MySQL cannot index. Running
+the real suite against a server is the only thing that finds those.
 """
+
+import os
+from urllib.parse import urlparse
 
 import pytest
 
@@ -12,14 +26,129 @@ from music_manager.core.database import (
     PlaylistProfile, ProfileSelection,
 )
 
+_ALL_TABLES = ("track_analysis", "track_analysis_snapshot", "profile_selections",
+               "overrides", "playlist_profiles", "tracks", "works", "albums",
+               "composers", "source_folders", "libraries")
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--backend", action="store", default="sqlite",
+        choices=("sqlite", "mysql"),
+        help="Database backend for the suite. mysql needs CM_TEST_MYSQL_URL.")
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "sqlite_only: test depends on SQLite specifics (schema introspection, "
+        "file-level behaviour) and is skipped on a server backend.")
+
+
+@pytest.fixture(scope="session")
+def backend(request):
+    return request.config.getoption("--backend")
+
+
+@pytest.fixture(scope="session")
+def mysql_settings(backend):
+    """Resolved target for --backend=mysql, or None for SQLite."""
+    if backend != "mysql":
+        return None
+    url = os.environ.get("CM_TEST_MYSQL_URL")
+    if not url:
+        raise pytest.UsageError(
+            "--backend=mysql requires CM_TEST_MYSQL_URL, e.g. "
+            "mysql://user:pass@host:3306/dbname")
+    from music_manager.core.config import DbSettings
+    u = urlparse(url)
+    return DbSettings(backend="mysql", host=u.hostname, port=u.port or 3306,
+                      name=u.path.lstrip("/"), user=u.username,
+                      password=u.password or "")
+
+
+def _ensure_schema():
+    """Recreate the schema if it is missing.
+
+    test_mysql_schema.py legitimately drops every table in the schema it is
+    pointed at, so a later test cannot assume the tables are still there.
+    Cheap when they are: one existence check.
+    """
+    from music_manager.core.database import (
+        Override, _ensure_track_indexes,
+    )
+    if database.table_exists(Track._meta.table_name):
+        return
+    database.create_tables([Library, SourceFolder, Composer, Album, Work,
+                            Track, PlaylistProfile, ProfileSelection, Override])
+    from music_manager.core.similarity import ensure_table
+    ensure_table()
+    _ensure_track_indexes()
+
+
+def _truncate_all():
+    """Empty every table without touching the schema.
+
+    Deliberately not drop-and-recreate: repeated DDL is both slow and, as a
+    wedged dict_sys.latch on the real server showed, a good way to hang
+    MySQL when a run is interrupted mid-statement.
+    """
+    database.execute_sql("SET FOREIGN_KEY_CHECKS=0")
+    try:
+        for table in _ALL_TABLES:
+            try:
+                database.execute_sql(f"TRUNCATE TABLE `{table}`")
+            except Exception:
+                pass  # table not created yet on the first pass
+    finally:
+        database.execute_sql("SET FOREIGN_KEY_CHECKS=1")
+
+
+@pytest.fixture(scope="session")
+def mysql_connection(mysql_settings):
+    """Connect and build the schema ONCE for the whole session.
+
+    Per-test initialize_database would rebind the proxy to a fresh database
+    object each time, leaking the previous connection, and would repeat the
+    DDL 200+ times for no benefit.
+    """
+    if mysql_settings is None:
+        yield None                   # a bare return here yields nothing
+        return
+    initialize_database(settings=mysql_settings)
+    concrete = database.obj          # the real database behind the proxy
+    yield concrete
+    if not concrete.is_closed():
+        concrete.close()
+
 
 @pytest.fixture()
-def db(tmp_path):
-    """Initialize the shared Peewee database against a per-test temp file."""
-    initialize_database(tmp_path / "test.db")
+def db(request, tmp_path, mysql_settings, mysql_connection):
+    """The shared Peewee database, per test.
+
+    SQLite gets a fresh temp file. MySQL keeps one schema for the session
+    and is emptied between tests.
+    """
+    if mysql_settings is None:
+        initialize_database(tmp_path / "test.db")
+        yield database
+        if not database.is_closed():
+            database.close()
+        return
+
+    if request.node.get_closest_marker("sqlite_only"):
+        pytest.skip("depends on SQLite specifics")
+    # Other suites rebind the global proxy — the migration tests point it at
+    # their own target, the io tests close it — so put it back rather than
+    # assuming it still refers to the session connection.
+    database.initialize(mysql_connection)
+    if database.is_closed():
+        database.connect()
+    _ensure_schema()
+    _truncate_all()
     yield database
-    if not database.is_closed():
-        database.close()
+    # The session connection stays open; closing per test would pay a full
+    # handshake each time.
 
 
 @pytest.fixture()

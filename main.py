@@ -64,6 +64,13 @@ CLI commands:
   import-library --input FILE [--name NAME] [-v]
       Import a library from a JSON backup file.
 
+  migrate-db --target URL [--source FILE] [--dry-run] [--force] [-v]
+      Copy a whole database to another backend, e.g.
+      mysql://user@host:3306/dbname. Unlike the JSON export this carries
+      similarity analyses and file timestamps, preserves primary keys, and
+      verifies every table by content hash. Supply the password via
+      $CM_TARGET_DB_PASSWORD rather than in the URL.
+
   webhook [--library NAME] [--host ADDR] [--port PORT] [-v]
       Start the webhook HTTP service for remote job submission.
       Used by Home Assistant or other automation tools.

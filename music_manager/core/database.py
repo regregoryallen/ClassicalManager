@@ -23,7 +23,37 @@ logger = logging.getLogger(__name__)
 
 DATABASE_PATH = PROJECT_ROOT / "music_manager.db"
 
-database = pw.SqliteDatabase(None)
+# Text that takes part in an index must have a declared width on MySQL.
+# 512 is the largest that keeps a composite index inside InnoDB's 3072-byte
+# key limit: (INT, VARCHAR(512)) at utf8mb4 is 2052 bytes, while VARCHAR(768)
+# overflows it. Going wider would not fail loudly on MariaDB — it silently
+# rewrites over-long UNIQUE keys as USING HASH, which MySQL rejects outright
+# and which cannot serve ordered or prefix scans. SQLite ignores the width
+# entirely (type affinity), so this only ever binds on a server backend.
+MAX_PATH_LENGTH = 512
+MAX_KEY_LENGTH = 255
+
+# A proxy, so the concrete backend (SQLite file or MySQL/MariaDB server) can
+# be chosen at startup while the models below stay bound to one object.
+database = pw.DatabaseProxy()
+
+
+def _make_database(settings) -> pw.Database:
+    """Build the concrete peewee database for the resolved settings."""
+    if settings.backend == "mysql":
+        return pw.MySQLDatabase(
+            settings.name,
+            host=settings.host, port=settings.port,
+            user=settings.user, password=settings.password,
+            # The server hands out latin1 connections by default; without
+            # this, accented composer names are corrupted on write.
+            charset=settings.charset,
+        )
+    # SQLite only: WAL for concurrent readers, and FKs are off by default.
+    return pw.SqliteDatabase(str(settings.path), pragmas={
+        "journal_mode": "wal",
+        "foreign_keys": 1,
+    })
 
 
 class DuplicateTracksError(Exception):
@@ -51,15 +81,16 @@ def _ensure_track_indexes() -> None:
       Duplicates are a hard stop (D3): raise with the offending rows so
       the user can fix the underlying files/DB and restart.
     """
-    database.execute_sql(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_library_relpath "
-        "ON tracks (library_id, relative_path)"
-    )
+    # get_indexes() works on every backend; PRAGMA index_list does not, and
+    # CREATE INDEX IF NOT EXISTS is not portable either (MySQL rejects it).
+    index_names = {ix.name for ix in database.get_indexes("tracks")}
 
-    index_names = {
-        row[1] for row in
-        database.execute_sql("PRAGMA index_list('tracks')").fetchall()
-    }
+    if "idx_tracks_library_relpath" not in index_names:
+        database.execute_sql(
+            "CREATE INDEX idx_tracks_library_relpath "
+            "ON tracks (library_id, relative_path)"
+        )
+
     if "uq_tracks_folder_relpath" in index_names:
         return  # uniqueness already enforced; no duplicates possible
 
@@ -87,23 +118,28 @@ def _ensure_track_indexes() -> None:
     logger.info("Created unique index on tracks (folder_id, relative_path)")
 
 
-def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
+def initialize_database(db_path: Path | None = None,
+                        settings=None) -> pw.Database:
     """Initialize the database connection and create tables.
 
     Args:
-        db_path: Optional override for the database file location.
-                 Defaults to <project_root>/music_manager.db.
+        db_path: A SQLite file to use, bypassing config entirely. Tests and
+                 the GUI's fall-back-to-local path rely on this.
+        settings: A resolved config.DbSettings. Takes precedence over
+                 db_path; when both are omitted, config decides.
 
     Returns:
-        The initialized SqliteDatabase instance.
+        The connected peewee database.
     """
-    path = db_path or DATABASE_PATH
-    database.init(str(path), pragmas={
-        "journal_mode": "wal",
-        "foreign_keys": 1,
-    })
-    database.connect()
-    logger.info("Database connected: %s", path)
+    from music_manager.core.config import DbSettings, resolve_db_settings
+
+    if settings is None:
+        settings = (DbSettings(backend="sqlite", path=Path(db_path))
+                    if db_path is not None else resolve_db_settings())
+
+    database.initialize(_make_database(settings))
+    database.connect(reuse_if_open=True)
+    logger.info("Database connected: %s", settings.describe())
 
     database.create_tables([
         Library,
@@ -121,8 +157,10 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
     # IMPORTANT: always use null=True in migration field definitions — Peewee's
     # SqliteMigrator adds a NOT NULL constraint via _update_column, which drops
     # and recreates the table, triggering ON DELETE CASCADE on related tables.
-    from playhouse.migrate import SqliteMigrator, migrate as run_migrate
-    migrator = SqliteMigrator(database)
+    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
+                                   migrate as run_migrate)
+    migrator = (MySQLMigrator(database) if settings.backend == "mysql"
+                else SqliteMigrator(database))
     columns = {col.name for col in database.get_columns("libraries")}
     if "plex_section" not in columns:
         run_migrate(migrator.add_column("libraries", "plex_section",
@@ -138,7 +176,7 @@ def initialize_database(db_path: Path | None = None) -> pw.SqliteDatabase:
         logger.info("Migrated: added work_tag, mb_work_id to tracks")
     if "file_mtime" not in track_cols:
         run_migrate(
-            migrator.add_column("tracks", "file_mtime", pw.FloatField(null=True)),
+            migrator.add_column("tracks", "file_mtime", pw.DoubleField(null=True)),
             migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
         )
         logger.info("Migrated: added file_mtime, file_size to tracks")
@@ -231,7 +269,7 @@ class Composer(BaseModel):
     library = pw.ForeignKeyField(Library, backref="composers", on_delete="CASCADE")
     name = pw.TextField()          # display form as tagged
     sort_name = pw.TextField(null=True)  # e.g. "Beethoven, Ludwig van"
-    norm_key = pw.TextField()      # normalized key for dedup/matching
+    norm_key = pw.CharField(max_length=MAX_KEY_LENGTH)  # normalized key for dedup/matching
 
     class Meta:
         table_name = "composers"
@@ -254,7 +292,7 @@ class Album(BaseModel):
 
     library = pw.ForeignKeyField(Library, backref="albums", on_delete="CASCADE")
     folder = pw.ForeignKeyField(SourceFolder, backref="albums", on_delete="CASCADE")
-    album_key = pw.TextField()             # folder's relative path = album identity
+    album_key = pw.CharField(max_length=MAX_PATH_LENGTH)  # folder's relative path = album identity
     title = pw.TextField()                 # from tags; folder name as fallback
     album_artist = pw.TextField(null=True)
     year = pw.IntegerField(null=True)
@@ -303,7 +341,7 @@ class Track(BaseModel):
     work = pw.ForeignKeyField(Work, backref="tracks", null=True, on_delete="SET NULL")
     composer = pw.ForeignKeyField(Composer, backref="tracks", null=True, on_delete="SET NULL")
     title = pw.TextField()
-    relative_path = pw.TextField()  # POSIX, relative to SourceFolder.root_path
+    relative_path = pw.CharField(max_length=MAX_PATH_LENGTH)  # POSIX, relative to SourceFolder.root_path
     disc_number = pw.IntegerField(default=1)
     disc_total = pw.IntegerField(null=True)
     track_number = pw.IntegerField()
@@ -316,7 +354,11 @@ class Track(BaseModel):
     ensemble = pw.TextField(null=True)           # orchestra/ensemble
     work_tag = pw.TextField(null=True)          # raw WORK tag from file
     mb_work_id = pw.TextField(null=True)        # per-track MusicBrainz work ID from file
-    file_mtime = pw.FloatField(null=True)       # file modification time (os.stat)
+    # DOUBLE, not FLOAT: a Unix timestamp needs ~17 significant digits and
+    # MySQL's single-precision FLOAT keeps ~7, which shifted real mtimes by
+    # over half an hour — every file would look changed to an incremental
+    # scan, and analysis preservation compares on this value.
+    file_mtime = pw.DoubleField(null=True)      # file modification time (os.stat)
     file_size = pw.IntegerField(null=True)       # file size in bytes
     # When this track first entered the library. Set on INSERT only and
     # preserved across full rescans — file_mtime is the FILE's time and
@@ -377,8 +419,8 @@ class ProfileSelection(BaseModel):
 
     profile = pw.ForeignKeyField(PlaylistProfile, backref="selections",
                                  on_delete="CASCADE")
-    level = pw.TextField()          # 'album' / 'work' / 'track'
-    key = pw.TextField()            # stable text key (album_key, composite work key, or relative_path)
+    level = pw.CharField(max_length=16)  # 'album' / 'work' / 'track'
+    key = pw.CharField(max_length=MAX_PATH_LENGTH)  # stable text key (album_key, composite work key, or relative_path)
     excluded = pw.BooleanField(default=False)  # False=add, True=exception
     pin_position = pw.IntegerField(null=True)  # 1-5 or NULL; only for level='work'
     track_paths = pw.TextField(null=True)  # JSON list of relative_paths; work-level only.

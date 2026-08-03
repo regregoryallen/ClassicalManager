@@ -41,7 +41,7 @@ def launch_gui():
         return
 
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import get_db_path
+    from music_manager.core.config import resolve_db_settings
     prefs = _load_prefs()
 
     # Migrate db_path from gui_prefs.json to config.json (one-time)
@@ -57,22 +57,29 @@ def launch_gui():
         except Exception:
             pass
 
-    db_path = get_db_path()
+    settings = resolve_db_settings()
     try:
-        initialize_database(db_path)
+        initialize_database(settings=settings)
     except Exception as exc:
         import tkinter as _tk
         _tk.Tk().withdraw()
         from tkinter import messagebox as _mb
         from music_manager.core.database import DATABASE_PATH
-        msg = (f"Cannot open database:\n{db_path}\n\n"
+        if settings.backend == "mysql":
+            causes = ("  - The database server is unreachable "
+                      "(host, port, or firewall)\n"
+                      "  - The user, password, or database name is wrong\n"
+                      "  - The user is not granted access from this machine\n\n"
+                      "Check the 'database' section of config.json.")
+        else:
+            causes = ("  - The app is open on another machine (database locked)\n"
+                      "  - The network share or drive is not mounted\n"
+                      "  - The path in config.json is incorrect\n\n"
+                      "Close the app on other machines and ensure the path is "
+                      "accessible, or update db_path in config.json.")
+        msg = (f"Cannot open database:\n{settings.describe()}\n\n"
                f"Error: {exc}\n\n"
-               f"Possible causes:\n"
-               f"  - The app is open on another machine (database locked)\n"
-               f"  - The network share or drive is not mounted\n"
-               f"  - The path in config.json is incorrect\n\n"
-               f"Close the app on other machines and ensure the path is "
-               f"accessible, or update db_path in config.json.\n\n"
+               f"Possible causes:\n{causes}\n\n"
                f"Fall back to the local default database?")
         if _mb.askyesno("Database Error", msg):
             initialize_database(DATABASE_PATH)
@@ -141,8 +148,12 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """
         base = "Classical Music Playlist Manager"
         try:
-            from music_manager.core.config import get_db_path
-            db_name = Path(get_db_path()).name
+            from music_manager.core.config import resolve_db_settings
+            settings = resolve_db_settings()
+            # A server backend needs host and schema to be identifiable;
+            # the file name alone would name a database that isn't in use.
+            db_name = (Path(settings.path).name if settings.backend == "sqlite"
+                       else f"{settings.name} @ {settings.host}")
         except Exception:
             return base
         suffix = " [dev]" if (PROJECT_ROOT / ".git").exists() else ""
@@ -1135,6 +1146,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         failed = list(getattr(stats, "files_failed", []) or [])
         skipped = dict(getattr(stats, "skipped_extensions", {}) or {})
         no_trk = getattr(stats, "tracks_no_track_number", 0)
+        too_long = list(getattr(stats, "paths_too_long", []) or [])
 
         imported = []
         if kind == "quick":
@@ -1168,6 +1180,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 f"{no_trk} track(s) imported with no track number. Their "
                 f"tags may not have been read, which also prevents works "
                 f"from grouping.")
+        if too_long:
+            from music_manager.core.database import MAX_PATH_LENGTH
+            problems.append(
+                f"{len(too_long)} file(s) have a path longer than "
+                f"{MAX_PATH_LENGTH} characters and were NOT imported. "
+                f"Shorten the folder or file name. Longest: "
+                f"{max(len(p) for p in too_long)} characters.")
         for label, count in (
                 ("tracks have no composer",
                  getattr(stats, "tracks_no_composer", 0)),
@@ -1182,7 +1201,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         popup.title("Scan Report")
         popup.transient(self.root)
         popup.configure(bg="#2b2b2b")
-        self._center_on_main(popup, 760, 560 if (failed or skipped) else 420)
+        self._center_on_main(popup, 760,
+                             560 if (failed or skipped or too_long) else 420)
 
         def section(title):
             tk.Label(popup, text=title, bg="#2b2b2b", fg="white",

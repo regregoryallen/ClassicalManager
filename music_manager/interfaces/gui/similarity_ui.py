@@ -75,80 +75,92 @@ class SimilarityUIMixin:
         """Confirm the batch and choose how many cores to give it.
 
         Analysis is CPU-bound, so the worker count is the one setting that
-        changes how long this takes — several hours against under one. It
+        changes how long this takes — twenty hours against under three. It
         belongs next to the decision to start, not only in the CLI.
-        Returns the chosen count, or None if cancelled.
+
+        grab_set() MUST come after wait_visibility(). Grabbing a window that
+        is not yet mapped raises TclError, which aborted this method before
+        it created a single widget or applied its geometry — the symptom was
+        a small empty window, not an error dialog. Every other Toplevel here
+        follows the same order.
+
+        Plain tk widgets on a "#2b2b2b" Toplevel to match _ask_scan_mode.
+        (CTk widgets do work in a plain Toplevel — _run_sim_analysis uses
+        them — but the surrounding dialogs are tk, so this stays consistent.)
+
+        Returns the chosen worker count, or None if cancelled.
         """
-        from music_manager.core.similarity import (
-            default_worker_count, expected_speedup)
         import os as _os
+        from music_manager.core.similarity import default_worker_count
 
-        ctk = self.ctk
         cores = _os.cpu_count() or 2
-        choices = [n for n in (1, 2, 4, 8, 12, 16, 24, 32) if n <= cores]
-        if cores not in choices:
-            choices.append(cores)
         default = default_worker_count()
-        if default not in choices:
-            choices.append(default)
-        choices.sort()
+        choices = sorted({n for n in (1, 2, 4, 8, 12, 16, 24, 32)
+                          if n <= cores} | {cores, default})
 
-        result = {"workers": None}
         dialog = tk.Toplevel(self.root)
         dialog.title("Analyze Audio")
         dialog.transient(self.root)
+        dialog.configure(bg="#2b2b2b")
+        self._center_on_main(dialog, 560, 330)
+        dialog.wait_visibility()
         dialog.grab_set()
-        self._center_on_main(dialog, 520, 320)
 
-        ctk.CTkLabel(dialog, text="Analyze Audio",
-                     font=ctk.CTkFont(size=15, weight="bold")).pack(
-            anchor="w", padx=20, pady=(16, 4))
-        ctk.CTkLabel(
-            dialog, justify="left", wraplength=470,
-            text=(f"{missing} of {self._analysis_gap()[1]} tracks need audio "
-                  f"analysis.\n\nProgress is saved as it goes — you can "
-                  f"cancel and resume later.")).pack(anchor="w", padx=20)
+        tk.Label(dialog, text="Analyze Audio", bg="#2b2b2b", fg="white",
+                 font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=16,
+                                                     pady=(14, 6))
+        total = self._analysis_gap()[1]
+        tk.Label(dialog,
+                 text=(f"{missing} of {total} tracks need audio analysis.\n"
+                       f"Progress is saved as it goes — you can cancel and "
+                       f"resume later."),
+                 bg="#2b2b2b", fg="gray80", justify="left",
+                 font=("Segoe UI", 11)).pack(anchor="w", padx=16)
 
-        row = ctk.CTkFrame(dialog, fg_color="transparent")
-        row.pack(anchor="w", padx=20, pady=(14, 4))
-        ctk.CTkLabel(row, text="Worker processes:").pack(side="left")
+        row = tk.Frame(dialog, bg="#2b2b2b")
+        row.pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(row, text="Worker processes:", bg="#2b2b2b", fg="white",
+                 font=("Segoe UI", 11)).pack(side="left")
         worker_var = tk.StringVar(value=str(default))
-        ctk.CTkOptionMenu(row, variable=worker_var, width=90,
-                          values=[str(n) for n in choices],
-                          command=lambda _v: _refresh()).pack(side="left", padx=8)
-        ctk.CTkLabel(row, text=f"of {cores} cores",
-                     text_color=("gray25", "gray70")).pack(side="left")
+        option = tk.OptionMenu(row, worker_var, *[str(n) for n in choices])
+        option.configure(bg="#3b3b3b", fg="white", activebackground="#4b4b4b",
+                         activeforeground="white", highlightthickness=0,
+                         font=("Segoe UI", 11), width=4)
+        option["menu"].configure(bg="#3b3b3b", fg="white")
+        option.pack(side="left", padx=8)
+        tk.Label(row, text=f"of {cores} cores", bg="#2b2b2b", fg="gray70",
+                 font=("Segoe UI", 10)).pack(side="left")
 
-        estimate = ctk.CTkLabel(dialog, justify="left", wraplength=470,
-                                text="")
-        estimate.pack(anchor="w", padx=20, pady=(2, 0))
-        note = ctk.CTkLabel(
-            dialog, justify="left", wraplength=470,
-            text_color=("gray25", "gray70"),
-            text=("More workers finish sooner but leave less machine for "
-                  "everything else. Measured scaling flattens past about 12 "
-                  "— the workers start competing for memory bandwidth."))
-        note.pack(anchor="w", padx=20, pady=(6, 0))
+        estimate = tk.Label(dialog, bg="#2b2b2b", fg="#e0b050",
+                            justify="left", font=("Segoe UI", 11))
+        estimate.pack(anchor="w", padx=16, pady=(6, 0))
+        tk.Label(dialog,
+                 text=("More workers finish sooner but leave less machine for\n"
+                       "everything else. Measured scaling flattens past about\n"
+                       "12 — the workers start competing for memory bandwidth."),
+                 bg="#2b2b2b", fg="gray70", justify="left",
+                 font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(8, 0))
 
-        def _refresh():
-            n = int(worker_var.get())
+        def refresh(*_args):
             estimate.configure(
-                text=self._analysis_estimate(missing, workers=n))
+                text=self._analysis_estimate(missing, workers=int(worker_var.get())))
 
-        _refresh()
+        worker_var.trace_add("write", refresh)
+        refresh()
 
-        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
-        buttons.pack(fill="x", padx=20, pady=16, side="bottom")
+        result = {"workers": None}
 
-        def _start():
+        def start():
             result["workers"] = int(worker_var.get())
             dialog.destroy()
 
-        ctk.CTkButton(buttons, text="Start", width=100,
-                      command=_start).pack(side="right")
-        ctk.CTkButton(buttons, text="Cancel", width=100, fg_color="gray30",
-                      hover_color="gray40",
-                      command=dialog.destroy).pack(side="right", padx=8)
+        btns = tk.Frame(dialog, bg="#2b2b2b")
+        btns.pack(fill="x", padx=16, pady=14, side="bottom")
+        tk.Button(btns, text="Start", bg="#2d7d46", fg="white",
+                  font=("Segoe UI", 11), command=start).pack(side="left")
+        tk.Button(btns, text="Cancel", bg="#3b3b3b", fg="white",
+                  font=("Segoe UI", 11),
+                  command=dialog.destroy).pack(side="right")
 
         dialog.wait_window()
         return result["workers"]

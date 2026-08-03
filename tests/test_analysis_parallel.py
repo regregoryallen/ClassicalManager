@@ -194,3 +194,29 @@ def test_estimate_shrinks_as_workers_rise():
     many = SimilarityUIMixin._analysis_estimate(7279, workers=12)
     assert "21" in one and "hours" in one
     assert "2.8 hours" in many
+
+
+def test_every_modal_grabs_only_after_the_window_is_visible():
+    """A regression guard for an empty Analyze Audio dialog.
+
+    tk raises TclError when grab_set() is called on a window that is not yet
+    mapped. The exception aborted the dialog builder before it created any
+    widget or applied its geometry, so the symptom was a small blank window
+    rather than an error. Cheap to check statically, invisible otherwise —
+    there is no display in CI to catch it at runtime.
+    """
+    import pathlib
+
+    offenders = []
+    root = pathlib.Path(__file__).resolve().parent.parent / "music_manager"
+    for path in (root / "interfaces").rglob("*.py"):
+        lines = path.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if ".grab_set()" not in line:
+                continue
+            window = line.strip().split(".grab_set")[0]
+            preceding = "\n".join(lines[max(0, i - 12):i])
+            if f"{window}.wait_visibility()" not in preceding:
+                offenders.append(f"{path.name}:{i + 1}")
+    assert offenders == [], (
+        "grab_set() without a preceding wait_visibility(): " + ", ".join(offenders))

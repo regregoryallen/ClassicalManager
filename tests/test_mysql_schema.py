@@ -142,3 +142,65 @@ def test_a_path_at_the_cap_is_storable(mysql_db):
                      relative_path=path, disc_number=1, track_number=1,
                      duration_ms=1)
     assert Track.get_by_id(t.id).relative_path == path
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: a real cross-backend migration
+# ---------------------------------------------------------------------------
+
+def test_migration_round_trip_keeps_values_exact(mysql_db, tmp_path):
+    """The check SQLite cannot perform.
+
+    peewee's FloatField maps to MySQL FLOAT — single precision, ~7
+    significant digits. A Unix mtime needs 17, so 1666807963.287016 came
+    back as 1666810000.0: every file would look modified to an incremental
+    scan, and analysis restore compares on exactly this value. DoubleField
+    is the fix; this pins it.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from music_manager.core.config import DbSettings
+    from music_manager.core.database import initialize_database, database
+    from music_manager.core.db_migrate import migrate_database
+
+    mtime = 1666807963.287016
+    source_path = tmp_path / "source.db"
+    initialize_database(source_path)
+    lib = Library.create(name="Src")
+    folder = SourceFolder.create(library=lib, root_path="/music")
+    composer = Composer.create(library=lib, name="Dvořák", norm_key="dvořák")
+    album = Album.create(library=lib, folder=folder, album_key="A", title="A")
+    work = Work.create(album=album, composer=composer, work_name="W",
+                       work_sequence=1, work_source="work_tag")
+    track = Track.create(library=lib, folder=folder, album=album, work=work,
+                         composer=composer, title="Träck",
+                         relative_path="A/01.flac", disc_number=1,
+                         track_number=1, duration_ms=60_000,
+                         file_mtime=mtime, file_size=99)
+    from music_manager.core.similarity import TrackAnalysis, ensure_table
+    ensure_table()
+    TrackAnalysis.create(track=track, features=json.dumps([0.125] * 31),
+                         volatility=0.31619941274198127,
+                         analyzed_at=datetime.now(timezone.utc))
+    database.close()
+
+    u = urlparse(_URL)
+    report = migrate_database(
+        DbSettings(backend="sqlite", path=source_path),
+        DbSettings(backend="mysql", host=u.hostname, port=u.port or 3306,
+                   name=u.path.lstrip("/"), user=u.username,
+                   password=u.password),
+        force=True)
+
+    assert report.ok, [t.mismatch for t in report.tables if t.mismatch]
+
+    database.initialize(mysql_db)
+    mysql_db.connect(reuse_if_open=True)
+    moved = Track.get(Track.relative_path == "A/01.flac")
+    assert moved.file_mtime == mtime, "FLOAT would truncate this"
+    assert moved.title == "Träck"
+    assert Composer.get(Composer.norm_key == "dvořák").name == "Dvořák"
+    analysis = TrackAnalysis.get(TrackAnalysis.track == moved)
+    assert analysis.volatility == 0.31619941274198127
+    assert len(json.loads(analysis.features)) == 31

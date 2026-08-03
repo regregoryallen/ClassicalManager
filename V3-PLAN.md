@@ -314,18 +314,48 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   else would have reported this: no error, no warning, and every test
   passed. The `USING HASH` assertion is the only reason it surfaced; keep
   it.
-- [ ] **Phase 2a — real-data shakedown (do with Phase 3).** Verified so far
-  only that the schema is *creatable* and enforces the right things. Real
-  paths, unicode, and volume land when Phase 3 migrates a copy of the
-  production library into MariaDB.
-- [ ] **Phase 3 — Migration command.** Direct table-by-table copy in FK
-  order, preserving primary keys, batched under the server's 16 MB
-  `max_allowed_packet`, with a dry run and a verification pass reporting
-  per-table row counts and checksums. Must carry `TrackAnalysis`.
-- [ ] **Phase 4 — Close the export/import gaps** listed above. Independent
-  value: it fixes the backup, not just migration.
+- [x] **Phase 3 — Migration command** — done 2026-08-03 (226 tests green on
+  SQLite, 8 against the live server). `music_manager/core/db_migrate.py` +
+  `main.py --cli migrate-db --target URL [--source FILE] [--dry-run]
+  [--force]`. Table-by-table copy in FK order preserving primary keys,
+  reading through raw SQL so values move untranslated, batched at 500 rows
+  (~0.3 MB against a 16 MB `max_allowed_packet`). Target password comes
+  from `$CM_TARGET_DB_PASSWORD`, not the URL, which is visible in `ps`. A
+  non-empty target is refused unless `--force`. Each table is verified by
+  re-reading it and comparing a content hash of normalized values.
+
+  **The verification immediately earned itself.** `Track.file_mtime` was a
+  `FloatField`, which peewee maps to MySQL `FLOAT` — single precision,
+  ~7 significant digits. A Unix timestamp needs 17, so `1666807963.287016`
+  came back as `1666810000.0`, over half an hour out. Every file would have
+  looked modified to an incremental scan, and analysis restore compares on
+  exactly this value, so the 6,373 analyses would have been re-computed.
+  Counts and row totals were all perfect; only the content hash caught it.
+  Fixed by moving every `FloatField` to `DoubleField` (`Track.file_mtime`,
+  `TrackAnalysis.volatility`, `AnalysisSnapshot.volatility` and
+  `.file_mtime`). SQLite is unaffected — it has one numeric type — which is
+  why this could only ever surface against a server.
+
+  The other two mismatches were representation, not loss: SQLite keeps
+  tz-aware timestamps as text with `+00:00` while MySQL `DATETIME` has no
+  timezone and stores whole seconds. Normalization compares instants, so
+  the values are equal; MySQL holds naive UTC.
+
+  **Real-data result:** a copy of the production library (22,701 rows —
+  7,279 tracks, 5,420 works, 6,373 analyses, 1,773 selections) migrates in
+  ~2.5 s with every table verified. `generate-all` against MariaDB produced
+  22 of 24 playlists with track sets identical to SQLite; the other two
+  differ between two *SQLite* runs as well, so that is the shuffle on
+  length-limited profiles, not the backend.
+- [ ] **Phase 4 — Close the export/import gaps** listed above (analysis,
+  the ten missing `Track` columns, the album→folder mapping bug,
+  `auto_generated`, `updated_at`). Independent value: it fixes the JSON
+  backup, not just migration.
 - [ ] **Phase 5 — Test matrix.** Run the suite against both backends,
-  skipping MariaDB when the server is unreachable.
+  skipping MariaDB when the server is unreachable. Today the MySQL suite
+  runs only when `CM_TEST_MYSQL_URL` is set and is the *only* thing that
+  can catch type-mapping bugs (FLOAT precision, USING HASH, TEXT indexes),
+  so it needs to be routine rather than something to remember.
 
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 

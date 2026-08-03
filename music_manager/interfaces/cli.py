@@ -699,3 +699,103 @@ def import_library_cmd(
     if result.get('old_format_skipped'):
         typer.echo(f"Old-format rules skipped: {result['old_format_skipped']} "
                    f"(re-create selections manually)")
+
+
+@app.command("migrate-db")
+def migrate_db(
+    target: str = typer.Option(
+        ..., "--target",
+        help="Target URL, e.g. mysql://user@host:3306/dbname. Leave the "
+             "password out and supply it via --password-env."),
+    source: str = typer.Option(
+        None, "--source",
+        help="Source SQLite file. Defaults to the configured database."),
+    password_env: str = typer.Option(
+        "CM_TARGET_DB_PASSWORD", "--password-env",
+        help="Environment variable holding the target password. Preferred "
+             "over putting it in the URL, which is visible in the process list."),
+    dry_run: bool = typer.Option(False, "--dry-run",
+                                 help="Report what would be copied; write nothing."),
+    force: bool = typer.Option(False, "--force",
+                               help="DELETE existing rows in the target first."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Copy a whole library to another database backend.
+
+    Copies every table including similarity analyses, preserving primary
+    keys, then verifies each table by content hash. The source is only read.
+    """
+    _setup_logging(verbose)
+    import os
+    from pathlib import Path
+    from urllib.parse import urlparse, unquote
+    from music_manager.core.config import DbSettings, resolve_db_settings
+    from music_manager.core.db_migrate import migrate_database
+
+    if source:
+        source_settings = DbSettings(backend="sqlite", path=Path(source))
+    else:
+        source_settings = resolve_db_settings()
+
+    parsed = urlparse(target)
+    if parsed.scheme in ("mysql", "mariadb"):
+        password = os.environ.get(password_env) or unquote(parsed.password or "")
+        if not password:
+            typer.echo(f"Error: no target password. Set ${password_env} "
+                       f"or include it in the URL.", err=True)
+            raise typer.Exit(1)
+        target_settings = DbSettings(
+            backend="mysql", host=parsed.hostname or "localhost",
+            port=parsed.port or 3306, name=parsed.path.lstrip("/"),
+            user=unquote(parsed.username or ""), password=password)
+    elif parsed.scheme in ("sqlite", ""):
+        path = parsed.path if parsed.scheme else target
+        target_settings = DbSettings(backend="sqlite", path=Path(path))
+    else:
+        typer.echo(f"Error: unsupported target scheme {parsed.scheme!r}. "
+                   f"Use mysql:// or sqlite://.", err=True)
+        raise typer.Exit(1)
+
+    if (source_settings.backend == target_settings.backend == "sqlite"
+            and source_settings.path == target_settings.path):
+        typer.echo("Error: source and target are the same database.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Source: {source_settings.describe()}")
+    typer.echo(f"Target: {target_settings.describe()}")
+    if dry_run:
+        typer.echo("(dry run — nothing will be written)")
+    typer.echo("")
+
+    report = migrate_database(
+        source_settings, target_settings, dry_run=dry_run, force=force,
+        progress=lambda msg: typer.echo(f"  {msg}"))
+
+    if report.error:
+        typer.echo("")
+        typer.echo(f"Error: {report.error}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo("")
+    width = max((len(t.table) for t in report.tables), default=10)
+    for t in report.tables:
+        if dry_run:
+            typer.echo(f"  {t.table:<{width}}  {t.source_rows:>7} rows")
+            continue
+        mark = {True: "ok", False: "MISMATCH", None: "-"}[t.verified]
+        line = (f"  {t.table:<{width}}  {t.copied:>7} copied  "
+                f"{t.target_rows:>7} in target  [{mark}]")
+        typer.echo(line)
+        if t.mismatch:
+            typer.echo(f"      {t.mismatch}", err=True)
+
+    typer.echo("")
+    if dry_run:
+        total = sum(t.source_rows for t in report.tables)
+        typer.echo(f"Would copy {total} rows. Re-run without --dry-run.")
+    elif report.ok:
+        typer.echo(f"Migrated {report.total_rows} rows; every table verified.")
+    else:
+        typer.echo("Migration completed with verification failures above.",
+                   err=True)
+        raise typer.Exit(1)

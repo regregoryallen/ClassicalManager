@@ -41,7 +41,7 @@ class TrackAnalysis(BaseModel):
 
     track = pw.ForeignKeyField(Track, unique=True, on_delete="CASCADE")
     features = pw.TextField()  # JSON list of floats
-    volatility = pw.FloatField(null=True)
+    volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
 
@@ -64,10 +64,13 @@ class AnalysisSnapshot(BaseModel):
     folder_id = pw.IntegerField()
     relative_path = pw.CharField(max_length=MAX_PATH_LENGTH)
     features = pw.TextField()
-    volatility = pw.FloatField(null=True)
+    volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
-    file_mtime = pw.FloatField(null=True)
+    # See Track.file_mtime: MySQL FLOAT keeps ~7 significant digits,
+    # far too few for a Unix timestamp, and this value is what decides
+    # whether an analysis can be restored after a rescan.
+    file_mtime = pw.DoubleField(null=True)
     file_size = pw.IntegerField(null=True)
 
     class Meta:

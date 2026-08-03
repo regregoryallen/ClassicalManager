@@ -176,7 +176,7 @@ def initialize_database(db_path: Path | None = None,
         logger.info("Migrated: added work_tag, mb_work_id to tracks")
     if "file_mtime" not in track_cols:
         run_migrate(
-            migrator.add_column("tracks", "file_mtime", pw.FloatField(null=True)),
+            migrator.add_column("tracks", "file_mtime", pw.DoubleField(null=True)),
             migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
         )
         logger.info("Migrated: added file_mtime, file_size to tracks")
@@ -354,7 +354,11 @@ class Track(BaseModel):
     ensemble = pw.TextField(null=True)           # orchestra/ensemble
     work_tag = pw.TextField(null=True)          # raw WORK tag from file
     mb_work_id = pw.TextField(null=True)        # per-track MusicBrainz work ID from file
-    file_mtime = pw.FloatField(null=True)       # file modification time (os.stat)
+    # DOUBLE, not FLOAT: a Unix timestamp needs ~17 significant digits and
+    # MySQL's single-precision FLOAT keeps ~7, which shifted real mtimes by
+    # over half an hour — every file would look changed to an incremental
+    # scan, and analysis preservation compares on this value.
+    file_mtime = pw.DoubleField(null=True)      # file modification time (os.stat)
     file_size = pw.IntegerField(null=True)       # file size in bytes
     # When this track first entered the library. Set on INSERT only and
     # preserved across full rescans — file_mtime is the FILE's time and

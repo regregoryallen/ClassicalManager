@@ -397,10 +397,29 @@ not a JSON round trip; the JSON export stays a portable curation backup.
 
 ## v3.5 — remaining (optional)
 
-- [ ] **Regroup Works is half-fixed**: 8,653 queries (~18 s predicted on
-  MySQL, down from 45 s). The floor is one INSERT per work × 5,420.
-  Removing it needs batched inserts with explicit primary keys — a
-  more invasive change to work creation, which scanning shares.
+- [x] **Regroup Works batched inserts** — done 2026-08-03. **21,464 → 1,945
+  queries; 45.1 s → ~4.1 s predicted on MySQL.** Works are built in memory
+  with locally reserved primary keys and inserted per album by
+  `_flush_works`, instead of one `Work.create` each. `redetect_works` also
+  clears the whole library in two statements rather than three per album,
+  and loads every track in one query instead of one per album.
+
+  Primary keys come from `_reserve_work_id`, a counter keyed on the database
+  object so switching databases recomputes it. Deletes cannot cause a
+  collision because the counter only ever rises.
+
+  Verified identical grouping across all 7,279 tracks against a baseline,
+  with no orphaned track→work references and every track assigned. Seven
+  new tests in `test_work_batching.py` cover id uniqueness across albums and
+  across repeated runs, non-collision with works in another library, every
+  column of the hand-built insert row, work_sequence, and that a part-way
+  failure cannot attach one album's works to the next. Both mutations
+  (omitting a column, handing out duplicate ids) were confirmed to fail
+  those tests before being reverted.
+
+  Left alone deliberately: `_next_work_sequence` still issues one MAX per
+  album (431 queries, ~0.9 s). Priming it from `redetect_works` would couple
+  the two for very little, and `detect_works` stays correct for any caller.
 - [ ] **`reconcile_selections`**: 637 queries (~1.3 s), runs on profile
   load. `_tracks_for_work_key` is called once per work-level selection;
   the work-key → tracks map that `load_library_index` already builds would

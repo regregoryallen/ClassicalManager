@@ -564,19 +564,25 @@ def analyze_similarity(
     library: str = typer.Option(..., help="Library name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress"),
+    workers: int = typer.Option(
+        None, "--workers", "-j",
+        help="Worker processes. Default is three quarters of the cores; "
+             "1 runs in-process."),
 ):
     """Analyze all tracks for similarity features (librosa)."""
     _setup_logging(verbose)
 
-    from music_manager.core.similarity import analyze_library
+    from music_manager.core.similarity import analyze_library, default_worker_count
     lib = _get_library(library)
 
     def progress(current, total, message):
         typer.echo(f"\r[{current}/{total}] {message}", nl=False)
 
     if not quiet:
-        typer.echo(f"Analyzing similarity features for: {lib.name}")
-    stats = analyze_library(lib, progress_callback=None if quiet else progress)
+        typer.echo(f"Analyzing similarity features for: {lib.name} "
+                   f"({workers or default_worker_count()} workers)")
+    stats = analyze_library(lib, progress_callback=None if quiet else progress,
+                            workers=workers)
     if not quiet:
         typer.echo("")
         typer.echo(f"\n--- Similarity Analysis Report ---")

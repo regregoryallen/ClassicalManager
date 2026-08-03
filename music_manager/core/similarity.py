@@ -28,7 +28,8 @@ from datetime import datetime, timezone
 import peewee as pw
 
 from music_manager.core.database import (
-    MAX_PATH_LENGTH, Album, BaseModel, Composer, Library, Track, SourceFolder)
+    MAX_PATH_LENGTH, Album, BaseModel, Composer, Library, Track, SourceFolder,
+    database)
 
 logger = logging.getLogger(__name__)
 
@@ -221,12 +222,20 @@ def _track_file_path(track: Track) -> str:
     return str(Path(folder.root_path) / track.relative_path)
 
 
+def analyze_file(path: str) -> tuple[list[float], float]:
+    """Feature vector and volatility for one file. No database access.
+
+    Kept free of ORM objects so it can run in a worker process, where the
+    parent's database connection is neither available nor safe to share.
+    """
+    return _extract_features(path), compute_volatility(path)
+
+
 def analyze_track(track: Track) -> TrackAnalysis:
     """Analyze a single track: extract features + volatility."""
     path = _track_file_path(track)
 
-    features = _extract_features(path)
-    volatility = compute_volatility(path)
+    features, volatility = analyze_file(path)
 
     analysis, created = TrackAnalysis.get_or_create(
         track=track,
@@ -251,13 +260,57 @@ class AnalysisCancelled(Exception):
     pass
 
 
-def analyze_library(library, progress_callback=None):
+def default_worker_count() -> int:
+    """Processes to analyse with, leaving the machine usable.
+
+    Three quarters of the cores: analysis is CPU-bound, but it usually runs
+    while the user is doing something else. Reading the files is not the
+    constraint — one stream already saturates the share (measured ~100 MB/s
+    against ~114 MB/s for sixteen), so extra workers buy CPU, not I/O.
+    """
+    cores = os.cpu_count() or 2
+    return max(1, cores * 3 // 4)
+
+
+def _worker(job: tuple[int, str]) -> tuple:
+    """Analyse one file in a worker process. Returns a plain tuple."""
+    track_id, path = job
+    try:
+        features, volatility = analyze_file(path)
+        return (track_id, features, volatility, None)
+    except Exception as exc:                      # noqa: BLE001 - reported
+        return (track_id, None, None, f"{type(exc).__name__}: {exc}")
+
+
+def _write_analyses(results: list) -> int:
+    """Persist a batch of worker results, replacing any existing rows."""
+    if not results:
+        return 0
+    now = datetime.now(timezone.utc)
+    track_ids = [r[0] for r in results]
+    with database.atomic():
+        # Simpler and cheaper than get_or_create per track, which cost two
+        # or three round trips each — noticeable against a server.
+        TrackAnalysis.delete().where(TrackAnalysis.track.in_(track_ids)).execute()
+        TrackAnalysis.insert_many([{
+            TrackAnalysis.track: track_id,
+            TrackAnalysis.features: json.dumps(features),
+            TrackAnalysis.volatility: volatility,
+            TrackAnalysis.analyzed_at: now,
+            TrackAnalysis.feature_version: FEATURE_VERSION,
+        } for track_id, features, volatility, _ in results]).execute()
+    return len(results)
+
+
+def analyze_library(library, progress_callback=None, workers=None):
     """Batch-analyze all tracks in a library that lack analysis.
 
     Args:
         library: Library model instance.
         progress_callback: Optional callable(current, total, message).
             If it raises AnalysisCancelled, analysis stops cleanly.
+        workers: Processes to use. None picks default_worker_count();
+            1 runs in-process, which keeps tests and small jobs simple.
 
     Returns:
         dict with keys: analyzed, skipped, failed, total.
@@ -280,25 +333,85 @@ def analyze_library(library, progress_callback=None):
     to_analyze = [t for t in tracks if t.id not in current]
     total = len(to_analyze)
     stats = {"analyzed": 0, "skipped": len(current), "failed": 0,
-             "total": len(tracks)}
+             "total": len(tracks), "workers": 1}
+    if not to_analyze:
+        return stats
 
-    for i, track in enumerate(to_analyze):
+    if workers is None:
+        workers = default_worker_count()
+    workers = max(1, min(workers, total))
+    stats["workers"] = workers
+
+    jobs = [(t.id, _track_file_path(t)) for t in to_analyze]
+    titles = {t.id: t.title for t in to_analyze}
+    pending: list = []
+    done = 0
+
+    def record(result) -> bool:
+        """Accumulate one result. Returns False if the caller cancelled."""
+        nonlocal done
+        track_id, features, volatility, error = result
+        done += 1
+        if error:
+            logger.warning("Failed to analyze track %s: %s",
+                           titles.get(track_id, track_id), error)
+            stats["failed"] += 1
+        else:
+            pending.append(result)
+            stats["analyzed"] += 1
+        # Write in batches so a cancellation or crash keeps what is done.
+        if len(pending) >= 50:
+            _write_analyses(pending)
+            pending.clear()
         if progress_callback:
             try:
-                progress_callback(i + 1, total, track.title)
+                progress_callback(done, total, titles.get(track_id, ""))
             except AnalysisCancelled:
-                logger.info("Analysis cancelled at %d/%d", i, total)
+                logger.info("Analysis cancelled at %d/%d", done, total)
+                return False
+        return True
+
+    if workers == 1:
+        for job in jobs:
+            if not record(_worker(job)):
                 break
+    else:
+        _run_pool(jobs, workers, record)
 
-        try:
-            analyze_track(track)
-            stats["analyzed"] += 1
-        except Exception as exc:
-            logger.warning("Failed to analyze track %s: %s",
-                           track.relative_path, exc)
-            stats["failed"] += 1
-
+    _write_analyses(pending)
     return stats
+
+
+def _run_pool(jobs, workers, record) -> None:
+    """Run the jobs across processes, stopping early if record() says so."""
+    import concurrent.futures as cf
+
+    # Each worker is single-threaded inside NumPy/BLAS. Without this the
+    # libraries start their own thread pool per process and the machine
+    # thrashes on several hundred threads. Children inherit the setting;
+    # the parent is only waiting, so limiting it here costs nothing.
+    keys = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ.update({k: "1" for k in keys})
+    try:
+        with cf.ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_worker, job): job for job in jobs}
+            try:
+                for future in cf.as_completed(futures):
+                    if not record(future.result()):
+                        for pending_future in futures:
+                            pending_future.cancel()
+                        break
+            finally:
+                # Without this a cancel waits for every queued job to run.
+                pool.shutdown(wait=False, cancel_futures=True)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------

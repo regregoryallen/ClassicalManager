@@ -80,6 +80,15 @@ def export_library(lib, path: Path) -> dict:
             "name": c.name, "sort_name": c.sort_name, "norm_key": c.norm_key,
         })
 
+    # Every track once, grouped by work. Querying per work cost 5,420 round
+    # trips on the real library — invisible against a local file, 13 of the
+    # 17 seconds of the nightly backup once the database moved to a server.
+    # The global ordering is preserved within each group.
+    tracks_by_work: dict[int, list] = {}
+    for track in (Track.select().where(Track.library == lib)
+                  .order_by(Track.disc_number, Track.track_number)):
+        tracks_by_work.setdefault(track.work_id, []).append(track)
+
     # Albums → Works → Tracks
     for album in Album.select().where(Album.library == lib).order_by(Album.title):
         album_data = {
@@ -96,8 +105,7 @@ def export_library(lib, path: Path) -> dict:
                 "composer_idx": composer_id_map.get(work.composer_id),
                 "tracks": [],
             }
-            for t in Track.select().where(Track.work == work).order_by(
-                    Track.disc_number, Track.track_number):
+            for t in tracks_by_work.get(work.id, []):
                 track_data = {
                     "title": t.title, "relative_path": t.relative_path,
                     "disc_number": t.disc_number, "track_number": t.track_number,

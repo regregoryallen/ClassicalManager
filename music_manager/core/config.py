@@ -237,6 +237,14 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     if "m3u" in targets:
         _validate_m3u(targets["m3u"], path)
 
+    # -- analysis_workers (optional) ------------------------------------------
+    if "analysis_workers" in config:
+        workers = config["analysis_workers"]
+        if not isinstance(workers, int) or workers < 1:
+            raise ConfigError(
+                f"{path}: 'analysis_workers' must be a positive integer, "
+                f"got {workers!r}")
+
     # -- database (optional; absent means SQLite at db_path) ------------------
     if "database" in config:
         _validate_database(config["database"], path)

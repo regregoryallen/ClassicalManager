@@ -136,3 +136,61 @@ def test_nothing_to_do_is_not_an_error(lib):
     stats = analyze_library(lib)
     assert stats == {"analyzed": 0, "skipped": 0, "failed": 0,
                      "total": 0, "workers": 1}
+
+
+# ---------------------------------------------------------------------------
+# Worker count: config, and honest estimates
+# ---------------------------------------------------------------------------
+
+def test_config_overrides_the_default_worker_count(tmp_path, monkeypatch):
+    import json
+    import music_manager.core.config as cfg
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"active_library": 1, "targets": {},
+                                "analysis_workers": 3}))
+    monkeypatch.setattr(cfg, "_config_path_override", path)
+    assert default_worker_count() == 3
+
+
+def test_config_worker_count_is_capped_at_the_core_count(tmp_path, monkeypatch):
+    import json, os
+    import music_manager.core.config as cfg
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"active_library": 1, "targets": {},
+                                "analysis_workers": 9999}))
+    monkeypatch.setattr(cfg, "_config_path_override", path)
+    assert default_worker_count() == (os.cpu_count() or 2)
+
+
+def test_a_bad_worker_count_is_rejected_by_validation(tmp_path):
+    import json
+    from music_manager.core.config import ConfigError, load_config, set_config_path
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"active_library": 1, "targets": {},
+                                "analysis_workers": 0}))
+    set_config_path(path)
+    try:
+        with pytest.raises(ConfigError, match="analysis_workers"):
+            load_config()
+    finally:
+        import music_manager.core.config as cfg
+        cfg._config_path_override = None
+
+
+def test_estimates_never_promise_linear_speedup():
+    """The GUI shows this before a multi-hour job; it must not flatter."""
+    from music_manager.core.similarity import expected_speedup
+    assert expected_speedup(1) == 1.0
+    assert expected_speedup(8) < 8          # measured 6.4
+    assert expected_speedup(24) < 24        # measured 9.5
+    # Monotonic, so more workers never reads as slower.
+    values = [expected_speedup(w) for w in range(1, 33)]
+    assert values == sorted(values)
+
+
+def test_estimate_shrinks_as_workers_rise():
+    from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
+    one = SimilarityUIMixin._analysis_estimate(7279, workers=1)
+    many = SimilarityUIMixin._analysis_estimate(7279, workers=12)
+    assert "21" in one and "hours" in one
+    assert "2.8 hours" in many

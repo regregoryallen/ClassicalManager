@@ -260,15 +260,50 @@ class AnalysisCancelled(Exception):
     pass
 
 
+# Measured speedup by worker count on a 24-core machine (24 real tracks,
+# 81.6 min of audio). Scaling knees around 8-12; beyond that the workers
+# contend, most likely on memory bandwidth. Used for time estimates so the
+# GUI does not promise a linear speedup it will not deliver.
+_MEASURED_SPEEDUP = {1: 1.0, 2: 1.9, 4: 3.6, 8: 6.4, 12: 7.6, 18: 8.0, 24: 9.5}
+
+# Seconds of single-threaded analysis per track, at the ~250 s mean track
+# length of a real classical library.
+SECONDS_PER_TRACK = 10.5
+
+
+def expected_speedup(workers: int) -> float:
+    """Interpolate the measured curve; never promise more than it showed."""
+    points = sorted(_MEASURED_SPEEDUP)
+    if workers <= points[0]:
+        return 1.0
+    if workers >= points[-1]:
+        return _MEASURED_SPEEDUP[points[-1]]
+    for low, high in zip(points, points[1:]):
+        if low <= workers <= high:
+            span = (workers - low) / (high - low)
+            return (_MEASURED_SPEEDUP[low]
+                    + span * (_MEASURED_SPEEDUP[high] - _MEASURED_SPEEDUP[low]))
+    return 1.0
+
+
 def default_worker_count() -> int:
     """Processes to analyse with, leaving the machine usable.
 
-    Three quarters of the cores: analysis is CPU-bound, but it usually runs
-    while the user is doing something else. Reading the files is not the
-    constraint — one stream already saturates the share (measured ~100 MB/s
-    against ~114 MB/s for sixteen), so extra workers buy CPU, not I/O.
+    `analysis_workers` in config.json wins when set, so the GUI, CLI,
+    webhook and the nightly cron all agree. Otherwise three quarters of the
+    cores: analysis is CPU-bound, but it usually runs while the user is
+    doing something else. Reading the files is not the constraint — one
+    stream already saturates the share (~100 MB/s against ~114 MB/s for
+    sixteen), so extra workers buy CPU, not I/O.
     """
     cores = os.cpu_count() or 2
+    try:
+        from music_manager.core.config import load_config
+        configured = load_config().get("analysis_workers")
+        if configured:
+            return max(1, min(int(configured), cores))
+    except Exception:
+        pass          # no config, unreadable, or not set — use the default
     return max(1, cores * 3 // 4)
 
 

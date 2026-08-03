@@ -65,25 +65,111 @@ class SimilarityUIMixin:
                 f"audio similarity.")
             return
 
-        if not messagebox.askyesno(
-                "Analyze Audio",
-                f"{missing} of {total} tracks need audio analysis.\n\n"
-                f"{self._analysis_estimate(missing)}\n"
-                f"Progress is saved as it goes — you can cancel and resume "
-                f"later.\n\nStart now?"):
+        workers = self._ask_analysis_workers(missing)
+        if workers is None:
             return
 
-        self._run_sim_analysis(None)
+        self._run_sim_analysis(None, workers=workers)
+
+    def _ask_analysis_workers(self, missing):
+        """Confirm the batch and choose how many cores to give it.
+
+        Analysis is CPU-bound, so the worker count is the one setting that
+        changes how long this takes — several hours against under one. It
+        belongs next to the decision to start, not only in the CLI.
+        Returns the chosen count, or None if cancelled.
+        """
+        from music_manager.core.similarity import (
+            default_worker_count, expected_speedup)
+        import os as _os
+
+        ctk = self.ctk
+        cores = _os.cpu_count() or 2
+        choices = [n for n in (1, 2, 4, 8, 12, 16, 24, 32) if n <= cores]
+        if cores not in choices:
+            choices.append(cores)
+        default = default_worker_count()
+        if default not in choices:
+            choices.append(default)
+        choices.sort()
+
+        result = {"workers": None}
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Analyze Audio")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        self._center_on_main(dialog, 520, 320)
+
+        ctk.CTkLabel(dialog, text="Analyze Audio",
+                     font=ctk.CTkFont(size=15, weight="bold")).pack(
+            anchor="w", padx=20, pady=(16, 4))
+        ctk.CTkLabel(
+            dialog, justify="left", wraplength=470,
+            text=(f"{missing} of {self._analysis_gap()[1]} tracks need audio "
+                  f"analysis.\n\nProgress is saved as it goes — you can "
+                  f"cancel and resume later.")).pack(anchor="w", padx=20)
+
+        row = ctk.CTkFrame(dialog, fg_color="transparent")
+        row.pack(anchor="w", padx=20, pady=(14, 4))
+        ctk.CTkLabel(row, text="Worker processes:").pack(side="left")
+        worker_var = tk.StringVar(value=str(default))
+        ctk.CTkOptionMenu(row, variable=worker_var, width=90,
+                          values=[str(n) for n in choices],
+                          command=lambda _v: _refresh()).pack(side="left", padx=8)
+        ctk.CTkLabel(row, text=f"of {cores} cores",
+                     text_color=("gray25", "gray70")).pack(side="left")
+
+        estimate = ctk.CTkLabel(dialog, justify="left", wraplength=470,
+                                text="")
+        estimate.pack(anchor="w", padx=20, pady=(2, 0))
+        note = ctk.CTkLabel(
+            dialog, justify="left", wraplength=470,
+            text_color=("gray25", "gray70"),
+            text=("More workers finish sooner but leave less machine for "
+                  "everything else. Measured scaling flattens past about 12 "
+                  "— the workers start competing for memory bandwidth."))
+        note.pack(anchor="w", padx=20, pady=(6, 0))
+
+        def _refresh():
+            n = int(worker_var.get())
+            estimate.configure(
+                text=self._analysis_estimate(missing, workers=n))
+
+        _refresh()
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=20, pady=16, side="bottom")
+
+        def _start():
+            result["workers"] = int(worker_var.get())
+            dialog.destroy()
+
+        ctk.CTkButton(buttons, text="Start", width=100,
+                      command=_start).pack(side="right")
+        ctk.CTkButton(buttons, text="Cancel", width=100, fg_color="gray30",
+                      hover_color="gray40",
+                      command=dialog.destroy).pack(side="right", padx=8)
+
+        dialog.wait_window()
+        return result["workers"]
 
     @staticmethod
-    def _analysis_estimate(count):
-        """Human-scale expectation for a librosa batch (~2s/track)."""
-        seconds = count * 2
+    def _analysis_estimate(count, workers=1):
+        """Human-scale expectation for a librosa batch.
+
+        Based on measurement rather than hope: ~10.5s per track on one core
+        at a typical classical track length, divided by the speedup actually
+        observed for that worker count — which is well short of linear.
+        """
+        from music_manager.core.similarity import (
+            SECONDS_PER_TRACK, expected_speedup)
+        seconds = count * SECONDS_PER_TRACK / expected_speedup(workers)
         if seconds < 120:
-            return "This takes under a minute."
+            return "Estimated time: under a minute."
         if seconds < 5400:
-            return f"This takes roughly {max(1, round(seconds / 60))} minutes."
-        return f"This takes roughly {seconds / 3600:.1f} hours."
+            return (f"Estimated time: roughly "
+                    f"{max(1, round(seconds / 60))} minutes.")
+        return f"Estimated time: roughly {seconds / 3600:.1f} hours."
 
     def _find_similar_tracks(self):
         """Find tracks similar to the current profile selections."""
@@ -144,7 +230,7 @@ class SimilarityUIMixin:
             profile.delete_instance(recursive=True)
         return track_ids
 
-    def _run_sim_analysis(self, seed_ids):
+    def _run_sim_analysis(self, seed_ids, workers=None):
         """Run library analysis with progress, then show results."""
         import threading
         self._sim_cancel_flag = False
@@ -180,7 +266,8 @@ class SimilarityUIMixin:
                                    _update(c, t, m))
 
                 stats = analyze_library(self.active_library,
-                                        progress_callback=prog)
+                                        progress_callback=prog,
+                                        workers=workers)
                 self.root.after(0, lambda: _done(stats))
             except AnalysisCancelled:
                 self.root.after(0, _cancelled)

@@ -1009,6 +1009,7 @@ can generate playlists using path rules to translate paths for its target.
 | Field | Notes |
 |-------|-------|
 | `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. Ignored when `database.backend` is `mysql`. |
+| `analysis_workers` | Optional. Processes used by audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound and the measured speedup flattens past about 12 workers, so more is not linearly faster. The GUI's Analyze Audio dialog lets you choose per run; this sets the default for the GUI, CLI, webhook and cron alike. |
 | `database` | Optional. Omit entirely for SQLite at `db_path` — which is what every existing install does. |
 | `database.backend` | `sqlite` or `mysql`. `mysql` also covers MariaDB. |
 | `database.host` / `port` / `name` / `user` | Server connection. Port defaults to 3306. |

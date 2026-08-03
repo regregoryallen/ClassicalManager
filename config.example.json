@@ -2,6 +2,8 @@
   "active_library": 1,
   "db_path": "",
   "autosave_interval": 60,
+  "_analysis_workers_comment": "Optional. Processes for audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
+  "analysis_workers": 0,
   "_database_comment": [
     "Optional. Omit this section entirely to use SQLite at db_path.",
     "For MySQL/MariaDB, set backend to 'mysql' and fill in the rest.",

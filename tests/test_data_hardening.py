@@ -192,6 +192,8 @@ def test_resnapshot_updates_rows_without_losing_leftovers(lib):
 # F9/D3: path indexes and the duplicate hard stop
 # ---------------------------------------------------------------------------
 
+@pytest.mark.sqlite_only  # index names are asserted per-backend in
+# test_mysql_schema.py; here the point is the SQLite bootstrap path
 def test_fresh_database_gets_both_indexes(db):
     names = {ix.name for ix in db.get_indexes("tracks")}
     assert "idx_tracks_library_relpath" in names
@@ -207,6 +209,8 @@ def test_unique_index_blocks_duplicate_inserts(lib):
             disc_number=1, track_number=99, duration_ms=1)
 
 
+@pytest.mark.sqlite_only  # DROP INDEX without ON <table> is invalid MySQL;
+# the server-side equivalents live in test_mysql_schema.py
 def test_duplicates_are_a_hard_stop_D3(lib, db):
     """Simulate a pre-V3 database containing duplicates: the unique
     index must NOT be created and startup must fail with a report."""

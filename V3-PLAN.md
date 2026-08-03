@@ -369,11 +369,44 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   each database, but ids are assigned in import order, so the two samples
   were different tracks. Match on `relative_path`, never on id, when
   comparing across a rebuild.*
-- [ ] **Phase 5 — Test matrix.** Run the suite against both backends,
-  skipping MariaDB when the server is unreachable. Today the MySQL suite
-  runs only when `CM_TEST_MYSQL_URL` is set and is the *only* thing that
-  can catch type-mapping bugs (FLOAT precision, USING HASH, TEXT indexes),
-  so it needs to be routine rather than something to remember.
+- [x] **Phase 5 — Test matrix** — done 2026-08-03. `pytest --backend=mysql`
+  runs the **whole** suite against a server, not just the schema tests:
+  233 pass on SQLite (7 s), 239 on MariaDB (35 s; +8 schema tests that
+  SQLite skips, −2 marked `sqlite_only`). `./run-tests.sh --both` runs
+  both and resolves the target from `CM_TEST_MYSQL_URL` or from
+  `config.json`, always against its own `cm_test` schema so a real library
+  is never truncated.
+
+  Fixtures: MySQL builds the schema once per session and TRUNCATEs between
+  tests. Deliberately not drop-and-recreate — repeated DDL is slow and is
+  what wedged `dict_sys.latch` and took the server down. Two things had to
+  be handled that only appear in a full run: other suites rebind the global
+  proxy (the migration tests point it at their own target, the io tests
+  close it), so `db` re-points every test; and `test_mysql_schema.py`
+  legitimately drops every table, so `db` recreates the schema when it
+  finds it missing.
+
+  `sqlite_only` marks the two tests asserting SQLite's index bootstrap —
+  `DROP INDEX x` without `ON <table>` is invalid MySQL, and the server-side
+  equivalents already live in `test_mysql_schema.py`.
+
+  *Run `--both` before merging anything touching models or queries.* SQLite
+  cannot catch type-mapping faults at all: it has one numeric type and
+  ignores column widths, which is why it passed a FLOAT that shifted file
+  mtimes by half an hour and TEXT columns MySQL cannot index.
+
+## v3.5 — remaining (optional)
+
+- [ ] **Regroup Works is half-fixed**: 8,653 queries (~18 s predicted on
+  MySQL, down from 45 s). The floor is one INSERT per work × 5,420.
+  Removing it needs batched inserts with explicit primary keys — a
+  more invasive change to work creation, which scanning shares.
+- [ ] **`reconcile_selections`**: 637 queries (~1.3 s), runs on profile
+  load. `_tracks_for_work_key` is called once per work-level selection;
+  the work-key → tracks map that `load_library_index` already builds would
+  remove it.
+- [ ] **Cut over for real**: re-migrate from current production and switch
+  the installed config at `~/.local/share/classical-manager/config.json`.
 
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 

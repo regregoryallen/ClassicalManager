@@ -556,17 +556,42 @@ def detect_works(album: Album, pending_tracks: list[PendingTrack]) -> None:
     # --- Step 4: Standalone ---
     _assign_standalone(album, pending_tracks, assigned)
 
+    # One batched write for the whole album's assignments. The steps above
+    # decide grouping purely in memory, so deferring the writes to here
+    # cannot change what they decide.
+    _flush_track_works()
+    _reset_work_sequence_cache(album.id)
+
+
+# Next work_sequence per album id, so building an album's works costs one
+# MAX query instead of one per work. Detection creates every work for an
+# album in a single pass, so the counter cannot go stale mid-album; it is
+# cleared per album by _reset_work_sequence_cache.
+_work_sequence_cache: dict[int, int] = {}
+
+
+def _reset_work_sequence_cache(album_id: int | None = None) -> None:
+    if album_id is None:
+        _work_sequence_cache.clear()
+    else:
+        _work_sequence_cache.pop(album_id, None)
+
 
 def _next_work_sequence(album: Album) -> int:
     """Return the next available work_sequence for an album."""
-    max_seq = (
-        Work.select(Work.work_sequence)
-        .where(Work.album == album)
-        .order_by(Work.work_sequence.desc())
-        .limit(1)
-        .scalar()
-    )
-    return (max_seq or 0) + 1
+    cached = _work_sequence_cache.get(album.id)
+    if cached is None:
+        max_seq = (
+            Work.select(Work.work_sequence)
+            .where(Work.album == album)
+            .order_by(Work.work_sequence.desc())
+            .limit(1)
+            .scalar()
+        )
+        cached = max_seq or 0
+    nxt = cached + 1
+    _work_sequence_cache[album.id] = nxt
+    return nxt
 
 
 def _create_work(album: Album, name: str, source: str,
@@ -578,8 +603,9 @@ def _create_work(album: Album, name: str, source: str,
     if composer is None and tracks:
         comp_ids = [pt.db_track.composer_id for pt in tracks if pt.db_track.composer_id]
         if comp_ids:
-            modal_id = Counter(comp_ids).most_common(1)[0][0]
-            composer = Composer.get_by_id(modal_id)
+            # The id is all the foreign key needs — fetching the Composer row
+            # only to hand it straight back was a query per work.
+            composer = Counter(comp_ids).most_common(1)[0][0]
 
     work = Work.create(
         album=album,
@@ -591,12 +617,34 @@ def _create_work(album: Album, name: str, source: str,
     )
 
     if tracks:
-        track_ids = [pt.db_track.id for pt in tracks]
-        Track.update(work=work).where(Track.id.in_(track_ids)).execute()
         for pt in tracks:
             pt.db_track.work = work
+        # The rows are written once per album by _flush_track_works, not
+        # once per work: an UPDATE per work was 5,420 round trips on a real
+        # library. Callers that create works outside detect_works still get
+        # an immediate write via the fallback there.
+        _pending_track_writes.extend(pt.db_track for pt in tracks)
 
     return work
+
+
+# Tracks whose work_id has been set in memory but not yet written.
+_pending_track_writes: list = []
+
+
+def _flush_track_works() -> int:
+    """Write the deferred work assignments in as few statements as possible.
+
+    bulk_update builds one CASE-based UPDATE per batch, so a whole album —
+    or a whole library during redetect — costs a handful of statements
+    rather than one per work.
+    """
+    if not _pending_track_writes:
+        return 0
+    written = len(_pending_track_writes)
+    Track.bulk_update(_pending_track_writes, fields=[Track.work], batch_size=200)
+    _pending_track_writes.clear()
+    return written
 
 
 def _assign_by_override(album: Album, pending: list[PendingTrack],

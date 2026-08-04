@@ -189,11 +189,19 @@ def test_estimates_never_promise_linear_speedup():
 
 
 def test_estimate_shrinks_as_workers_rise():
+    """Assert the relationship, not the hours: pinning literal figures here
+    broke the moment the extractor got faster, which is a change the test
+    should welcome rather than block."""
+    from music_manager.core.similarity import SECONDS_PER_TRACK, expected_speedup
     from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
-    one = SimilarityUIMixin._analysis_estimate(7279, workers=1)
-    many = SimilarityUIMixin._analysis_estimate(7279, workers=12)
-    assert "21" in one and "hours" in one
-    assert "2.8 hours" in many
+
+    def seconds(workers):
+        return 7279 * SECONDS_PER_TRACK / expected_speedup(workers)
+
+    assert seconds(12) < seconds(1) / 5
+    assert "hours" in SimilarityUIMixin._analysis_estimate(7279, workers=1)
+    for workers in (1, 4, 12, 24):
+        assert SimilarityUIMixin._analysis_estimate(7279, workers=workers)
 
 
 def test_every_modal_grabs_only_after_the_window_is_visible():

@@ -327,8 +327,14 @@ class AnalysisCancelled(Exception):
 _MEASURED_SPEEDUP = {1: 1.0, 2: 1.9, 4: 3.6, 8: 6.4, 12: 7.6, 18: 8.0, 24: 9.5}
 
 # Seconds of single-threaded analysis per track, at the ~250 s mean track
-# length of a real classical library.
-SECONDS_PER_TRACK = 10.5
+# length of a real classical library. Measured for v3; the v2 vector cost
+# 10.5 s, most of it HPSS.
+SECONDS_PER_TRACK = 3.1
+
+# Top of the dynamic-range filter, in dB. Real tracks span roughly 5-30 dB
+# between the 10th and 95th loudness percentiles; 40 leaves headroom and
+# keeps the slider readable.
+MAX_DYNAMIC_RANGE_DB = 40.0
 
 
 def expected_speedup(workers: int) -> float:

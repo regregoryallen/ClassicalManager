@@ -17,6 +17,8 @@ from pathlib import Path
 
 import peewee as pw
 
+from playhouse.shortcuts import ReconnectMixin
+
 from music_manager.core.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -38,10 +40,25 @@ MAX_KEY_LENGTH = 255
 database = pw.DatabaseProxy()
 
 
+class ReconnectMySQLDatabase(ReconnectMixin, pw.MySQLDatabase):
+    """MySQL that survives the server closing an idle connection.
+
+    A server drops idle connections — MariaDB's wait_timeout defaults to
+    8 hours — and peewee holds exactly one. Leaving the GUI open overnight
+    was enough: the connection went away and the next click had nowhere to
+    go. SQLite never had this failure mode because there is no connection
+    to lose, so it arrived with the server backend.
+
+    ReconnectMixin retries once on a connection-lost error. It deliberately
+    refuses inside an explicit transaction, where a silent retry could
+    replay half a unit of work.
+    """
+
+
 def _make_database(settings) -> pw.Database:
     """Build the concrete peewee database for the resolved settings."""
     if settings.backend == "mysql":
-        return pw.MySQLDatabase(
+        return ReconnectMySQLDatabase(
             settings.name,
             host=settings.host, port=settings.port,
             user=settings.user, password=settings.password,
@@ -141,86 +158,11 @@ def initialize_database(db_path: Path | None = None,
     database.connect(reuse_if_open=True)
     logger.info("Database connected: %s", settings.describe())
 
-    database.create_tables([
-        Library,
-        SourceFolder,
-        Composer,
-        Album,
-        Work,
-        Track,
-        PlaylistProfile,
-        ProfileSelection,
-        Override,
-    ])
+    if _schema_is_current():
+        logger.debug("Schema already current; skipping DDL")
+        return database
 
-    # Migrations: add columns that may not exist in older databases.
-    # IMPORTANT: always use null=True in migration field definitions — Peewee's
-    # SqliteMigrator adds a NOT NULL constraint via _update_column, which drops
-    # and recreates the table, triggering ON DELETE CASCADE on related tables.
-    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
-                                   migrate as run_migrate)
-    migrator = (MySQLMigrator(database) if settings.backend == "mysql"
-                else SqliteMigrator(database))
-    columns = {col.name for col in database.get_columns("libraries")}
-    if "plex_section" not in columns:
-        run_migrate(migrator.add_column("libraries", "plex_section",
-                                        pw.TextField(null=True, default="")))
-        logger.info("Migrated: added plex_section to libraries")
-
-    track_cols = {col.name for col in database.get_columns("tracks")}
-    if "work_tag" not in track_cols:
-        run_migrate(
-            migrator.add_column("tracks", "work_tag", pw.TextField(null=True)),
-            migrator.add_column("tracks", "mb_work_id", pw.TextField(null=True)),
-        )
-        logger.info("Migrated: added work_tag, mb_work_id to tracks")
-    if "file_mtime" not in track_cols:
-        run_migrate(
-            migrator.add_column("tracks", "file_mtime", pw.DoubleField(null=True)),
-            migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
-        )
-        logger.info("Migrated: added file_mtime, file_size to tracks")
-    if "genre" not in track_cols:
-        run_migrate(
-            migrator.add_column("tracks", "genre", pw.TextField(null=True)),
-            migrator.add_column("tracks", "performer", pw.TextField(null=True)),
-            migrator.add_column("tracks", "conductor", pw.TextField(null=True)),
-            migrator.add_column("tracks", "ensemble", pw.TextField(null=True)),
-        )
-        logger.info("Migrated: added genre, performer, conductor, ensemble to tracks")
-
-    profile_cols = {col.name for col in database.get_columns("playlist_profiles")}
-    if "separate_composers" not in profile_cols:
-        run_migrate(
-            migrator.add_column("playlist_profiles", "separate_composers",
-                                pw.BooleanField(null=True, default=False)),
-            migrator.add_column("playlist_profiles", "separate_albums",
-                                pw.BooleanField(null=True, default=False)),
-            migrator.add_column("playlist_profiles", "separate_forms",
-                                pw.BooleanField(null=True, default=False)),
-        )
-        logger.info("Migrated: added separation columns to playlist_profiles")
-
-    if "auto_generated" not in profile_cols:
-        run_migrate(
-            migrator.add_column("playlist_profiles", "auto_generated",
-                                pw.BooleanField(null=True, default=False)),
-        )
-        logger.info("Migrated: added auto_generated to playlist_profiles")
-
-    if "first_seen" not in track_cols:
-        run_migrate(
-            migrator.add_column("tracks", "first_seen",
-                                pw.DateTimeField(null=True)),
-        )
-        logger.info("Migrated: added first_seen to tracks")
-
-    from music_manager.core.similarity import ensure_table
-    ensure_table()
-
-    _ensure_track_indexes()
-
-    logger.info("Database tables created/verified")
+    _create_and_migrate(settings)
     return database
 
 
@@ -233,6 +175,23 @@ class BaseModel(pw.Model):
 
     class Meta:
         database = database
+
+
+# ---------------------------------------------------------------------------
+# Schema marker
+# ---------------------------------------------------------------------------
+
+class SchemaState(BaseModel):
+    """Which schema version this database has been built to.
+
+    Exists so startup can answer "is the schema current?" with one SELECT
+    instead of inspecting every table. See _schema_is_current.
+    """
+
+    version = pw.IntegerField()
+
+    class Meta:
+        table_name = "schema_state"
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +413,120 @@ class Override(BaseModel):
 
     class Meta:
         table_name = "overrides"
+
+
+# Bump when the DDL in _create_and_migrate changes. Recorded in the
+# schema_state table so a startup that finds a matching version can skip
+# the schema work entirely.
+SCHEMA_VERSION = 1
+
+
+def _schema_is_current() -> bool:
+    """True when the schema is already built and at SCHEMA_VERSION.
+
+    One query instead of roughly thirty metadata round trips. Every startup
+    used to run create_tables across nine models, three get_columns calls
+    and two index inspections — schema DDL on every GUI launch, every CLI
+    command and every script. Free against a SQLite file. Against a server
+    with a second client connected it is metadata-lock contention on every
+    table, and it wedged the instance twice: a stuck
+    "SHOW INDEX FROM playlist_profiles" blocking everything behind it.
+    """
+    try:
+        row = database.execute_sql(
+            "SELECT version FROM schema_state").fetchone()
+    except Exception:
+        return False        # table absent: fresh database or older layout
+    return bool(row) and row[0] == SCHEMA_VERSION
+
+
+def _record_schema_version() -> None:
+    SchemaState.delete().execute()
+    SchemaState.create(version=SCHEMA_VERSION)
+
+
+def _create_and_migrate(settings) -> None:
+    """Build or upgrade the schema. Runs only when the marker does not match."""
+    database.create_tables([
+        Library,
+        SourceFolder,
+        Composer,
+        Album,
+        Work,
+        Track,
+        PlaylistProfile,
+        ProfileSelection,
+        Override,
+    ])
+
+    # Migrations: add columns that may not exist in older databases.
+    # IMPORTANT: always use null=True in migration field definitions — Peewee's
+    # SqliteMigrator adds a NOT NULL constraint via _update_column, which drops
+    # and recreates the table, triggering ON DELETE CASCADE on related tables.
+    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
+                                   migrate as run_migrate)
+    migrator = (MySQLMigrator(database) if settings.backend == "mysql"
+                else SqliteMigrator(database))
+    columns = {col.name for col in database.get_columns("libraries")}
+    if "plex_section" not in columns:
+        run_migrate(migrator.add_column("libraries", "plex_section",
+                                        pw.TextField(null=True, default="")))
+        logger.info("Migrated: added plex_section to libraries")
+
+    track_cols = {col.name for col in database.get_columns("tracks")}
+    if "work_tag" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "work_tag", pw.TextField(null=True)),
+            migrator.add_column("tracks", "mb_work_id", pw.TextField(null=True)),
+        )
+        logger.info("Migrated: added work_tag, mb_work_id to tracks")
+    if "file_mtime" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "file_mtime", pw.DoubleField(null=True)),
+            migrator.add_column("tracks", "file_size", pw.IntegerField(null=True)),
+        )
+        logger.info("Migrated: added file_mtime, file_size to tracks")
+    if "genre" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "genre", pw.TextField(null=True)),
+            migrator.add_column("tracks", "performer", pw.TextField(null=True)),
+            migrator.add_column("tracks", "conductor", pw.TextField(null=True)),
+            migrator.add_column("tracks", "ensemble", pw.TextField(null=True)),
+        )
+        logger.info("Migrated: added genre, performer, conductor, ensemble to tracks")
+
+    profile_cols = {col.name for col in database.get_columns("playlist_profiles")}
+    if "separate_composers" not in profile_cols:
+        run_migrate(
+            migrator.add_column("playlist_profiles", "separate_composers",
+                                pw.BooleanField(null=True, default=False)),
+            migrator.add_column("playlist_profiles", "separate_albums",
+                                pw.BooleanField(null=True, default=False)),
+            migrator.add_column("playlist_profiles", "separate_forms",
+                                pw.BooleanField(null=True, default=False)),
+        )
+        logger.info("Migrated: added separation columns to playlist_profiles")
+
+    if "auto_generated" not in profile_cols:
+        run_migrate(
+            migrator.add_column("playlist_profiles", "auto_generated",
+                                pw.BooleanField(null=True, default=False)),
+        )
+        logger.info("Migrated: added auto_generated to playlist_profiles")
+
+    if "first_seen" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "first_seen",
+                                pw.DateTimeField(null=True)),
+        )
+        logger.info("Migrated: added first_seen to tracks")
+
+    from music_manager.core.similarity import ensure_table
+    ensure_table()
+
+    _ensure_track_indexes()
+
+
+    database.create_tables([SchemaState])
+    _record_schema_version()
+    logger.info("Database schema created/verified (version %d)", SCHEMA_VERSION)

@@ -333,21 +333,28 @@ class SimilarityUIMixin:
         ctk.CTkEntry(param_frame, textvariable=limit_var, width=55).pack(
             side="left", padx=(0, 12))
 
-        ctk.CTkLabel(param_frame, text="Volatility max:").pack(
+        from music_manager.core.similarity import MAX_DYNAMIC_RANGE_DB
+
+        # Dynamic range is now measured in dB (95th minus 10th percentile of
+        # frame loudness), not the old unitless ratio. A 0-1 slider would
+        # have excluded every track, since even very even music spans more
+        # than 1 dB. Typical values: under 10 dB even, over 25 dB very wide.
+        ctk.CTkLabel(param_frame, text="Max dyn range:").pack(
             side="left", padx=(0, 4))
-        vol_var = tk.DoubleVar(value=1.0)
+        vol_var = tk.DoubleVar(value=MAX_DYNAMIC_RANGE_DB)
         vol_slider = ctk.CTkSlider(
-            param_frame, from_=0.0, to=1.0, variable=vol_var, width=110,
+            param_frame, from_=0.0, to=MAX_DYNAMIC_RANGE_DB, variable=vol_var,
+            width=110,
             command=lambda v: vol_label.configure(
-                text=f"{float(v):.2f}" if vol_enabled.get() else "Off"))
+                text=f"{float(v):.0f} dB" if vol_enabled.get() else "Off"))
         vol_slider.pack(side="left", padx=(0, 2))
-        vol_label = ctk.CTkLabel(param_frame, text="Off", width=30)
+        vol_label = ctk.CTkLabel(param_frame, text="Off", width=44)
         vol_label.pack(side="left", padx=(0, 2))
         vol_enabled = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             param_frame, text="", variable=vol_enabled, width=20,
             command=lambda: vol_label.configure(
-                text=f"{vol_var.get():.2f}" if vol_enabled.get() else "Off")
+                text=f"{vol_var.get():.0f} dB" if vol_enabled.get() else "Off")
         ).pack(side="left", padx=(0, 12))
 
         ctk.CTkLabel(param_frame, text="Blend:").pack(
@@ -375,13 +382,13 @@ class SimilarityUIMixin:
         result_tree.heading("album", text="Album")
         result_tree.heading("match", text="Match")
         result_tree.heading("agreement", text="Agreement")
-        result_tree.heading("volatility", text="Volatility")
+        result_tree.heading("volatility", text="Dyn Range")
         result_tree.column("#0", width=220)
         result_tree.column("composer", width=140)
         result_tree.column("album", width=160)
         result_tree.column("match", width=60)
         result_tree.column("agreement", width=70)
-        result_tree.column("volatility", width=70)
+        result_tree.column("volatility", width=80, anchor="e")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")
@@ -488,7 +495,7 @@ class SimilarityUIMixin:
                     r["album"],
                     f"{match_pct:.0f}%" if match_pct is not None else "",
                     f"{r['agreement']}/{r['seed_count']}",
-                    f"{r['volatility']:.3f}" if r["volatility"] is not None else "",
+                    f"{r['volatility']:.1f} dB" if r["volatility"] is not None else "",
                 ))
             sim_state["result_map"][iid] = r
 

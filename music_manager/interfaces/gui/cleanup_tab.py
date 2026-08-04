@@ -564,7 +564,8 @@ class CleanupTabMixin:
             if t.movement_number is not None:
                 _add("    Movement #", t.movement_number)
             volatility = volatility_by_track.get(t.id)
-            _add("    Volatility", f"{volatility:.3f}" if volatility is not None
+            _add("    Dynamic range", f"{volatility:.1f} dB"
+                 if volatility is not None
                  else "not analyzed")
 
         text.configure(state="disabled")

@@ -143,3 +143,26 @@ def test_empty_or_silent_input_does_not_explode():
     assert _loudness_and_range(np.array([])) == (-80.0, 0.0)
     mean, rng_db = _loudness_and_range(np.zeros(100))
     assert rng_db == 0.0 and mean < -100
+
+
+def test_the_filter_range_covers_real_dynamic_ranges():
+    """Regression: the UI slider ran 0-1 for the old unitless ratio. Left
+    at that range it would have excluded every track, since even very even
+    music spans more than 1 dB — a filter that silently returns nothing."""
+    from music_manager.core.similarity import MAX_DYNAMIC_RANGE_DB
+
+    # Real tracks measured 9.8 dB (an even Dixieland number) to 23.9 dB
+    # (Rhapsody in Blue). The slider has to reach past that.
+    assert MAX_DYNAMIC_RANGE_DB >= 30
+
+    # A wide but realistic swing — roughly 26 dB — must sit inside it.
+    swelling = np.concatenate([np.full(250, 0.025), np.full(250, 0.5)])
+    measured = _loudness_and_range(swelling)[1]
+    assert 20 < measured < MAX_DYNAMIC_RANGE_DB
+
+
+def test_per_track_cost_estimate_matches_the_current_extractor():
+    """The estimate is shown before a long job; a stale constant from the
+    previous vector would over-promise by 3x."""
+    from music_manager.core.similarity import SECONDS_PER_TRACK
+    assert 1.0 < SECONDS_PER_TRACK < 6.0

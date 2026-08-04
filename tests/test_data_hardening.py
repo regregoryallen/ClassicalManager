@@ -296,3 +296,106 @@ def test_scan_skips_and_reports_over_long_paths(lib, tmp_path):
     # The short path was still processed (it fails on tags, not on length),
     # so one bad path does not abandon the rest of the scan.
     assert any("Album/01.flac" in p for p in stats.files_failed)
+
+
+# ---------------------------------------------------------------------------
+# v3.6: startup must not re-run schema DDL every time
+# ---------------------------------------------------------------------------
+
+def test_second_startup_skips_the_schema_work(tmp_path):
+    """Startup used to run create_tables across nine models, three
+    get_columns calls and two index inspections — every GUI launch, every
+    CLI command, every script. Free against a SQLite file; against a server
+    with another client connected it is metadata-lock contention on every
+    table, and it wedged a live MariaDB instance twice, with a stuck
+    "SHOW INDEX FROM playlist_profiles" blocking everything behind it.
+    """
+    import logging
+
+    from music_manager.core.database import initialize_database, database
+
+    class Counter(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def emit(self, record):
+            self.n += 1
+
+    counter = Counter()
+    peewee_log = logging.getLogger("peewee")
+    peewee_log.setLevel(logging.DEBUG)
+    peewee_log.addHandler(counter)
+    try:
+        path = tmp_path / "startup.db"
+
+        before = counter.n
+        initialize_database(path)
+        first = counter.n - before
+        database.close()
+
+        before = counter.n
+        initialize_database(path)
+        second = counter.n - before
+        database.close()
+    finally:
+        peewee_log.removeHandler(counter)
+
+    assert first > 20, "a fresh database should still build the schema"
+    assert second <= 2, (
+        f"second startup issued {second} queries; the schema marker should "
+        f"make it a single lookup")
+
+
+def test_a_fresh_database_still_gets_everything(tmp_path):
+    """The guard must not skip the work on a database that needs it."""
+    from music_manager.core.database import (
+        SchemaState, SCHEMA_VERSION, Track, initialize_database, database,
+    )
+
+    initialize_database(tmp_path / "fresh.db")
+    try:
+        assert SchemaState.get().version == SCHEMA_VERSION
+        names = {ix.name for ix in database.get_indexes("tracks")}
+        assert "uq_tracks_folder_relpath" in names
+        assert "first_seen" in {c.name for c in database.get_columns("tracks")}
+        from music_manager.core.similarity import TrackAnalysis
+        assert TrackAnalysis.table_exists()
+    finally:
+        database.close()
+
+
+def test_a_version_mismatch_reruns_the_migrations(tmp_path):
+    """Bumping SCHEMA_VERSION is how an upgrade reaches an existing
+    database, so a stale marker must not be treated as current."""
+    import logging
+
+    from music_manager.core.database import (
+        SchemaState, initialize_database, database,
+    )
+
+    path = tmp_path / "stale.db"
+    initialize_database(path)
+    SchemaState.update(version=0).execute()      # pretend it predates us
+    database.close()
+
+    class Counter(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def emit(self, record):
+            self.n += 1
+
+    counter = Counter()
+    peewee_log = logging.getLogger("peewee")
+    peewee_log.setLevel(logging.DEBUG)
+    peewee_log.addHandler(counter)
+    try:
+        initialize_database(path)
+        assert counter.n > 10, "a stale marker must trigger the schema path"
+    finally:
+        peewee_log.removeHandler(counter)
+        from music_manager.core.database import SCHEMA_VERSION
+        assert SchemaState.get().version == SCHEMA_VERSION
+        database.close()

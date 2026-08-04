@@ -4,6 +4,14 @@
   "autosave_interval": 60,
   "_analysis_workers_comment": "Optional. Processes for audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
   "analysis_workers": 0,
+  "_similarity_weights_comment": "Optional. Relative influence of each feature group in Find Similar. Groups are normalised first, so these are real weights rather than a side effect of how many columns a group has. Raise register if you want violin to stay away from cello; lower it if you do not care.",
+  "similarity_weights": {
+    "timbre": 1.0,
+    "register": 0.6,
+    "dynamics": 1.0,
+    "rhythm": 1.0,
+    "harmony": 0.4
+  },
   "_database_comment": [
     "Optional. Omit this section entirely to use SQLite at db_path.",
     "For MySQL/MariaDB, set backend to 'mysql' and fill in the rest.",

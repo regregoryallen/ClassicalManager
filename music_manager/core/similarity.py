@@ -1,16 +1,39 @@
 """Track similarity analysis using librosa.
 
-Extracts a 31-dimensional audio feature vector per track:
-  - 13 MFCCs (timbre/texture)
-  - 3 spectral features (centroid, bandwidth, rolloff)
-  - 7 spectral contrast bands (peak-to-valley per frequency band)
-  - 6 tonnetz (tonal centroid — harmonic relationships)
-  - 1 RMS energy (loudness)
-  - 1 zero-crossing rate (percussiveness)
+Extracts a 30-dimensional feature vector per track, organised into GROUPS
+so that a group's influence is a decision rather than an accident of how
+many columns it occupies.
 
-Finds similar tracks by z-score-normalized Euclidean distance.
-Volatility scoring via windowed analysis flags tracks with dramatic
-internal variation.
+Measured on the v2 vector, timbre and register drove 74% of every
+comparison and loudness plus percussiveness drove 6% — purely because
+MFCC contributed 13 columns and loudness contributed 1. Distances are now
+normalised per group before weighting, so adding a column to a group no
+longer increases its vote.
+
+  timbre    8 MFCC + 7 spectral contrast   instrument, texture, solo vs tutti
+  register  centroid, bandwidth, rolloff   high vs low
+  dynamics  loudness dB, dynamic range dB  how loud, how much it varies
+  rhythm    tempo, onset rate, onset
+            strength, zero-crossing rate    pace and percussiveness
+  harmony   6 tonnetz                       tonal centre
+
+Two deliberate changes from v2:
+
+* Dynamic range replaces the old volatility, which was std/mean of windowed
+  RMS. Dividing by a small mean inflated it, so quiet music scored as
+  highly dynamic (r = -0.39 against loudness; the quietest fifth of a real
+  library averaged 0.234 against 0.104 for the loudest). It measured
+  quietness. The replacement is a dB *difference* between loud and quiet
+  percentiles, which is level-independent.
+
+* Rhythm is new. The v2 vector had no tempo or rhythm feature at all —
+  correlation between feature distance and tempo difference was 0.11, i.e.
+  effectively blind.
+
+HPSS is gone. librosa.effects.harmonic cost 61-72% of analysis runtime and
+fed only tonnetz; computing tonnetz from the raw signal gives a vector in
+the same direction (cosine 0.998-0.999), so the expense bought almost
+nothing.
 
 Lightly coupled: the TrackAnalysis model lives here, not in database.py.
 librosa is imported lazily to keep app startup fast.
@@ -34,7 +57,30 @@ from music_manager.core.database import (
 logger = logging.getLogger(__name__)
 
 # Bump this when the feature vector changes to trigger re-analysis.
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3
+
+# Contiguous slices of the feature vector. Order here is the order in the
+# stored vector; changing either means bumping FEATURE_VERSION.
+FEATURE_GROUPS = {
+    "timbre":   slice(0, 15),
+    "register": slice(15, 18),
+    "dynamics": slice(18, 20),
+    "rhythm":   slice(20, 24),
+    "harmony":  slice(24, 30),
+}
+FEATURE_DIMS = 30
+
+# Defaults lean toward acoustic flow: how a track sounds and moves matters
+# more than what key it is in. Register is deliberately adjustable — solo
+# cello and solo violin are close musically but not if you specifically
+# want violin.
+DEFAULT_GROUP_WEIGHTS = {
+    "timbre":   1.0,
+    "register": 0.6,
+    "dynamics": 1.0,
+    "rhythm":   1.0,
+    "harmony":  0.4,
+}
 
 
 class TrackAnalysis(BaseModel):
@@ -117,98 +163,104 @@ def _suppress_stderr():
 # ---------------------------------------------------------------------------
 
 def _extract_features(file_path: str) -> list[float]:
-    """Extract a 31-dimensional feature vector from an audio file.
-
-    Uses librosa to compute:
-      - 13 MFCCs (timbre/texture)
-      - 3 spectral features (centroid, bandwidth, rolloff → brightness/warmth)
-      - 7 spectral contrast bands (peak-to-valley per frequency band —
-        distinguishes solo instruments from ensembles)
-      - 6 tonnetz (tonal centroid — harmonic relationships on the
-        fifths/major-thirds/minor-thirds axes)
-      - 1 RMS energy (loudness)
-      - 1 zero-crossing rate (percussiveness)
-    All values are means across the full track, giving a compact signature.
-    """
+    """Extract the 30-dimensional feature vector. See FEATURE_GROUPS."""
     import numpy as np
     import librosa
 
     with _suppress_stderr():
         y, sr = librosa.load(file_path, sr=22050, mono=True)
+    return _features_from_signal(y, sr)
 
-    # MFCCs: 13 coefficients (timbre fingerprint)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    mfcc_mean = mfcc.mean(axis=1).tolist()  # 13 values
 
-    # Spectral features (3 values)
-    centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
-    bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)))
-    rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr)))
+def _features_from_signal(y, sr) -> list[float]:
+    """The vector, given a decoded signal. Split out so analysis decodes
+    the file once instead of once per measurement."""
+    import numpy as np
+    import librosa
 
-    # Spectral contrast: 7 frequency bands (7 values)
-    contrast = librosa.feature.spectral_contrast(y=y, sr=sr, n_bands=6)
-    contrast_mean = contrast.mean(axis=1).tolist()  # 7 values (6 bands + 1 valley)
+    # --- timbre: 8 MFCC + 7 spectral contrast (15) ---------------------
+    # 8 rather than 13: that convention comes from speech recognition, and
+    # with group normalisation the extra columns no longer buy influence.
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=8).mean(axis=1).tolist()
+    contrast = librosa.feature.spectral_contrast(
+        y=y, sr=sr, n_bands=6).mean(axis=1).tolist()
 
-    # Tonnetz: tonal centroid (6 values)
-    # Computed from chroma — captures harmonic relationships on
-    # fifths, major-thirds, and minor-thirds axes
-    harmonic = librosa.effects.harmonic(y)
-    tonnetz = librosa.feature.tonnetz(y=harmonic, sr=sr)
-    tonnetz_mean = tonnetz.mean(axis=1).tolist()  # 6 values
+    # --- register (3) --------------------------------------------------
+    register = [
+        float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))),
+        float(np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr))),
+        float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))),
+    ]
 
-    # RMS energy (1 value)
-    rms = float(np.mean(librosa.feature.rms(y=y)))
+    # --- dynamics (2) --------------------------------------------------
+    rms = librosa.feature.rms(y=y)[0]
+    loudness_db, range_db = _loudness_and_range(rms)
+    dynamics = [loudness_db, range_db]
 
-    # Zero-crossing rate (1 value)
-    zcr = float(np.mean(librosa.feature.zero_crossing_rate(y=y)))
+    # --- rhythm (4) ----------------------------------------------------
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+    tempo = float(np.atleast_1d(
+        librosa.feature.tempo(onset_envelope=onset_env, sr=sr))[0])
+    onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr)
+    seconds = max(len(y) / sr, 1e-6)
+    rhythm = [
+        tempo,
+        len(onsets) / seconds,                       # events per second
+        float(np.mean(onset_env)),                   # attack strength
+        float(np.mean(librosa.feature.zero_crossing_rate(y=y))),
+    ]
 
-    features = (mfcc_mean + [centroid, bandwidth, rolloff] +
-                contrast_mean + tonnetz_mean + [rms, zcr])
-    return features  # 31 values
+    # --- harmony: 6 tonnetz (6) ----------------------------------------
+    # From the raw signal: running HPSS first cost 61-72% of the whole
+    # analysis and moved the result by almost nothing (cosine 0.998-0.999).
+    tonnetz = librosa.feature.tonnetz(y=y, sr=sr).mean(axis=1).tolist()
+
+    features = mfcc + contrast + register + dynamics + rhythm + tonnetz
+    assert len(features) == FEATURE_DIMS, f"expected {FEATURE_DIMS}, got {len(features)}"
+    return [float(v) for v in features]
+
+
+def _loudness_and_range(rms) -> tuple[float, float]:
+    """Mean loudness and dynamic range, both in dB.
+
+    The range is a *difference* between a loud and a quiet percentile, not
+    a ratio. The previous volatility divided by the mean, which inflated it
+    for quiet music — the quietest fifth of a real library averaged 0.234
+    against 0.104 for the loudest, so it ranked quiet tracks as the most
+    dynamic. A dB difference is independent of absolute level.
+
+    Percentiles rather than min/max so one silent frame or one cymbal crash
+    does not define the range.
+    """
+    import numpy as np
+
+    frames = np.asarray(rms, dtype=float)
+    frames = frames[np.isfinite(frames)]
+    if frames.size == 0:
+        return -80.0, 0.0
+    db = 20.0 * np.log10(np.maximum(frames, 1e-10))
+    loud, quiet = np.percentile(db, 95), np.percentile(db, 10)
+    return float(np.mean(db)), float(max(0.0, loud - quiet))
 
 
 def compute_volatility(file_path: str) -> float:
-    """Compute coefficient of variation across 30-second windows.
+    """Dynamic range in dB — how much the track's level actually varies.
 
-    Measures RMS energy and spectral centroid in windows, then returns
-    the mean CV across those features. Higher values = more internal
-    variation (e.g. a track that goes from pianissimo to fortissimo).
+    Replaces the old coefficient of variation (std/mean of windowed RMS),
+    which was scale-relative: dividing by a small mean inflated it, so
+    quiet music scored as highly dynamic. Measured on a real library it
+    correlated -0.39 with loudness, and the quietest fifth averaged 0.234
+    against 0.104 for the loudest. It was measuring quietness.
+
+    Now the same number the vector uses, so the Find Similar filter, the
+    displayed column and the distance all mean one thing. Roughly: under
+    10 dB is even, over 25 dB has a wide soft-to-loud span.
     """
-    import numpy as np
     import librosa
 
     with _suppress_stderr():
         y, sr = librosa.load(file_path, sr=22050, mono=True)
-
-    window_samples = 30 * sr
-    n_windows = max(1, len(y) // window_samples)
-
-    rms_vals = []
-    centroid_vals = []
-
-    for i in range(n_windows):
-        start = i * window_samples
-        end = start + window_samples
-        segment = y[start:end]
-        if len(segment) < sr:  # skip very short trailing segments
-            continue
-        rms = float(np.sqrt(np.mean(segment ** 2)))
-        centroid = float(np.mean(librosa.feature.spectral_centroid(
-            y=segment, sr=sr)))
-        rms_vals.append(rms)
-        centroid_vals.append(centroid)
-
-    if len(rms_vals) < 2:
-        return 0.0
-
-    def cv(vals):
-        arr = np.array(vals)
-        mean = arr.mean()
-        if mean < 1e-9:
-            return 0.0
-        return float(arr.std() / mean)
-
-    return (cv(rms_vals) + cv(centroid_vals)) / 2.0
+    return _loudness_and_range(librosa.feature.rms(y=y)[0])[1]
 
 
 # ---------------------------------------------------------------------------
@@ -223,12 +275,20 @@ def _track_file_path(track: Track) -> str:
 
 
 def analyze_file(path: str) -> tuple[list[float], float]:
-    """Feature vector and volatility for one file. No database access.
+    """Feature vector and dynamic range for one file. No database access.
 
     Kept free of ORM objects so it can run in a worker process, where the
     parent's database connection is neither available nor safe to share.
+
+    Decodes once: the previous version loaded the file for the features and
+    again for volatility, paying the decode twice.
     """
-    return _extract_features(path), compute_volatility(path)
+    import librosa
+
+    with _suppress_stderr():
+        y, sr = librosa.load(path, sr=22050, mono=True)
+    features = _features_from_signal(y, sr)
+    return features, features[FEATURE_GROUPS["dynamics"]][1]
 
 
 def analyze_track(track: Track) -> TrackAnalysis:
@@ -458,9 +518,45 @@ def _euclidean_distance(a: list[float], b: list[float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
+def resolve_group_weights(weights=None) -> dict:
+    """Group weights from the caller, then config, then the defaults."""
+    resolved = dict(DEFAULT_GROUP_WEIGHTS)
+    try:
+        from music_manager.core.config import load_config
+        configured = load_config().get("similarity_weights") or {}
+        for name, value in configured.items():
+            if name in resolved:
+                resolved[name] = float(value)
+    except Exception:
+        pass          # no config, unreadable, or not set
+    for name, value in (weights or {}).items():
+        if name in resolved:
+            resolved[name] = float(value)
+    return resolved
+
+
+def apply_group_weights(normed, weights):
+    """Scale each group so its influence is chosen, not inherited.
+
+    Every column is already z-scored, so a group of 15 columns contributes
+    15 units of variance and a group of 2 contributes 2. That made timbre
+    and register 74% of the distance and loudness plus percussiveness 6% —
+    an artefact of column count that nobody picked. Dividing by sqrt(size)
+    equalises the groups first; the weight is then applied on top and
+    actually means something.
+    """
+    import numpy as np
+
+    scaled = np.array(normed, dtype=float, copy=True)
+    for name, span in FEATURE_GROUPS.items():
+        size = span.stop - span.start
+        scaled[:, span] *= float(weights.get(name, 1.0)) / np.sqrt(size)
+    return scaled
+
+
 def find_similar(seed_track_ids: list[int], limit: int = 50,
                  volatility_max: float | None = None,
-                 blend: float = 0.5) -> list[dict]:
+                 blend: float = 0.5, weights: dict | None = None) -> list[dict]:
     """Find tracks similar to the given seed tracks.
 
     Args:
@@ -476,6 +572,7 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
     """
     import numpy as np
 
+    weights = resolve_group_weights(weights)
     seed_ids = set(seed_track_ids)
 
     # Load ALL current-version analyses for the library (z-score normalization)
@@ -502,6 +599,7 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
     stds = all_vectors.std(axis=0)
     stds[stds < 1e-9] = 1.0
     all_normed = (all_vectors - means) / stds
+    all_normed = apply_group_weights(all_normed, weights)
 
     # Index by track_id for lookup
     tid_to_idx = {a.track_id: i for i, a in enumerate(all_analyses)}

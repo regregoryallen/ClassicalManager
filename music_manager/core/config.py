@@ -237,6 +237,23 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     if "m3u" in targets:
         _validate_m3u(targets["m3u"], path)
 
+    # -- similarity_weights (optional) ----------------------------------------
+    if "similarity_weights" in config:
+        weights = config["similarity_weights"]
+        if not isinstance(weights, dict):
+            raise ConfigError(
+                f"{path}: 'similarity_weights' must be a JSON object")
+        from music_manager.core.similarity import DEFAULT_GROUP_WEIGHTS
+        for name, value in weights.items():
+            if name not in DEFAULT_GROUP_WEIGHTS:
+                raise ConfigError(
+                    f"{path}: unknown similarity group {name!r}. Valid: "
+                    f"{sorted(DEFAULT_GROUP_WEIGHTS)}")
+            if not isinstance(value, (int, float)) or value < 0:
+                raise ConfigError(
+                    f"{path}: 'similarity_weights.{name}' must be a "
+                    f"non-negative number, got {value!r}")
+
     # -- analysis_workers (optional) ------------------------------------------
     if "analysis_workers" in config:
         workers = config["analysis_workers"]

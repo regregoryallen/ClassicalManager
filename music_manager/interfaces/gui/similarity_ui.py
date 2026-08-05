@@ -363,11 +363,70 @@ class SimilarityUIMixin:
         ctk.CTkSlider(param_frame, from_=0.0, to=1.0,
                       variable=blend_var, width=110).pack(
             side="left", padx=(0, 4))
-        ctk.CTkLabel(param_frame, text="nearest ↔ consensus",
+        ctk.CTkLabel(param_frame, text="nearest seed ↔ all seeds",
                      font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 12))
 
         search_btn = ctk.CTkButton(param_frame, text="Search", width=70)
         search_btn.pack(side="left")
+
+        # -- Feature weights ------------------------------------------------
+        # Groups are normalised by size before these apply, so a weight is a
+        # real decision rather than a side effect of how many columns a
+        # group happens to have. Timbre used to take 42% of every comparison
+        # purely for having 13 of 31 columns.
+        from music_manager.core.similarity import (
+            DEFAULT_GROUP_WEIGHTS, GROUP_DESCRIPTIONS, resolve_group_weights)
+
+        weight_vars = {}
+        weights_frame = ctk.CTkFrame(popup)
+        weights_shown = tk.BooleanVar(value=False)
+
+        def toggle_weights():
+            if weights_shown.get():
+                weights_frame.pack_forget(); weights_shown.set(False)
+                weights_btn.configure(text="Feature weights \u25be")
+            else:
+                weights_frame.pack(fill="x", padx=12, pady=(0, 4),
+                                   before=tree_frame)
+                weights_shown.set(True)
+                weights_btn.configure(text="Feature weights \u25b4")
+
+        weights_btn = ctk.CTkButton(
+            param_frame, text="Feature weights \u25be", width=140,
+            fg_color="gray30", hover_color="gray40", command=toggle_weights)
+        weights_btn.pack(side="left", padx=(8, 0))
+
+        start_weights = resolve_group_weights(None)
+        grid = ctk.CTkFrame(weights_frame, fg_color="transparent")
+        grid.pack(fill="x", padx=8, pady=6)
+        for row, group in enumerate(DEFAULT_GROUP_WEIGHTS):
+            ctk.CTkLabel(grid, text=group.capitalize(), width=80,
+                         anchor="w").grid(row=row, column=0, sticky="w", pady=1)
+            var = tk.DoubleVar(value=start_weights.get(group, 1.0))
+            weight_vars[group] = var
+            value_label = ctk.CTkLabel(grid, text=f"{var.get():.1f}", width=32)
+            ctk.CTkSlider(
+                grid, from_=0.0, to=2.0, number_of_steps=20, variable=var,
+                width=150,
+                command=lambda v, lbl=value_label: lbl.configure(
+                    text=f"{float(v):.1f}")).grid(row=row, column=1, padx=6)
+            value_label.grid(row=row, column=2)
+            ctk.CTkLabel(grid, text=GROUP_DESCRIPTIONS.get(group, ""),
+                         text_color=("gray25", "gray70"), anchor="w").grid(
+                row=row, column=3, sticky="w", padx=(8, 0))
+
+        def reset_weights():
+            for group, var in weight_vars.items():
+                var.set(DEFAULT_GROUP_WEIGHTS[group])
+
+        btn_row = ctk.CTkFrame(weights_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkButton(btn_row, text="Reset to defaults", width=140,
+                      fg_color="gray30", hover_color="gray40",
+                      command=reset_weights).pack(side="left")
+        ctk.CTkLabel(btn_row,
+                     text="0 removes a group entirely; 2 doubles its say.",
+                     text_color=("gray25", "gray70")).pack(side="left", padx=10)
 
         # -- Results Treeview --
         tree_frame = ctk.CTkFrame(popup, fg_color="transparent")
@@ -375,19 +434,19 @@ class SimilarityUIMixin:
 
         result_tree = ttk.Treeview(
             tree_frame,
-            columns=("composer", "album", "match", "agreement", "volatility"),
+            columns=("composer", "album", "match", "rank", "volatility"),
             show="tree headings", selectmode="extended")
         result_tree.heading("#0", text="Title")
         result_tree.heading("composer", text="Composer")
         result_tree.heading("album", text="Album")
         result_tree.heading("match", text="Match")
-        result_tree.heading("agreement", text="Agreement")
+        result_tree.heading("rank", text="Rank")
         result_tree.heading("volatility", text="Dyn Range")
         result_tree.column("#0", width=220)
         result_tree.column("composer", width=140)
         result_tree.column("album", width=160)
         result_tree.column("match", width=60)
-        result_tree.column("agreement", width=70)
+        result_tree.column("rank", width=90, anchor="e")
         result_tree.column("volatility", width=80, anchor="e")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
@@ -427,7 +486,7 @@ class SimilarityUIMixin:
             bot_frame, text="Re-search (include accepted)", width=200,
             command=lambda: self._sim_re_search(
                 result_tree, sim_state, limit_var, vol_var,
-                vol_enabled, blend_var)
+                vol_enabled, blend_var, weight_vars)
         ).pack(side="left", padx=(0, 4))
         ctk.CTkButton(
             bot_frame, text="Close", width=70,
@@ -447,14 +506,14 @@ class SimilarityUIMixin:
         # Wire up search button
         search_btn.configure(command=lambda: self._do_sim_search(
             result_tree, sim_state, limit_var, vol_var,
-            vol_enabled, blend_var))
+            vol_enabled, blend_var, weight_vars))
 
         # Run initial search
         self._do_sim_search(result_tree, sim_state, limit_var, vol_var,
-                            vol_enabled, blend_var)
+                            vol_enabled, blend_var, weight_vars)
 
     def _do_sim_search(self, result_tree, sim_state, limit_var, vol_var,
-                       vol_enabled, blend_var):
+                       vol_enabled, blend_var, weight_vars=None):
         """Execute similarity search and populate the results Treeview."""
         from music_manager.core.similarity import find_similar
 
@@ -468,7 +527,8 @@ class SimilarityUIMixin:
 
         results = find_similar(
             list(seed_ids), limit=limit,
-            volatility_max=vol_max, blend=blend)
+            volatility_max=vol_max, blend=blend,
+            weights={g: v.get() for g, v in (weight_vars or {}).items()})
 
         # Filter out tracks already in the profile
         selected_track_ids = self._resolve_current_to_track_ids()
@@ -494,7 +554,7 @@ class SimilarityUIMixin:
                     r["composer"],
                     r["album"],
                     f"{match_pct:.0f}%" if match_pct is not None else "",
-                    f"{r['agreement']}/{r['seed_count']}",
+                    f"{r['rank']} of {r['candidate_count']}",
                     f"{r['volatility']:.1f} dB" if r["volatility"] is not None else "",
                 ))
             sim_state["result_map"][iid] = r
@@ -568,7 +628,7 @@ class SimilarityUIMixin:
         menu.tk_popup(event.x_root, event.y_root)
 
     def _sim_re_search(self, result_tree, sim_state, limit_var, vol_var,
-                       vol_enabled, blend_var):
+                       vol_enabled, blend_var, weight_vars=None):
         """Re-resolve selections (including accepted tracks) and re-search."""
         new_seed_ids = self._resolve_current_to_track_ids()
         if not new_seed_ids:
@@ -578,4 +638,4 @@ class SimilarityUIMixin:
             return
         sim_state["seed_ids"] = new_seed_ids
         self._do_sim_search(result_tree, sim_state, limit_var, vol_var,
-                            vol_enabled, blend_var)
+                            vol_enabled, blend_var, weight_vars)

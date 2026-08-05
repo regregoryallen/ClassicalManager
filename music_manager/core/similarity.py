@@ -61,12 +61,17 @@ FEATURE_VERSION = 3
 
 # Contiguous slices of the feature vector. Order here is the order in the
 # stored vector; changing either means bumping FEATURE_VERSION.
+# Tempo is its own group rather than one column inside "rhythm": pace is
+# something you tune directly ("favour tempo"), and a one-column group is
+# fine because groups are normalised by size before weighting. This is a
+# regrouping of the SAME stored vector — no re-analysis, no version bump.
 FEATURE_GROUPS = {
-    "timbre":   slice(0, 15),
-    "register": slice(15, 18),
-    "dynamics": slice(18, 20),
-    "rhythm":   slice(20, 24),
-    "harmony":  slice(24, 30),
+    "timbre":   slice(0, 15),    # 8 MFCC + 7 spectral contrast
+    "register": slice(15, 18),   # centroid, bandwidth, rolloff
+    "dynamics": slice(18, 20),   # mean loudness dB, dynamic range dB
+    "tempo":    slice(20, 21),   # BPM
+    "attack":   slice(21, 24),   # onset rate, onset strength, ZCR
+    "harmony":  slice(24, 30),   # tonnetz
 }
 FEATURE_DIMS = 30
 
@@ -78,8 +83,19 @@ DEFAULT_GROUP_WEIGHTS = {
     "timbre":   1.0,
     "register": 0.6,
     "dynamics": 1.0,
-    "rhythm":   1.0,
+    "tempo":    1.0,
+    "attack":   1.0,
     "harmony":  0.4,
+}
+
+# Shown next to each slider so the labels mean something without the docs.
+GROUP_DESCRIPTIONS = {
+    "timbre":   "instrument and texture — solo vs ensemble",
+    "register": "high vs low — separates violin from cello",
+    "dynamics": "how loud, and how much it swells",
+    "tempo":    "pace in BPM",
+    "attack":   "percussiveness and note density",
+    "harmony":  "tonal centre",
 }
 
 
@@ -616,56 +632,60 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
         return []
     seed_vectors = all_normed[seed_indices]
 
-    # Determine a "near" threshold: median pairwise distance among seeds
-    if len(seed_vectors) >= 2:
-        # Pairwise Euclidean distances among seeds (upper triangle)
-        n = len(seed_vectors)
-        pairwise = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                pairwise.append(float(np.sqrt(
-                    np.sum((seed_vectors[i] - seed_vectors[j]) ** 2))))
-        threshold = float(np.median(pairwise))
-    else:
-        threshold = 5.0  # single-seed default for normalized space
+    # Score every candidate at once. Two aggregations, blended:
+    #   blend 0.0 - distance to the NEAREST seed. Finds anything resembling
+    #               any one seed; with many seeds that is a union of many
+    #               neighbourhoods, so oddities get in on a single match.
+    #   blend 1.0 - MEAN distance to all seeds. Has to suit the set as a
+    #               whole.
+    # This replaces an "agreement" count of seeds falling inside the median
+    # seed-to-seed distance. That threshold was derived from how far apart
+    # the seeds happened to be, so it said nothing about the library: it
+    # read 0/4 for every result in one real search and 464/546 in another,
+    # saturating at both ends and carrying no information either way.
+    candidate_idx = [i for i, a in enumerate(all_analyses)
+                     if a.track_id not in seed_ids
+                     and not (volatility_max is not None
+                              and a.volatility is not None
+                              and a.volatility > volatility_max)]
+    if not candidate_idx:
+        return []
 
-    # Score candidates
+    candidates = all_normed[candidate_idx]
+    dists = np.linalg.norm(candidates[:, None, :] - seed_vectors[None, :, :],
+                           axis=2)
+    nearest = dists.min(axis=1)
+    average = dists.mean(axis=1)
+    scores = (1.0 - blend) * nearest + blend * average
+
+    # Match % as a position within THIS library, not against the seed
+    # spread. The old ratio compared a candidate's distance to how tightly
+    # the seeds clustered, which made every one of 2,000 results read 100%
+    # once the seeds were more spread out than the cluster they were
+    # hunting. A percentile always spans the full range and means the same
+    # thing in every search: 99.5 is "closer than 99.5% of your library".
+    order = np.argsort(scores)
+    total = len(order)
+    percentile = np.empty(total)
+    percentile[order] = 100.0 * (1.0 - np.arange(total) / max(total - 1, 1))
+
     results = []
-    for i, a in enumerate(all_analyses):
-        if a.track_id in seed_ids:
-            continue
-        if volatility_max is not None and a.volatility is not None:
-            if a.volatility > volatility_max:
-                continue
-
-        c_vec = all_normed[i]
-        distances = np.sqrt(np.sum((seed_vectors - c_vec) ** 2, axis=1))
-        nearest = float(distances.min())
-        agreement = int(np.sum(distances <= threshold))
-
-        agreement_norm = agreement / len(seed_vectors)
-        score = (1.0 - blend) * nearest + blend * nearest * (1.0 - agreement_norm)
-
-        # Match %: nearest distance expressed relative to how tightly the
-        # seeds cluster among themselves (`threshold`). A candidate at or
-        # inside that spread scores 100; it decays smoothly past that, so
-        # the number stays meaningful across searches with looser or
-        # tighter seed sets instead of being a raw, uncalibrated distance.
-        ratio = nearest / threshold if threshold > 1e-9 else nearest
-        match_pct = round(100.0 * math.exp(-max(0.0, ratio - 1.0)), 1)
-
+    for position, i in enumerate(order):
+        a = all_analyses[candidate_idx[i]]
         track = a.track
         results.append({
             "track_id": track.id,
             "title": track.title,
             "composer": track.composer.name if track.composer else "",
             "album": track.album.title if track.album else "",
-            "distance": round(nearest, 3),
-            "match_pct": match_pct,
+            "distance": round(float(nearest[i]), 3),
+            "mean_distance": round(float(average[i]), 3),
+            "match_pct": round(float(percentile[i]), 1),
+            "rank": position + 1,
+            "candidate_count": total,
             "volatility": round(a.volatility, 3) if a.volatility is not None else None,
-            "agreement": agreement,
             "seed_count": len(seed_vectors),
-            "score": round(score, 3),
+            "score": round(float(scores[i]), 3),
         })
 
     results.sort(key=lambda r: r["score"])

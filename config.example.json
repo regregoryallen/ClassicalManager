@@ -4,12 +4,13 @@
   "autosave_interval": 60,
   "_analysis_workers_comment": "Optional. Processes for audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
   "analysis_workers": 0,
-  "_similarity_weights_comment": "Optional. Relative influence of each feature group in Find Similar. Groups are normalised first, so these are real weights rather than a side effect of how many columns a group has. Raise register if you want violin to stay away from cello; lower it if you do not care.",
+  "_similarity_weights_comment": "Optional. Relative influence of each feature group in Find Similar. Groups are normalised by size first, so these are real weights rather than a side effect of how many columns a group has. 0 removes a group; 2 doubles its say. Adjustable live from the Find Similar window. Groups: timbre = instrument and texture — solo vs ensemble; register = high vs low — separates violin from cello; dynamics = how loud, and how much it swells; tempo = pace in BPM; attack = percussiveness and note density; harmony = tonal centre",
   "similarity_weights": {
     "timbre": 1.0,
     "register": 0.6,
     "dynamics": 1.0,
-    "rhythm": 1.0,
+    "tempo": 1.0,
+    "attack": 1.0,
     "harmony": 0.4
   },
   "_database_comment": [

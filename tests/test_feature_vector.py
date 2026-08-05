@@ -94,12 +94,15 @@ def test_caller_weights_win_over_config(tmp_path, monkeypatch):
 
 
 def test_unknown_weight_group_is_rejected_by_validation(tmp_path):
+    """A typo or a group renamed out from under a config must be reported,
+    not silently ignored — "loudness" sounds plausible but is part of
+    dynamics."""
     import json
     from music_manager.core.config import ConfigError, load_config, set_config_path
     import music_manager.core.config as cfg
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"active_library": 1, "targets": {},
-                                "similarity_weights": {"tempo": 1.0}}))
+                                "similarity_weights": {"loudness": 1.0}}))
     set_config_path(path)
     try:
         with pytest.raises(ConfigError, match="unknown similarity group"):
@@ -166,3 +169,107 @@ def test_per_track_cost_estimate_matches_the_current_extractor():
     previous vector would over-promise by 3x."""
     from music_manager.core.similarity import SECONDS_PER_TRACK
     assert 1.0 < SECONDS_PER_TRACK < 6.0
+
+
+# ---------------------------------------------------------------------------
+# Scoring: match % and blend
+# ---------------------------------------------------------------------------
+
+def test_tempo_is_its_own_group():
+    """You tune pace directly, so it is not buried in a rhythm group. A
+    one-column group is fine because groups are normalised by size."""
+    from music_manager.core.similarity import FEATURE_GROUPS
+    assert "tempo" in FEATURE_GROUPS
+    span = FEATURE_GROUPS["tempo"]
+    assert span.stop - span.start == 1
+    assert "rhythm" not in FEATURE_GROUPS
+
+
+def test_every_group_has_a_description():
+    """The sliders are labelled from this; a missing entry is a blank UI."""
+    from music_manager.core.similarity import (
+        DEFAULT_GROUP_WEIGHTS, GROUP_DESCRIPTIONS)
+    assert set(GROUP_DESCRIPTIONS) == set(DEFAULT_GROUP_WEIGHTS)
+    assert all(GROUP_DESCRIPTIONS.values())
+
+
+def _fake_library(monkeypatch, n=400):
+    """A synthetic analysis set, so scoring is testable without audio."""
+    import json
+    from datetime import datetime, timezone
+    from music_manager.core.database import (
+        Album, Library, SourceFolder, Track)
+    from music_manager.core.similarity import (
+        FEATURE_DIMS, FEATURE_VERSION, TrackAnalysis, ensure_table)
+
+    ensure_table()
+    lib = Library.create(name="S")
+    sf = SourceFolder.create(library=lib, root_path="/m")
+    album = Album.create(library=lib, folder=sf, album_key="A", title="A")
+    rng = np.random.default_rng(7)
+    ids = []
+    for i in range(n):
+        t = Track.create(library=lib, folder=sf, album=album, title=f"t{i}",
+                         relative_path=f"A/{i:04d}.flac", disc_number=1,
+                         track_number=i + 1, duration_ms=1000)
+        TrackAnalysis.create(
+            track=t, features=json.dumps(rng.normal(size=FEATURE_DIMS).tolist()),
+            volatility=10.0, analyzed_at=datetime.now(timezone.utc),
+            feature_version=FEATURE_VERSION)
+        ids.append(t.id)
+    return ids
+
+
+def test_match_percent_spans_the_range_instead_of_saturating(lib, monkeypatch):
+    """The old match % compared a candidate to how tightly the seeds
+    clustered. Once the seeds were more spread out than the cluster they
+    were hunting, every one of 2,000 real results read 100%."""
+    from music_manager.core.similarity import find_similar
+    ids = _fake_library(monkeypatch)
+    results = find_similar(ids[:5], limit=len(ids))
+
+    pcts = [r["match_pct"] for r in results]
+    assert max(pcts) == pytest.approx(100.0, abs=0.1)
+    assert min(pcts) < 5.0, f"lowest match was {min(pcts)}; it should reach ~0"
+    assert pcts == sorted(pcts, reverse=True)
+
+
+def test_results_carry_their_rank(lib):
+    from music_manager.core.similarity import find_similar
+    ids = _fake_library(None)
+    results = find_similar(ids[:5], limit=20)
+    assert [r["rank"] for r in results] == list(range(1, 21))
+    assert results[0]["candidate_count"] == len(ids) - 5
+
+
+def test_blend_moves_between_nearest_and_all_seeds(lib):
+    """blend replaces an agreement count that saturated at 0/4 in one real
+    search and 464/546 in another. It now names two real aggregations."""
+    from music_manager.core.similarity import find_similar
+    ids = _fake_library(None)
+    near = find_similar(ids[:8], limit=30, blend=0.0)
+    allof = find_similar(ids[:8], limit=30, blend=1.0)
+
+    assert near[0]["distance"] <= allof[0]["distance"]
+    assert allof[0]["mean_distance"] <= near[0]["mean_distance"]
+    assert [r["track_id"] for r in near] != [r["track_id"] for r in allof]
+
+
+def test_weights_change_the_ranking(lib):
+    from music_manager.core.similarity import find_similar
+    ids = _fake_library(None)
+    base = find_similar(ids[:5], limit=25)
+    tuned = find_similar(ids[:5], limit=25,
+                         weights={"timbre": 0.0, "tempo": 2.0})
+    assert [r["track_id"] for r in base] != [r["track_id"] for r in tuned]
+
+
+def test_a_zero_weight_everywhere_does_not_crash(lib):
+    """A user can drag every slider to zero; that must degrade, not raise."""
+    from music_manager.core.similarity import (
+        DEFAULT_GROUP_WEIGHTS, find_similar)
+    ids = _fake_library(None)
+    results = find_similar(ids[:5], limit=10,
+                           weights={g: 0.0 for g in DEFAULT_GROUP_WEIGHTS})
+    assert len(results) == 10
+    assert all(r["distance"] == 0.0 for r in results)

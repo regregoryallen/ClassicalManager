@@ -1009,6 +1009,7 @@ can generate playlists using path rules to translate paths for its target.
 | Field | Notes |
 |-------|-------|
 | `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. Ignored when `database.backend` is `mysql`. |
+| `similarity_weights` | Optional. Per-group influence in Find Similar: `timbre`, `register`, `dynamics`, `tempo`, `attack`, `harmony`. Groups are normalised by size before weighting, so a weight is a decision rather than a consequence of how many columns a group has. 0 removes a group, 2 doubles it. The Find Similar window has sliders for the same values. |
 | `analysis_workers` | Optional. Processes used by audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound and the measured speedup flattens past about 12 workers, so more is not linearly faster. The GUI's Analyze Audio dialog lets you choose per run; this sets the default for the GUI, CLI, webhook and cron alike. |
 | `database` | Optional. Omit entirely for SQLite at `db_path` — which is what every existing install does. |
 | `database.backend` | `sqlite` or `mysql`. `mysql` also covers MariaDB. |

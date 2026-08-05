@@ -57,7 +57,14 @@ from music_manager.core.database import (
 logger = logging.getLogger(__name__)
 
 # Bump this when the feature vector changes to trigger re-analysis.
-FEATURE_VERSION = 3
+# 4: silence is gated out of the loudness measurements. Without it, any
+#    track with more than 10% silence put the 10th percentile in the
+#    digital-silence floor: six tracks in a real library reported 150-186 dB
+#    of range, a ratio of 1e9. Those outliers inflated the column's standard
+#    deviation by 30%, and z-scoring divides by it — so dynamic range was
+#    counting about a third less than it should for EVERY track, not only
+#    the affected ones.
+FEATURE_VERSION = 4
 
 # Contiguous slices of the feature vector. Order here is the order in the
 # stored vector; changing either means bumping FEATURE_VERSION.
@@ -255,8 +262,21 @@ def _loudness_and_range(rms) -> tuple[float, float]:
     if frames.size == 0:
         return -80.0, 0.0
     db = 20.0 * np.log10(np.maximum(frames, 1e-10))
-    loud, quiet = np.percentile(db, 95), np.percentile(db, 10)
-    return float(np.mean(db)), float(max(0.0, loud - quiet))
+
+    # Gate out silence before taking percentiles, relative to the track's
+    # own peak. Without this, any track with more than 10% silence — a long
+    # lead-in, gaps between movements, a fade to nothing — put the 10th
+    # percentile in the digital-silence floor and reported a physically
+    # impossible range: six tracks in a real library read 150-186 dB, a
+    # ratio of 1e9. 60 dB below peak is far below anything audible in music
+    # (CD dynamic range is about 96 dB) so this discards silence without
+    # touching quiet passages.
+    audible = db[db > db.max() - SILENCE_GATE_DB]
+    if audible.size < 2:
+        audible = db                    # uniformly quiet: nothing to gate
+
+    loud, quiet = np.percentile(audible, 95), np.percentile(audible, 10)
+    return float(np.mean(audible)), float(max(0.0, loud - quiet))
 
 
 def compute_volatility(file_path: str) -> float:
@@ -351,6 +371,10 @@ SECONDS_PER_TRACK = 3.1
 # between the 10th and 95th loudness percentiles; 40 leaves headroom and
 # keeps the slider readable.
 MAX_DYNAMIC_RANGE_DB = 40.0
+
+# Frames quieter than this below the track's peak are treated as
+# silence and excluded from the loudness and range measurements.
+SILENCE_GATE_DB = 60.0
 
 
 def expected_speedup(workers: int) -> float:

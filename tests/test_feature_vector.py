@@ -273,3 +273,34 @@ def test_a_zero_weight_everywhere_does_not_crash(lib):
                            weights={g: 0.0 for g in DEFAULT_GROUP_WEIGHTS})
     assert len(results) == 10
     assert all(r["distance"] == 0.0 for r in results)
+
+
+def test_silence_does_not_inflate_dynamic_range():
+    """A track with a long silent passage must not report an impossible
+    range. Six tracks in a real library read 150-186 dB — a ratio of 1e9 —
+    because the 10th percentile landed in the digital-silence floor."""
+    from music_manager.core.similarity import MAX_DYNAMIC_RANGE_DB
+
+    music = np.abs(np.random.default_rng(3).normal(0.15, 0.04, size=400)) + 0.02
+    with_silence = np.concatenate([np.zeros(120), music])
+
+    plain = _loudness_and_range(music)[1]
+    gated = _loudness_and_range(with_silence)[1]
+
+    assert gated < MAX_DYNAMIC_RANGE_DB, f"{gated:.0f} dB is not physical"
+    assert abs(gated - plain) < 3.0, (
+        "silence should be ignored, not treated as the quiet end")
+
+
+def test_quiet_music_is_not_mistaken_for_silence():
+    """The gate is relative to the track's own peak, so a uniformly quiet
+    recording keeps all of its frames."""
+    quiet = np.abs(np.random.default_rng(4).normal(0.002, 0.0005, size=400)) + 1e-4
+    loud = quiet * 200.0
+    assert abs(_loudness_and_range(quiet)[1]
+               - _loudness_and_range(loud)[1]) < 1.0
+
+
+def test_an_entirely_silent_track_is_handled():
+    mean, rng_db = _loudness_and_range(np.zeros(200))
+    assert rng_db == 0.0 and mean < -100

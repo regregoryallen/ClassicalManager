@@ -121,3 +121,53 @@ def test_empty_db_path_resolves_to_default(tmp_path, monkeypatch):
 
     from music_manager.core.database import DATABASE_PATH
     assert config_mod.get_db_path() == DATABASE_PATH
+
+
+# ---------------------------------------------------------------------------
+# Sidebar redraw: the status label must not resize the sidebar
+# ---------------------------------------------------------------------------
+
+def test_scan_status_text_is_bounded():
+    """Sidebar buttons tore during scans. The status label had no width, so
+    it sized itself to the current filename — often far wider than the
+    260px sidebar — and every progress update forced a pack re-layout that
+    repainted every sibling. CustomTkinter repaints a button's whole canvas
+    on each of those, mid-draw.
+
+    Truncating is what keeps the label a fixed size, so it is worth pinning.
+    """
+    from music_manager.interfaces.gui.app import App
+
+    long_name = "01 Waltz Suite, op. 110_ I. Since We Met, from War and Peace.flac"
+    for current, total, message in ((1, 7279, long_name),
+                                    (7279, 7279, long_name),
+                                    (5, 10, "short.mp3")):
+        prefix = f"[{current}/{total}] "
+        room = max(8, App._SCAN_STATUS_CHARS - len(prefix))
+        rendered = prefix + (message[:room - 1] + "…"
+                             if len(message) > room else message)
+        assert len(rendered) <= App._SCAN_STATUS_CHARS, (
+            f"{rendered!r} is {len(rendered)} chars; the label is sized for "
+            f"{App._SCAN_STATUS_CHARS}")
+
+
+def test_ui_throttle_limits_update_rate():
+    """A scan calls back once per file and analysis once per track. Even at
+    a modest rate that is thousands of layout passes over a run; the
+    throttle keeps it to something a person could read."""
+    from music_manager.interfaces.gui.common import UIThrottle
+
+    throttle = UIThrottle(min_interval=0.05)
+    allowed = sum(1 for _ in range(5000) if throttle.ready())
+    assert allowed <= 2, f"{allowed} updates allowed for 5000 rapid calls"
+
+
+def test_ui_throttle_always_lets_the_final_update_through():
+    """Otherwise a progress bar stops at whatever the last tick happened to
+    be rather than finishing full."""
+    from music_manager.interfaces.gui.common import UIThrottle
+
+    throttle = UIThrottle(min_interval=10.0)
+    assert throttle.ready() is True          # first call
+    assert throttle.ready() is False         # rate limited
+    assert throttle.ready(force=True) is True

@@ -19,6 +19,7 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    UIThrottle,
 )
 
 logger = logging.getLogger(__name__)
@@ -270,9 +271,17 @@ class SimilarityUIMixin:
             from music_manager.core.similarity import (
                 analyze_library, AnalysisCancelled)
             try:
+                # Rate limited for the same reason as the scan: one
+                # after() per track across thousands of tracks floods the
+                # event loop and interrupts CustomTkinter's canvas redraw,
+                # which is what tore the sidebar buttons.
+                throttle = UIThrottle()
+
                 def prog(current, total, msg):
                     if self._sim_cancel_flag:
                         raise AnalysisCancelled()
+                    if not throttle.ready(force=(current >= total)):
+                        return
                     title = (msg[:35] + "...") if len(msg) > 35 else msg
                     self.root.after(0, lambda c=current, t=total, m=title:
                                    _update(c, t, m))

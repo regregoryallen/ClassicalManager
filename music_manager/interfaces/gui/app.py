@@ -19,6 +19,7 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    UIThrottle,
 )
 
 logger = logging.getLogger(__name__)
@@ -713,7 +714,17 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self.scan_progress.pack(padx=15, pady=3)
         self.scan_progress.set(0)
 
-        self.scan_status = ctk.CTkLabel(self.sidebar, text="")
+        # Fixed width, and the text is truncated to match. Without this the
+        # label sized itself to whatever filename the scanner was on — often
+        # far wider than the 260px sidebar — so every progress update changed
+        # its requested width and forced the sidebar to re-run its pack
+        # layout. That re-laid-out and repainted every sibling, and a
+        # CustomTkinter button repaints its rounded-rectangle canvas each
+        # time, which is what tore the sidebar buttons mid-draw.
+        # pack_propagate(False) holds the frame at 260 but does nothing to
+        # stop a child asking for more.
+        self.scan_status = ctk.CTkLabel(self.sidebar, text="", width=230,
+                                        anchor="w", justify="left")
         self.scan_status.pack(padx=15, anchor="w")
 
         ctk.CTkButton(self.sidebar, text="Regroup Works",
@@ -1063,6 +1074,23 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         target = self._run_scan_changes if mode == "quick" else self._run_scan
         threading.Thread(target=target, args=(lib,), daemon=True).start()
 
+    # Roughly what fits the 230px status label at the sidebar font size.
+    _SCAN_STATUS_CHARS = 34
+
+    def _show_scan_progress(self, frac, current, total, message):
+        """Apply one scan progress update. Main thread only.
+
+        The message is truncated rather than left to size the label: a long
+        filename would widen it past the sidebar and trigger a re-layout of
+        every sibling on each update.
+        """
+        self.scan_progress.set(frac)
+        prefix = f"[{current}/{total}] "
+        room = max(8, self._SCAN_STATUS_CHARS - len(prefix))
+        if len(message) > room:
+            message = message[:room - 1] + "\u2026"
+        self.scan_status.configure(text=prefix + message)
+
     def _ask_scan_mode(self, quick_ok):
         """Scan-mode chooser. Returns 'quick', 'full', or None if cancelled.
 
@@ -1283,13 +1311,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
 
         result = {"stats": None}
 
+        throttle = UIThrottle()
+
         def progress(current, total, message):
             if self._scan_cancel.is_set():
                 raise _ScanCancelled()
+            # One coalesced update, rate limited. Two after() callbacks per
+            # file across thousands of files flooded the event loop and tore
+            # the sidebar's canvas mid-redraw.
+            if not throttle.ready(force=(current >= total)):
+                return
             frac = current / total if total else 0
-            self.root.after(0, lambda: self.scan_progress.set(frac))
-            self.root.after(0, lambda: self.scan_status.configure(
-                text=f"[{current}/{total}] {message}"))
+            self.root.after(0, lambda f=frac, c=current, t=total, m=message:
+                            self._show_scan_progress(f, c, t, m))
 
         try:
             stats = scan_library(library, progress_callback=progress)
@@ -1328,13 +1362,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         from music_manager.core.overrides import apply_overrides
 
 
+        throttle = UIThrottle()
+
         def progress(current, total, message):
             if self._scan_cancel.is_set():
                 raise _ScanCancelled()
+            # One coalesced update, rate limited. Two after() callbacks per
+            # file across thousands of files flooded the event loop and tore
+            # the sidebar's canvas mid-redraw.
+            if not throttle.ready(force=(current >= total)):
+                return
             frac = current / total if total else 0
-            self.root.after(0, lambda: self.scan_progress.set(frac))
-            self.root.after(0, lambda: self.scan_status.configure(
-                text=f"[{current}/{total}] {message}"))
+            self.root.after(0, lambda f=frac, c=current, t=total, m=message:
+                            self._show_scan_progress(f, c, t, m))
 
         import_profile_name = None
         result = {"stats": None}

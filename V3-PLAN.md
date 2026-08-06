@@ -395,6 +395,75 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
 
+## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
+
+A full re-analysis at `-j 18` drove the workstation into swap near the end
+of the run: 6 GB of 7 GB swap used, 4 GB RAM free, load 21, and the
+symptom the user reported was "fewer processors busy, slower churn". The
+run completed with no errors — this costs time, not correctness.
+
+**Measured, per worker process** (peak RSS against track duration, six
+tracks from 1 to 24 minutes):
+
+    ~219 MB baseline + ~93 MB per minute of audio
+
+So a 4-minute track needs ~590 MB and a 24-minute track ~2.5 GB. With 18
+workers that is 10.7 GB of typical tracks but 45 GB of long ones.
+
+**Why it hit at the end, not the start.** Jobs are submitted in track-id
+order, and that correlates with length here: the 929 tracks still
+outstanding averaged 319 s against 242 s for those already done, with 27
+over fifteen minutes. It was accidentally close to shortest-first, whose
+worst wave is at the end.
+
+**Ordering strategies, modelled against the real duration distribution**
+(7,279 tracks, mean 4.2 min, p95 10.3 min, max 60.1 min; per-track worker
+memory mean 610 MB, p95 1,178 MB, max 5,810 MB), 18 workers:
+
+| ordering        | concurrent memory                              |
+|-----------------|------------------------------------------------|
+| longest-first   | **51.2 GB** immediately                        |
+| shortest-first  | **51.2 GB** at the end (what happened)         |
+| random          | mean 10.7 GB, p99 14.2 GB, worst of 20k trials 19.4 GB |
+
+Longest-first does **not** move the problem — the peak wave is identical,
+only its timing changes. That was the user's point and the model confirms
+it. Randomising genuinely flattens the peak *for this library*, because
+long tracks are rare; it would not save a library of Wagner acts, where 18
+random draws are all long. Random makes a bad peak unlikely; it does not
+bound it.
+
+**Agreed approach when this is picked up:**
+
+1. **Cap worker count by memory, sized on the p95 track, not the longest.**
+   p95 = 1,178 MB, so a 20 GB budget gives 17 workers — just under the
+   CPU-derived 18, costing nothing on this library while protecting a
+   heavier one automatically. Sizing on the longest track gives 3 workers,
+   which is uselessly conservative.
+2. **Randomise the job order**, so the p95 assumption holds in practice
+   rather than being defeated by the tail clustering.
+3. **Log the chosen worker count and the reason**, so a future slowdown is
+   diagnosable without re-measuring RSS.
+
+**Open trade the user should decide.** Randomising costs makespan.
+Longest-first is the standard scheduling answer precisely because it
+minimises the tail — a 24-minute track drawn last leaves every other
+worker idle. Random order will occasionally do that. Memory safety looks
+like the better trade for a job run rarely and unattended, but it is a
+real trade. A middle option exists — shuffle, then bias the very longest
+tracks to start early while the pool is still empty — which keeps most of
+the tail benefit without an all-long first wave; probably not worth the
+logic at this library's shape.
+
+Both changes live in `analyze_library` / `default_worker_count` in
+`similarity.py`. Neither changes the feature vector, so **no re-analysis
+is needed** to adopt them.
+
+*Diagnostic note: per-worker memory was measured by running `analyze_file`
+in a child process and reading `resource.getrusage(RUSAGE_SELF).ru_maxrss`.
+`free -g` plus the remaining-track duration distribution is what identified
+it; CPU and I/O both looked fine.*
+
 ## v3.5 — remaining (optional)
 
 - [x] **Regroup Works batched inserts** — done 2026-08-03. **21,464 → 1,945
@@ -420,12 +489,28 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   Left alone deliberately: `_next_work_sequence` still issues one MAX per
   album (431 queries, ~0.9 s). Priming it from `redetect_works` would couple
   the two for very little, and `detect_works` stays correct for any caller.
+- [ ] **Analysis memory / swap saturation** — see the dedicated section
+  above. Cap workers by memory (p95 track) and randomise job order.
+  No re-analysis needed.
+- [ ] **Full vs incremental analysis** (user, 2026-08-03). Only a
+  FEATURE_VERSION bump currently forces re-analysis; there is no "re-do
+  everything" for a parameter change that does not warrant a bump, or to
+  rebuild suspect data. Same shape as the scan/rescan chooser.
 - [ ] **`reconcile_selections`**: 637 queries (~1.3 s), runs on profile
   load. `_tracks_for_work_key` is called once per work-level selection;
   the work-key → tracks map that `load_library_index` already builds would
   remove it.
-- [ ] **Cut over for real**: re-migrate from current production and switch
-  the installed config at `~/.local/share/classical-manager/config.json`.
+- [x] **Cut over for real** — done 2026-08-03. Production runs on MariaDB;
+  the SQLite file at `/mnt/MediaLib/music_manager.db` is the frozen
+  rollback point, last written 11:57 that day. Server upgraded to MariaDB
+  11.4 on 2026-08-04 after two dictionary-latch wedges on 10.6.7.
+- [ ] **Sidebar metrics labels** (`Albums: 431` etc.) are unbounded
+  CTkLabels in the same frame as the scan status label that caused the
+  button tearing. They change width when a count gains a digit, so they
+  are the same defect class — just rarer. Same fix: fixed width.
+- [ ] **Pepperland at rank 2** for Test-albinoni, and whether match %
+  rounding to 100.0 for the top few results reads badly. Both need the
+  user's ears rather than code.
 
 ## v3.3 — next up (promoted from Future directions 2026-07-28)
 

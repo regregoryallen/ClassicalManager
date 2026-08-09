@@ -303,7 +303,7 @@ def generate(
     profile: str = typer.Option(..., help="Profile name to generate"),
     format: str = typer.Option("m3u", help="Output format: m3u, json"),
     output: str = typer.Option(None, help="Output file path"),
-    target: str = typer.Option(None, help="Target: plex"),
+    target: str = typer.Option(None, help="Target: plex, ma"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
@@ -340,6 +340,18 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None, quie
         except PlexPushError as exc:
             typer.echo(f"Plex push error: {exc}", err=True)
             raise typer.Exit(1)
+    elif target == "ma":
+        from music_manager.core.serializers.ma import push_to_ma, MATargetError
+        try:
+            output_path = push_to_ma(result.playlist, prof.name)
+        except MATargetError as exc:
+            typer.echo(f"Music Assistant target error: {exc}", err=True)
+            raise typer.Exit(1)
+        except OSError as exc:
+            typer.echo(f"Could not write MA playlist: {exc}", err=True)
+            raise typer.Exit(1)
+        if not quiet:
+            typer.echo(f"Wrote MA playlist '{prof.name}' to {output_path}")
     elif format == "json":
         from music_manager.core.serializers.json_dump import serialize_engine_result
         json_out = serialize_engine_result(
@@ -371,12 +383,48 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None, quie
                    f"{result.total_duration_ms // 1000}s total", err=True)
 
 
+def _report_ma_directory() -> None:
+    """Report playlist files in MA's directory that no profile accounts for.
+
+    CM never deletes them — the directory may hold hand-made playlists CM
+    knows nothing about.  Those are a permanent part of this list, which is
+    why it is worded as files this run did not write.
+
+    The directory is not library-scoped, so every library's profiles count
+    as accounting for a file; otherwise a shared directory would report one
+    library's playlists while generating another's.  Internal '__' profiles
+    are excluded from batches, so their leftovers are genuinely unaccounted
+    for and are listed.
+    """
+    from music_manager.core.database import PlaylistProfile
+    from music_manager.core.serializers.ma import (MATargetError,
+                                                   find_unwritten_files,
+                                                   ma_target_config)
+    try:
+        ma_config = ma_target_config()
+    except MATargetError:
+        return
+
+    accounted = [p.name for p in PlaylistProfile.select().where(
+        ~PlaylistProfile.name.startswith("__"))]
+    extra = find_unwritten_files(ma_config, accounted)
+    if not extra:
+        return
+
+    typer.echo(f"\n{len(extra)} playlist file(s) in this directory were not "
+               f"written by this run:")
+    for candidate in extra:
+        typer.echo(f"  {candidate.name}")
+    typer.echo("Hand-made playlists will always appear here. Nothing was "
+               "deleted; remove any stale files yourself.")
+
+
 @app.command("generate-all")
 def generate_all(
     library: str = typer.Option(..., help="Library name"),
     format: str = typer.Option("m3u", help="Output format: m3u, json"),
     output_dir: str = typer.Option(".", help="Output directory for files"),
-    target: str = typer.Option(None, help="Target: plex"),
+    target: str = typer.Option(None, help="Target: plex, ma"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
@@ -385,6 +433,8 @@ def generate_all(
 
     from music_manager.core.database import PlaylistProfile
     from music_manager.core.engine import generate_playlist
+    from music_manager.core.paths import (find_filename_collisions,
+                                          safe_profile_filename)
 
     lib = _get_library(library)
     profiles = list(PlaylistProfile.select().where(
@@ -394,6 +444,13 @@ def generate_all(
     if not profiles:
         typer.echo("No profiles found for this library.", err=True)
         raise typer.Exit(1)
+
+    # Distinct profile names can sanitize to one filename, in which case the
+    # later profile silently overwrites the earlier one's playlist.
+    for stem, names in find_filename_collisions([p.name for p in profiles]).items():
+        typer.echo(
+            f"Warning: profiles {', '.join(repr(n) for n in names)} all write "
+            f"to '{stem}.m3u'; only the last will survive.", err=True)
 
     if not quiet:
         typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
@@ -407,9 +464,11 @@ def generate_all(
             _output_result(prof, result, target=target, quiet=quiet)
         else:
             ext = ".json" if format == "json" else ".m3u"
-            safe_name = prof.name.replace(" ", "_").replace("/", "_")
-            output = str(out_path / f"{safe_name}{ext}")
+            output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
             _output_result(prof, result, format=format, output=output, quiet=quiet)
+
+    if target == "ma" and not quiet:
+        _report_ma_directory()
 
     if not quiet:
         typer.echo(f"\nDone: {len(profiles)} profiles generated.")

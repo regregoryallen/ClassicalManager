@@ -23,6 +23,33 @@ def canonical_path(rt: ResolvedTrack) -> str:
     return str(PurePosixPath(rt.folder_root_path) / rt.relative_path)
 
 
+def safe_profile_filename(name: str) -> str:
+    """Sanitize a profile name for use as a playlist filename stem.
+
+    The rule is the one `generate-all` has always used: spaces and slashes
+    become underscores.  It is shared so the batch write and the orphan
+    report (which compares directory contents against profile names) can
+    never disagree about what a profile's file is called.
+
+    Note this collapses distinct names — 'My Sleep' and 'My/Sleep' both
+    become 'My_Sleep'.  See find_filename_collisions.
+    """
+    return name.replace(" ", "_").replace("/", "_")
+
+
+def find_filename_collisions(names: list[str]) -> dict[str, list[str]]:
+    """Find profile names that sanitize to the same filename stem.
+
+    Returns:
+        Mapping of sanitized stem to the two or more names producing it,
+        each name list sorted.  Empty when every name is distinct.
+    """
+    by_stem: dict[str, list[str]] = {}
+    for name in names:
+        by_stem.setdefault(safe_profile_filename(name), []).append(name)
+    return {stem: sorted(n) for stem, n in by_stem.items() if len(n) > 1}
+
+
 def realize_path(
     rt: ResolvedTrack,
     path_rules: list[dict[str, str]] | None = None,

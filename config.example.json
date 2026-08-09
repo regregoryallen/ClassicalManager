@@ -2,8 +2,7 @@
   "active_library": 1,
   "db_path": "",
   "autosave_interval": 60,
-  "_analysis_workers_comment": "Optional. Processes for audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
-  "analysis_workers": 0,
+  "_analysis_workers_comment": "Optional. Processes for audio analysis. Omitted here, which means three quarters of the cores; set a positive integer to override. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
   "_similarity_weights_comment": "Optional. Relative influence of each feature group in Find Similar. Groups are normalised by size first, so these are real weights rather than a side effect of how many columns a group has. 0 removes a group; 2 doubles its say. Adjustable live from the Find Similar window. Groups: timbre = instrument and texture — solo vs ensemble; register = high vs low — separates violin from cello; dynamics = how loud, and how much it swells; tempo = pace in BPM; attack = percussiveness and note density; harmony = tonal centre",
   "similarity_weights": {
     "timbre": 1.0,
@@ -41,6 +40,11 @@
       "path_style": "absolute",
       "base_path": "",
       "path_rules": []
+    },
+    "ma": {
+      "enabled": false,
+      "output_dir": "/path/to/library/Albums/Playlists",
+      "path_style": "relative_to_playlist"
     }
   },
   "cron": {
@@ -60,6 +64,8 @@
       "scan+plex",
       "scan+m3u",
       "m3u",
+      "scan+ma",
+      "ma",
       "exclude-track"
     ],
     "token_env": "CM_WEBHOOK_TOKEN"

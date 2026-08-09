@@ -395,6 +395,46 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
 
+## v3.7 — Music Assistant export path (branch `v3.7-dev`, started 2026-08-09)
+
+A Music Assistant export target alongside the existing Plex and M3U ones.
+MA's File System provider imports playlists by scanning a directory, so
+writing the file is the entire job — no API client, no authentication, no
+new serializer, and no database work. Design and measured MA behaviour:
+`no_git/CM-MA-export-handoff.md` and `no_git/CM-MA-findings.md`.
+
+**Paths are relative, and that is forced by Home Assistant, not chosen.**
+HA fixes MA's view of the share at `/media/MediaLib` and does not expose it
+as configurable; CM sees the same files at a different absolute path.
+Absolute paths would therefore have to be written in MA's terms, needing
+either realigned mounts or per-path rewriting. A relative playlist in a
+dedicated `Albums/Playlists/` directory is identical from either mount
+point. This is also the only style the validation session measured —
+`../` traversal resolves, absolute paths against MA's provider were never
+tested.
+
+Constraints that came out of reviewing the design against the code:
+
+- **`enabled` is a new concept.** No target block had one; `plex` and `m3u`
+  are simply present or absent. It is read in exactly one place so there is
+  one rule and one error string.
+- **`config.py` had no warning channel** — every path raised `ConfigError`.
+  `load_config` has thirteen call sites including per-invocation CLI
+  reloads, so warnings are emitted once per `(path, message)` rather than
+  on every load.
+- **Three filename sanitizers already existed** (`cli.py`, `webhook.py`,
+  `classical-manager-cron.sh`), and the first two disagree: `Bach & Sons`
+  becomes `Bach_&_Sons` from the CLI and `Bach___Sons` from the webhook.
+  Pre-existing and left alone — the webhook's is deliberately stricter
+  because its input arrives over HTTP, and the shell copy cannot call
+  Python. The shared helper exists so the batch write and the orphan check
+  agree, not to unify all three.
+- **Orphaned files are reported, never deleted** (user decision,
+  2026-08-09). The directory may hold hand-made playlists CM knows nothing
+  about, so pruning risks destroying what CM did not create. Those same
+  hand-made playlists are permanently in the report, which is why it is
+  worded as files this run did not write rather than as orphans.
+
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 
 A full re-analysis at `-j 18` drove the workstation into swap near the end

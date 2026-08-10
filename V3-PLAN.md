@@ -435,6 +435,21 @@ Constraints that came out of reviewing the design against the code:
   hand-made playlists are permanently in the report, which is why it is
   worded as files this run did not write rather than as orphans.
 
+**Found while adding the Settings section for MA: saving Settings deleted
+every config key the dialog does not show.** It rebuilt config.json from
+its own fields and wrote the whole file, so `database`, `cron`, `webhook`
+and `autosave_interval` all vanished on any save — and losing `database`
+drops this MariaDB install back to SQLite at `db_path`, quietly opening a
+different library. Within a section too: Plex's `strategy` is read by
+`plex.py`, has no widget, and did not survive. The save now updates the
+loaded config, the assembly lives in `apply_settings_fields` so it is
+testable without a display, and the result is validated before writing —
+an invalid config.json otherwise stops the app loading on its next start.
+
+The MA Settings section has no path style field, deliberately: relative is
+the only workable form, so exposing the choice would only offer a way to
+break it.
+
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 
 A full re-analysis at `-j 18` drove the workstation into swap near the end

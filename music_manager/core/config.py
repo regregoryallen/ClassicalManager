@@ -19,11 +19,13 @@ VALID_BACKENDS = ("sqlite", "mysql")
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_CHARSET = "utf8mb4"
 
-# Music Assistant's view of the share is fixed by Home Assistant and differs
-# from CM's, so absolute paths would have to be written in MA's terms.
-# Relative paths are identical from either mount point — and they are the
-# only form the MA validation session actually measured.
-MA_DEFAULT_PATH_STYLE = "relative_to_playlist"
+# Whatever watches the publish folder usually sees the share at a different
+# mount point than CM does — Home Assistant fixes Music Assistant's at
+# /media/MediaLib and does not expose it — so absolute paths would have to be
+# written in the watcher's terms. A relative path inside the library is
+# identical from either, and is the only form measured against MA. Absolute
+# with path_rules rewriting the prefix works too, but is unmeasured.
+PUBLISH_DEFAULT_PATH_STYLE = "relative_to_playlist"
 
 # Resolve project root (two levels up from this file)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -278,10 +280,6 @@ def _validate(config: dict[str, Any], path: Path) -> list[str]:
     if "m3u" in targets:
         warnings += _validate_m3u(targets["m3u"], "targets.m3u", path)
 
-    # -- targets.ma (Music Assistant) -----------------------------------------
-    if "ma" in targets:
-        warnings += _validate_ma(targets["ma"], path)
-
     # -- similarity_weights (optional) ----------------------------------------
     if "similarity_weights" in config:
         weights = config["similarity_weights"]
@@ -351,7 +349,7 @@ def _validate_m3u(m3u: dict, context: str, path: Path,
                   default_style: str = "absolute") -> list[str]:
     """Validate an M3U-shaped target section.
 
-    Shared by 'targets.m3u' and 'targets.ma', which take the same
+    Shared by 'targets.m3u' and its 'publish' block, which take the same
     serializer options; `context` names the section in messages and
     `default_style` is the path_style that target applies when the key is
     absent, so the inert-key warning reasons about the effective value.
@@ -390,46 +388,43 @@ def _validate_m3u(m3u: dict, context: str, path: Path,
                 f"Relative paths need no rewriting; remove the unused keys "
                 f"or switch to path_style 'absolute'."
             )
+
+    # The publish sub-section takes the same keys plus output_dir, and is
+    # only nested one level — a publish block inside a publish block is a
+    # mistake, not a feature.
+    if "publish" in m3u and context.endswith(".m3u"):
+        warnings += _validate_publish(m3u["publish"], f"{context}.publish", path)
+
     return warnings
 
 
-def _validate_ma(ma: dict, path: Path) -> list[str]:
-    """Validate the Music Assistant target section.
+def _validate_publish(published: dict, context: str, path: Path) -> list[str]:
+    """Validate the publish sub-section of the M3U target.
 
     Returns:
-        Warnings for settings that are valid but inert.
+        Warnings for settings that are valid but inert, or that would make
+        the published playlists invisible to whatever watches the folder.
     """
-    if not isinstance(ma, dict):
-        raise ConfigError(f"{path}: 'targets.ma' must be a JSON object")
+    if not isinstance(published, dict):
+        raise ConfigError(f"{path}: '{context}' must be a JSON object")
 
-    enabled = ma.get("enabled", False)
-    if not isinstance(enabled, bool):
+    output_dir = published.get("output_dir")
+    if output_dir is not None and not isinstance(output_dir, str):
         raise ConfigError(
-            f"{path}: 'targets.ma.enabled' must be a boolean, "
-            f"got {enabled!r}"
+            f"{path}: '{context}.output_dir' must be a string, "
+            f"got {type(output_dir).__name__}"
         )
 
-    if "output_dir" in ma and not isinstance(ma["output_dir"], str):
-        raise ConfigError(
-            f"{path}: 'targets.ma.output_dir' must be a string, "
-            f"got {type(ma['output_dir']).__name__}"
-        )
-    if enabled and not ma.get("output_dir"):
-        raise ConfigError(
-            f"{path}: 'targets.ma' requires 'output_dir' when enabled"
-        )
-
-    warnings = _validate_m3u(ma, "targets.ma", path,
-                             default_style=MA_DEFAULT_PATH_STYLE)
+    warnings = _validate_m3u(published, context, path,
+                             default_style=PUBLISH_DEFAULT_PATH_STYLE)
 
     # Music Assistant's scanner skips directories whose name starts with an
     # underscore, so playlists written there are never imported (measured).
-    output_dir = ma.get("output_dir") or ""
-    if PurePosixPath(output_dir).name.startswith("_"):
+    if PurePosixPath(output_dir or "").name.startswith("_"):
         warnings.append(
-            f"'targets.ma.output_dir' is {output_dir!r}, whose final "
+            f"'{context}.output_dir' is {output_dir!r}, whose final "
             f"directory begins with '_'. Music Assistant skips those when "
-            f"scanning, so playlists written there are never imported."
+            f"scanning, so playlists published there are never imported."
         )
 
     return warnings
@@ -459,8 +454,8 @@ def _validate_cron(cron: dict, path: Path) -> None:
     if not isinstance(cron, dict):
         raise ConfigError(f"{path}: 'cron' must be a JSON object")
 
-    valid_modes = {"plex", "m3u", "ma", "scan", "scan+plex", "scan+m3u",
-                   "scan+ma"}
+    valid_modes = {"plex", "m3u", "publish", "scan", "scan+plex",
+                   "scan+m3u", "scan+publish"}
     if "mode" in cron and cron["mode"] not in valid_modes:
         raise ConfigError(
             f"{path}: 'cron.mode' must be one of {valid_modes}, "
@@ -501,8 +496,8 @@ def _validate_webhook(webhook: dict, path: Path) -> None:
             raise ConfigError(
                 f"{path}: 'webhook.allowed_commands' must be a list"
             )
-        valid_cmds = {"plex", "m3u", "ma", "scan", "scan+plex", "scan+m3u",
-                      "scan+ma", "exclude-track"}
+        valid_cmds = {"plex", "m3u", "publish", "scan", "scan+plex",
+                      "scan+m3u", "scan+publish", "exclude-track"}
         for cmd in cmds:
             if cmd not in valid_cmds:
                 raise ConfigError(

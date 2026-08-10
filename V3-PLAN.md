@@ -395,29 +395,53 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
 
-## v3.7 — Music Assistant export path (branch `v3.7-dev`, started 2026-08-09)
+## v3.7 — Publishing playlists to a watched folder (branch `v3.7-dev`, started 2026-08-09)
 
-A Music Assistant export target alongside the existing Plex and M3U ones.
-MA's File System provider imports playlists by scanning a directory, so
-writing the file is the entire job — no API client, no authentication, no
-new serializer, and no database work. Design and measured MA behaviour:
+Driven by wanting Music Assistant to see CM's playlists. MA's File System
+provider imports playlists by scanning a folder, so writing the file is
+the entire job — no API client, no authentication, no new serializer, and
+no database work. Design and measured MA behaviour:
 `no_git/CM-MA-export-handoff.md` and `no_git/CM-MA-findings.md`.
 
-**Paths are relative, and that is forced by Home Assistant, not chosen.**
+**Built first as a separate `targets.ma`, then collapsed into the M3U
+target (user's call, 2026-08-09).** The observation that forced it: the
+two outputs are byte-identical. `generate-all --target ma` and
+`generate-all --format m3u --output-dir <dir>` diff clean when
+`path_style` is `relative_to_playlist` — the batch-export-to-a-folder
+capability already existed, and cron's `m3u` mode with `m3u_output_dir`
+already *was* the MA mode. Only two things were genuinely new: the
+unwritten-files report, and a GUI push with no save-as dialog.
+
+So the M3U target now has two operations rather than there being two
+targets:
+
+- **Export** — save-as, path chosen per run (`--output`, file dialog).
+- **Publish** — `targets.m3u.publish.output_dir`, no per-run path, plus
+  the report. `--publish` on `generate` and `generate-all`; cron modes
+  `publish`/`scan+publish`; the same webhook commands.
+
+Nothing in it is Music-Assistant-specific, so the naming does not pretend
+otherwise — MA is one thing that might watch the folder. That also
+restores the meaning of `--target` (push to a service) versus `--format`
+(write a file); MA consumes files, so it was never a target.
+
+Publishing has its own `path_style`, separate from export's. Export wants
+absolute; publishing wants relative, because the watcher usually sees the
+share at a different mount point. A configured folder is what enables
+publishing — the `enabled` flag the separate target had needed is gone.
+
+**Publishing defaults to relative paths, and Home Assistant forces that.**
 HA fixes MA's view of the share at `/media/MediaLib` and does not expose it
-as configurable; CM sees the same files at a different absolute path.
-Absolute paths would therefore have to be written in MA's terms, needing
-either realigned mounts or per-path rewriting. A relative playlist in a
-dedicated `Albums/Playlists/` directory is identical from either mount
-point. This is also the only style the validation session measured —
+as configurable; CM sees the same files at a different absolute path. A
+relative playlist in a folder inside the library is identical from either
+mount point. This is also the only style the validation session measured —
 `../` traversal resolves, absolute paths against MA's provider were never
-tested.
+tested. The alternative is absolute paths with a `path_rules` entry
+rewriting `/mnt/MediaLib` → `/media/MediaLib`, which `realize_path` already
+supports; it stays configurable for that reason, but is unmeasured.
 
 Constraints that came out of reviewing the design against the code:
 
-- **`enabled` is a new concept.** No target block had one; `plex` and `m3u`
-  are simply present or absent. It is read in exactly one place so there is
-  one rule and one error string.
 - **`config.py` had no warning channel** — every path raised `ConfigError`.
   `load_config` has thirteen call sites including per-invocation CLI
   reloads, so warnings are emitted once per `(path, message)` rather than
@@ -435,8 +459,8 @@ Constraints that came out of reviewing the design against the code:
   hand-made playlists are permanently in the report, which is why it is
   worded as files this run did not write rather than as orphans.
 
-**Found while adding the Settings section for MA: saving Settings deleted
-every config key the dialog does not show.** It rebuilt config.json from
+**Found while adding the Settings section for publishing: saving Settings
+deleted every config key the dialog does not show.** It rebuilt config.json from
 its own fields and wrote the whole file, so `database`, `cron`, `webhook`
 and `autosave_interval` all vanished on any save — and losing `database`
 drops this MariaDB install back to SQLite at `db_path`, quietly opening a
@@ -446,9 +470,13 @@ loaded config, the assembly lives in `apply_settings_fields` so it is
 testable without a display, and the result is validated before writing —
 an invalid config.json otherwise stops the app loading on its next start.
 
-The MA Settings section has no path style field, deliberately: relative is
-the only workable form, so exposing the choice would only offer a way to
-break it.
+A second, worse hazard in the same area: choosing a folder from Settings
+froze the whole desktop. Settings is modal, so it holds an X input grab,
+and zenity is a separate application — the grab stopped the chooser (and
+everything else) receiving input while the app blocked in `subprocess.run`
+for up to 300 seconds still holding it. `filedialog` now releases the grab
+around any external chooser. Latent since long before this work: the
+Database browse button in the same dialog hangs identically.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

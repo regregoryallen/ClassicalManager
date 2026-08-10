@@ -36,15 +36,16 @@
       "music_section": "Music",
       "path_rules": []
     },
+    "_m3u_publish_comment": "targets.m3u covers two operations. The top-level keys are the save-as export. 'publish' writes every profile to a fixed folder that something else watches, such as a Music Assistant File System provider — set output_dir to enable it. Relative paths survive the watcher seeing the share at a different mount point; for absolute, add a path rule rewriting the prefix.",
     "m3u": {
       "path_style": "absolute",
       "base_path": "",
-      "path_rules": []
-    },
-    "ma": {
-      "enabled": false,
-      "output_dir": "/path/to/library/Albums/Playlists",
-      "path_style": "relative_to_playlist"
+      "path_rules": [],
+      "publish": {
+        "output_dir": "",
+        "path_style": "relative_to_playlist",
+        "path_rules": []
+      }
     }
   },
   "cron": {
@@ -64,8 +65,8 @@
       "scan+plex",
       "scan+m3u",
       "m3u",
-      "scan+ma",
-      "ma",
+      "scan+publish",
+      "publish",
       "exclude-track"
     ],
     "token_env": "CM_WEBHOOK_TOKEN"

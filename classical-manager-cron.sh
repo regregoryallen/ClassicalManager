@@ -52,13 +52,14 @@
 #   mode: "plex"       Push all playlists to Plex server (default)
 #   mode: "m3u"        Generate M3U playlist files
 #   mode: "scan"       Incremental scan only (no playlist generation)
-#   mode: "ma"         Write playlists to Music Assistant's scan directory
+#   mode: "publish"    Write playlists to the configured publish folder
 #   mode: "scan+plex"  Incremental scan, then push all playlists to Plex
 #   mode: "scan+m3u"   Incremental scan, then generate M3U files
-#   mode: "scan+ma"    Incremental scan, then write playlists for MA
+#   mode: "scan+publish"  Incremental scan, then publish playlists
 #
-#   The "ma" modes take their directory from targets.ma.output_dir in
-#   config.json, not from m3u_output_dir, and require targets.ma.enabled.
+#   The "publish" modes take their folder from targets.m3u.publish.output_dir
+#   in config.json, not from m3u_output_dir. Use them for a folder something
+#   else watches, such as a Music Assistant File System provider.
 #
 # MULTIPLE CONFIGURATIONS
 # -----------------------
@@ -156,17 +157,17 @@ fi
 [ -n "$LIBRARY_NAME" ]        || die "LIBRARY_NAME is empty — set cron.library in config.json"
 
 case "$MODE" in
-    plex|m3u|ma|scan|scan+plex|scan+m3u|scan+ma) ;;
-    *) die "Unknown MODE: '$MODE' (expected: plex, m3u, ma, scan, scan+plex, scan+m3u, scan+ma)" ;;
+    plex|m3u|publish|scan|scan+plex|scan+m3u|scan+publish) ;;
+    *) die "Unknown MODE: '$MODE' (expected: plex, m3u, publish, scan, scan+plex, scan+m3u, scan+publish)" ;;
 esac
 
 # --- Environment setup -------------------------------------------------------
 
 cd "$INSTALL_DIR"
 
-# Create M3U output directory if needed.  The "ma" modes are deliberately
-# absent: they read targets.ma.output_dir from config.json, and the
-# serializer creates that directory itself.
+# Create M3U output directory if needed.  The "publish" modes are
+# deliberately absent: they read targets.m3u.publish.output_dir from
+# config.json, and the serializer creates that folder itself.
 case "$MODE" in
     m3u|scan+m3u)
         mkdir -p "$OUTPUT_DIR"
@@ -209,17 +210,17 @@ run_m3u_single() {
         --output "$OUTPUT_DIR/${safe_name}.m3u" $VERBOSITY
 }
 
-# The MA target derives its own output path from targets.ma.output_dir, so
-# unlike run_m3u there is no directory to pass and no filename to sanitize.
-run_ma() {
+# Publishing derives its own output path from config, so unlike run_m3u
+# there is no directory to pass and no filename to sanitize.
+run_publish() {
     if [ -n "$PROFILE_NAME" ]; then
-        echo "$(timestamp) Writing MA playlist for profile '$PROFILE_NAME'..."
+        echo "$(timestamp) Publishing playlist for profile '$PROFILE_NAME'..."
         "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate --profile "$PROFILE_NAME" \
-            --target ma $VERBOSITY
+            --publish $VERBOSITY
     else
-        echo "$(timestamp) Writing all MA playlists for library '$LIBRARY_NAME'..."
+        echo "$(timestamp) Publishing all playlists for library '$LIBRARY_NAME'..."
         "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate-all --library "$LIBRARY_NAME" \
-            --target ma $VERBOSITY
+            --publish $VERBOSITY
     fi
 }
 
@@ -243,10 +244,10 @@ run_m3u() {
         scan)       run_scan ;;
         plex)       run_plex ;;
         m3u)        run_m3u  ;;
-        ma)         run_ma   ;;
+        publish)    run_publish ;;
         scan+plex)  run_scan; run_plex ;;
         scan+m3u)   run_scan; run_m3u  ;;
-        scan+ma)    run_scan; run_ma   ;;
+        scan+publish) run_scan; run_publish ;;
     esac
 
     echo "$(timestamp) === Classical Manager cron job complete ==="

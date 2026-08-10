@@ -212,6 +212,13 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
     widget or applied its geometry, so the symptom was a small blank window
     rather than an error. Cheap to check statically, invisible otherwise —
     there is no display in CI to catch it at runtime.
+
+    Restoring a grab is exempt (v3.7). filedialog releases the caller's grab
+    while an external zenity/kdialog chooser is up — otherwise the Tk grab
+    freezes the chooser and the whole desktop with it — and takes it back
+    afterwards. That window was already mapped and grabbed moments earlier,
+    so wait_visibility() has nothing to wait for. The exemption is narrow:
+    it needs a matching grab_release() on the same window just above.
     """
     import pathlib
 
@@ -224,6 +231,10 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
                 continue
             window = line.strip().split(".grab_set")[0]
             preceding = "\n".join(lines[max(0, i - 12):i])
+            # Wider window for the release: a try/finally puts real distance
+            # between letting the grab go and taking it back.
+            if f"{window}.grab_release()" in "\n".join(lines[max(0, i - 40):i]):
+                continue        # restoring a grab this code just released
             if f"{window}.wait_visibility()" not in preceding:
                 offenders.append(f"{path.name}:{i + 1}")
     assert offenders == [], (

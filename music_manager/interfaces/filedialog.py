@@ -16,14 +16,42 @@ _ZENITY = shutil.which("zenity") if _LINUX else None
 _KDIALOG = shutil.which("kdialog") if _LINUX and not _ZENITY else None
 
 
-def _run(cmd):
-    """Run a subprocess, return stdout stripped or '' on cancel/error."""
+def _run(cmd, parent=None):
+    """Run a subprocess, return stdout stripped or '' on cancel/error.
+
+    zenity and kdialog are separate applications with their own windows.
+    If the caller is a modal Tk dialog holding an input grab, that grab
+    stops any *other* window on the display receiving pointer or keyboard
+    events — including the file chooser we just launched. The chooser
+    appears and cannot be clicked, this process sits blocked in the wait
+    below, and because Tk still holds the grab the whole desktop is
+    unresponsive until the app is killed from another machine.
+
+    So release the grab for as long as the external dialog is up, and put
+    it back afterwards.
+    """
+    holder = None
+    if parent is not None:
+        try:
+            holder = parent.grab_current()
+            if holder is not None:
+                holder.grab_release()
+                parent.update_idletasks()   # push the release to the server
+        except Exception:
+            holder = None
+
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:
         pass
+    finally:
+        if holder is not None:
+            try:
+                holder.grab_set()
+            except Exception:
+                pass
     return ""
 
 
@@ -54,11 +82,11 @@ def _kdialog_filter(filetypes):
 def askdirectory(title="Select Folder", parent=None, **kwargs):
     if _ZENITY:
         cmd = ["zenity", "--file-selection", "--directory", "--title", title]
-        return _run(cmd)
+        return _run(cmd, parent)
     if _KDIALOG:
         cmd = ["kdialog", "--getexistingdirectory", os.path.expanduser("~"),
                "--title", title]
-        return _run(cmd)
+        return _run(cmd, parent)
     return filedialog.askdirectory(title=title, parent=parent, **kwargs)
 
 
@@ -70,13 +98,13 @@ def askopenfilename(title="Open", filetypes=None, initialdir=None,
             cmd.extend(["--filename", initialdir.rstrip("/") + "/"])
         if filetypes:
             cmd.extend(_zenity_filetypes(filetypes))
-        return _run(cmd)
+        return _run(cmd, parent)
     if _KDIALOG:
         start = initialdir or os.path.expanduser("~")
         cmd = ["kdialog", "--getopenfilename", start, "--title", title]
         if filetypes:
             cmd.insert(3, _kdialog_filter(filetypes))
-        return _run(cmd)
+        return _run(cmd, parent)
     return filedialog.askopenfilename(
         title=title, filetypes=filetypes or [], initialdir=initialdir,
         parent=parent, **kwargs)
@@ -91,7 +119,7 @@ def askopenfilenames(title="Open", filetypes=None, initialdir=None,
             cmd.extend(["--filename", initialdir.rstrip("/") + "/"])
         if filetypes:
             cmd.extend(_zenity_filetypes(filetypes))
-        result = _run(cmd)
+        result = _run(cmd, parent)
         return tuple(result.split("\n")) if result else ()
     if _KDIALOG:
         start = initialdir or os.path.expanduser("~")
@@ -99,7 +127,7 @@ def askopenfilenames(title="Open", filetypes=None, initialdir=None,
                "--title", title]
         if filetypes:
             cmd.insert(3, _kdialog_filter(filetypes))
-        result = _run(cmd)
+        result = _run(cmd, parent)
         return tuple(result.split("\n")) if result else ()
     return filedialog.askopenfilenames(
         title=title, filetypes=filetypes or [], initialdir=initialdir,
@@ -136,7 +164,7 @@ def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
                "--filename", _save_start_path(initialdir, initialfile)]
         if filetypes:
             cmd.extend(_zenity_filetypes(filetypes))
-        result = _run(cmd)
+        result = _run(cmd, parent)
         if result and defaultextension and "." not in os.path.basename(result):
             result += defaultextension
         return result
@@ -146,7 +174,7 @@ def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
                "--title", title]
         if filetypes:
             cmd.insert(3, _kdialog_filter(filetypes))
-        result = _run(cmd)
+        result = _run(cmd, parent)
         if result and defaultextension and "." not in os.path.basename(result):
             result += defaultextension
         return result

@@ -4,6 +4,7 @@ V3 Phase 3: mechanically split from gui.py — methods are
 unchanged; this mixin is mounted on App in app.py.
 """
 
+import copy
 import json
 import io
 import logging
@@ -16,12 +17,75 @@ from tkinter import messagebox, ttk
 from music_manager.interfaces import filedialog
 from pathlib import Path
 
-from music_manager.core.config import PROJECT_ROOT
+from music_manager.core.config import MA_DEFAULT_PATH_STYLE, PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def apply_settings_fields(config: dict, fields: dict) -> dict:
+    """Fold the settings dialog's field values into a loaded config.
+
+    Returns a new dict; `config` is not modified.
+
+    The dialog covers a fraction of config.json — the database connection,
+    cron, webhook and autosave settings have no fields here — so this
+    updates what was loaded instead of building a config from the fields.
+    Rebuilding deleted every unshown key, which silently dropped a
+    configured MySQL server back to SQLite. The same holds within a
+    section: 'strategy' on the Plex target has no field and must survive.
+
+    Split out of the dialog so it can be tested without a display.
+    """
+    new_config = copy.deepcopy(config)
+    new_config.setdefault("active_library", 1)
+    targets = new_config.setdefault("targets", {})
+
+    # -- Plex --
+    url = fields["plex_base_url"]
+    token = fields["plex_token"]
+    token_env = fields["plex_token_env"]
+    if url and (token or token_env):
+        plex_cfg = targets.setdefault("plex", {})
+        plex_cfg["base_url"] = url
+        for key, value in (("token", token), ("token_env", token_env),
+                           ("music_section", fields["plex_music_section"])):
+            if value:
+                plex_cfg[key] = value
+            else:
+                plex_cfg.pop(key, None)
+        plex_cfg["path_rules"] = fields["plex_path_rules"]
+    else:
+        # Clearing the URL or both token fields removes the target, as it
+        # did before.
+        targets.pop("plex", None)
+
+    # -- M3U --
+    m3u_cfg = targets.setdefault("m3u", {})
+    m3u_cfg["path_style"] = fields["m3u_path_style"]
+    m3u_cfg["base_path"] = fields["m3u_base_path"]
+    m3u_cfg["path_rules"] = fields["m3u_path_rules"]
+
+    # -- Music Assistant --
+    # Only written once there is something to say, so an untouched dialog
+    # does not add an empty block to a config that never had one.
+    ma_dir = fields["ma_output_dir"]
+    if fields["ma_enabled"] or ma_dir or "ma" in targets:
+        ma_cfg = targets.setdefault("ma", {})
+        ma_cfg["enabled"] = fields["ma_enabled"]
+        if ma_dir:
+            ma_cfg["output_dir"] = ma_dir
+        else:
+            ma_cfg.pop("output_dir", None)
+        ma_cfg.setdefault("path_style", MA_DEFAULT_PATH_STYLE)
+
+    # -- Database path -- (stored in config.json, requires a restart)
+    if fields["db_path"]:
+        new_config["db_path"] = fields["db_path"]
+
+    return new_config
 
 
 class DialogsMixin:
@@ -179,7 +243,8 @@ class DialogsMixin:
         """Open the settings dialog for app-wide configuration."""
         ctk = self.ctk
 
-        from music_manager.core.config import load_config, DEFAULT_CONFIG_PATH, ConfigError
+        from music_manager.core.config import (load_config, DEFAULT_CONFIG_PATH,
+                                               ConfigError)
 
         # Load current config (or start with defaults)
         try:
@@ -189,6 +254,7 @@ class DialogsMixin:
 
         plex = config.get("targets", {}).get("plex", {})
         m3u = config.get("targets", {}).get("m3u", {})
+        ma = config.get("targets", {}).get("ma", {})
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Settings")
@@ -238,6 +304,29 @@ class DialogsMixin:
                     filetypes=[("SQLite Database", "*.db"),
                                ("All files", "*.*")],
                     confirmoverwrite=False)
+                if path:
+                    entry.delete(0, "end")
+                    entry.insert(0, path)
+
+            ctk.CTkButton(frame, text="...", width=30,
+                          command=browse).grid(
+                row=row, column=2, padx=5, pady=3)
+            row += 1
+            return entry
+
+        def add_dir_field(label, value="", width=350):
+            nonlocal row
+            ctk.CTkLabel(frame, text=label).grid(
+                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+            entry = ctk.CTkEntry(frame, width=width)
+            entry.grid(row=row, column=1, sticky="w", padx=5, pady=3)
+            if value:
+                entry.insert(0, str(value))
+
+            def browse():
+                path = filedialog.askdirectory(
+                    title=f"Select {label}", parent=dlg,
+                    initialdir=entry.get().strip() or None)
                 if path:
                     entry.delete(0, "end")
                     entry.insert(0, path)
@@ -317,6 +406,24 @@ class DialogsMixin:
                                   f"{mr['find']} -> {mr['replace']}\n")
         row += 1
 
+        # -- Music Assistant --
+        # No path style here: MA's view of the share is fixed by Home
+        # Assistant, so relative paths are the only workable form and the
+        # target defaults to them.
+        add_section("Music Assistant")
+        ma_enabled = tk.BooleanVar(value=bool(ma.get("enabled", False)))
+        ctk.CTkCheckBox(frame, text="Enable Push to MA",
+                        variable=ma_enabled).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=(20, 5), pady=3)
+        row += 1
+        ma_output = add_dir_field("Playlist Folder", ma.get("output_dir", ""))
+        ctk.CTkLabel(frame,
+                     text="(A folder MA scans, inside the music share. "
+                          "Names starting with '_' are skipped by MA.)",
+                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=30, pady=0)
+        row += 1
+
         # -- Buttons --
         def parse_rules(text_widget):
             rules = []
@@ -335,45 +442,38 @@ class DialogsMixin:
             return rules
 
         def save():
-            # Build config
-            new_config = {"active_library": config.get("active_library", 1),
-                          "targets": {}}
-
-            # Plex
-            url = plex_url.get().strip()
-            tok = plex_token.get().strip()
-            tok_env = plex_token_env.get().strip()
-            section = plex_section_default.get().strip()
-            if url and (tok or tok_env):
-                plex_cfg = {"base_url": url}
-                if tok:
-                    plex_cfg["token"] = tok
-                if tok_env:
-                    plex_cfg["token_env"] = tok_env
-                if section:
-                    plex_cfg["music_section"] = section
-                plex_cfg["path_rules"] = parse_rules(plex_rules_text)
-                new_config["targets"]["plex"] = plex_cfg
-
-            # M3U
-            new_config["targets"]["m3u"] = {
-                "path_style": m3u_style.get(),
-                "base_path": m3u_base.get().strip(),
-                "path_rules": parse_rules(m3u_rules_text),
+            fields = {
+                "plex_base_url": plex_url.get().strip(),
+                "plex_token": plex_token.get().strip(),
+                "plex_token_env": plex_token_env.get().strip(),
+                "plex_music_section": plex_section_default.get().strip(),
+                "plex_path_rules": parse_rules(plex_rules_text),
+                "m3u_path_style": m3u_style.get(),
+                "m3u_base_path": m3u_base.get().strip(),
+                "m3u_path_rules": parse_rules(m3u_rules_text),
+                "ma_enabled": bool(ma_enabled.get()),
+                "ma_output_dir": ma_output.get().strip(),
+                "db_path": db_entry.get().strip(),
             }
+            new_config = apply_settings_fields(config, fields)
 
-            # Database path (stored in config.json, requires restart).
-            # The field shows the effective path, so compare against that
-            # — and persist it, turning an implicit fallback into an
-            # explicit setting.
+            # The database field shows the effective path, so compare
+            # against that rather than against a possibly-absent setting.
             from music_manager.core.config import get_db_path
-            new_db = db_entry.get().strip()
-            current_db = str(get_db_path())
-            db_changed = bool(new_db) and new_db != current_db
-            if new_db:
-                new_config["db_path"] = new_db
-            elif config.get("db_path"):
-                new_config["db_path"] = config["db_path"]
+            db_changed = (bool(fields["db_path"])
+                          and fields["db_path"] != str(get_db_path()))
+
+            # Check it before writing it: an invalid config.json stops the
+            # app loading at all, and finding that out on the next start is
+            # far worse than a message here.
+            from music_manager.core.config import validate_config
+            try:
+                validate_config(new_config)
+            except ConfigError as exc:
+                messagebox.showerror(
+                    "Settings", f"Not saved — these settings are not valid:"
+                                f"\n\n{exc}", parent=dlg)
+                return
 
             # Write config.json
             from music_manager.core.config import save_config

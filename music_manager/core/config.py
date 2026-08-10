@@ -88,6 +88,24 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return config
 
 
+def validate_config(config: dict[str, Any],
+                    path: Path | None = None) -> list[str]:
+    """Validate a config dict that has not been read from disk.
+
+    For callers that assemble config themselves — the settings dialog —
+    so they can find out they would write a file the app cannot load
+    before writing it, rather than on the next start.
+
+    Returns:
+        The same warnings load_config would emit.
+
+    Raises:
+        ConfigError: With a specific message describing the problem.
+    """
+    return _validate(
+        config, path or _config_path_override or DEFAULT_CONFIG_PATH)
+
+
 def save_config(config: dict[str, Any], path: Path | None = None) -> None:
     """Write config back to config.json."""
     config_path = path or _config_path_override or DEFAULT_CONFIG_PATH

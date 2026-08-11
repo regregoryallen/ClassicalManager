@@ -420,7 +420,6 @@ def generate_all(
             output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
             _output_result(prof, result, format=format, output=output, quiet=quiet)
 
-
     if not quiet:
         typer.echo(f"\nDone: {len(profiles)} profiles generated.")
 

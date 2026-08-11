@@ -856,6 +856,7 @@ python main.py --config /path/to/alt-config.json --cli generate-all --library "M
 | `-v` / `--verbose` | Debug-level logging |
 | `-q` / `--quiet` | Suppress progress output; errors only (ideal for cron jobs) |
 | `-h` / `--help` | Print usage summary |
+| `--version` | Print the version and exit (also shown in the window title) |
 
 ---
 

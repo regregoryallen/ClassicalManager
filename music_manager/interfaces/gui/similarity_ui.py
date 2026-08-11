@@ -632,6 +632,9 @@ class SimilarityUIMixin:
         if track.work_id:
             menu.add_command(label="Details...",
                              command=lambda: self._show_work_details(track.work_id))
+        if track.album_id:
+            menu.add_command(label="Show Album",
+                             command=lambda: self._show_album_popup(track.album_id))
         menu.add_command(label="Show in Folder",
                          command=lambda: self._show_track_in_folder(track.id))
         menu.tk_popup(event.x_root, event.y_root)

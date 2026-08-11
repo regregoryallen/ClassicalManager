@@ -299,10 +299,11 @@ def build_help_content(text: tk.Text) -> None:
            "Green = strong, amber = loose, red = weak")
     bullet("Agreement column \u2014 how many seeds consider the track close (e.g. 12/31)")
     bullet("Double-click any column header to sort results by it \u2014 "
-           "rank by Match, Agreement, or Volatility (numeric-aware)")
+           "Match, Rank, and Dyn Range sort by value, not as text")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
-    bullet("Right-click a result for Play, Details, or Show in Folder")
+    bullet("Right-click a result for Play, Details, Show Album, or "
+           "Show in Folder")
 
     subheading("Pin to Position")
     body(

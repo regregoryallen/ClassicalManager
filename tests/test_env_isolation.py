@@ -105,7 +105,11 @@ def test_title_survives_config_failure(tmp_path, monkeypatch):
         raise RuntimeError("no config")
     monkeypatch.setattr("music_manager.core.config.resolve_db_settings", boom)
 
-    assert App._window_title() == "Classical Music Playlist Manager"
+    # Compared against __version__ rather than a literal so a release bump
+    # doesn't fail a test about config failure.
+    from music_manager import __version__
+    assert App._window_title() == (
+        f"Classical Music Playlist Manager {__version__}")
 
 
 def test_empty_db_path_resolves_to_default(tmp_path, monkeypatch):

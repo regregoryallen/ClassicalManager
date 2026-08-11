@@ -20,6 +20,7 @@ from pathlib import Path
 from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
+    bind_wheel_scroll,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,6 +310,7 @@ class DialogsMixin:
 
         frame = ctk.CTkScrollableFrame(dlg)
         frame.pack(fill="both", expand=True, padx=5, pady=5)
+        bind_wheel_scroll(frame)
 
         row = 0
 
@@ -808,6 +810,7 @@ class DialogsMixin:
 
         check_frame = ctk.CTkScrollableFrame(picker, height=180)
         check_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        bind_wheel_scroll(check_frame)
 
         check_vars = []
         for lib in libs:

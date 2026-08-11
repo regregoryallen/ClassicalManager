@@ -28,15 +28,27 @@ def numeric_sort_key(val):
     """Parse a display cell into a float for numeric column sorting.
 
     Understands the value shapes the trees actually render — plain
-    numbers, "N trk" counts, "95%" match, "M:SS"/"H:MM:SS" durations, and
-    "N/M" ratios (agreement) — returning None when a cell is not numeric
-    (callers fall back to case-insensitive string sort then).
+    numbers, "N trk" counts, "95%" match, "12.3 dB" dynamic range,
+    "M:SS"/"H:MM:SS" durations, "N of M" rank, and "N/M" ratios
+    (agreement) — returning None when a cell is not numeric (callers fall
+    back to case-insensitive string sort then).
     """
     v = val.strip()
     if v.endswith(" trk"):
         v = v[:-4]
     if v.endswith("%"):
         v = v[:-1].strip()
+    if v.endswith(" dB"):
+        v = v[:-3].strip()
+    # "1 of 500" is a rank within a candidate pool: sort by the rank, not
+    # by the pool size, which is the same for every row anyway.
+    if " of " in v:
+        rank, _, pool = v.partition(" of ")
+        try:
+            float(pool)
+            return float(rank)
+        except ValueError:
+            return None
     if ":" in v:
         parts = v.split(":")
         try:
@@ -134,12 +146,18 @@ class TreeUtilMixin:
                 val = tree.set(iid, col)
             items.append((val, iid))
 
-        # Try numeric sort when all values look like numbers
-        numeric_vals = [numeric_sort_key(v) for v, _ in items]
-        if items and all(n is not None for n in numeric_vals):
-            decorated = sorted(zip(numeric_vals, [iid for _, iid in items]),
-                               reverse=reverse)
-            sorted_iids = [iid for _, iid in decorated]
+        # Try numeric sort when every filled value looks like a number.
+        # Blanks are held out rather than disqualifying the column: an
+        # unanalysed track leaves Match and Dyn Range empty, and one such
+        # row used to drag the whole column back to a string sort. They
+        # are reattached at the end, so they stay out of the way in
+        # either direction.
+        parsed = [(numeric_sort_key(v), v, iid) for v, iid in items]
+        blank_iids = [iid for _, v, iid in parsed if not v.strip()]
+        numbered = [(n, iid) for n, v, iid in parsed if v.strip()]
+        if numbered and all(n is not None for n, _ in numbered):
+            numbered.sort(reverse=reverse)
+            sorted_iids = [iid for _, iid in numbered] + blank_iids
         else:
             items.sort(key=lambda x: x[0].lower(), reverse=reverse)
             sorted_iids = [iid for _, iid in items]

@@ -2,7 +2,7 @@
 
 Routes to the CLI when invoked with the explicit --cli flag (or any subcommand);
 launches the GUI when run with no arguments.  Help flags (-h, --help, -?) print
-a usage summary without launching the GUI.
+a usage summary without launching the GUI, and so does --version.
 """
 
 import sys
@@ -13,6 +13,7 @@ Classical Music Playlist Manager
 Usage:
   python main.py                    Launch the GUI
   python main.py --cli <command>    Run a CLI command
+  python main.py --version          Print the version and exit
 
 CLI commands:
 
@@ -96,6 +97,14 @@ def main():
     """Route to CLI, help, or GUI based on arguments."""
     if {"-h", "--help", "-?"} & set(sys.argv[1:]):
         print(_HELP)
+        return
+
+    # Answered here rather than as a typer option so that --version means
+    # the same thing whichever side of --cli it lands on, and so that it
+    # works without importing the CLI or touching the database.
+    if "--version" in sys.argv[1:]:
+        from music_manager import __version__
+        print(f"Classical Music Playlist Manager {__version__}")
         return
 
     # Extract --config before routing so both CLI and GUI can use it

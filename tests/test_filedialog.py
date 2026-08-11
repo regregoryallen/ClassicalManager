@@ -101,7 +101,7 @@ def test_kdialog_keeps_save_dialogs(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# v3.7: an external dialog must not run under a Tk input grab.
+# v3.6.1: an external dialog must not run under a Tk input grab.
 #
 # zenity and kdialog are separate applications. A modal Tk dialog that
 # holds a grab stops every other window on the display receiving input,

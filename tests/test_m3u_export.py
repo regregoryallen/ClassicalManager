@@ -1,4 +1,4 @@
-"""v3.7: the M3U export path.
+"""v3.6.1: the M3U export path.
 
 M3USerializer had no direct test coverage — no test module imported it —
 despite being the oldest output format and the one the Plex target writes
@@ -182,7 +182,7 @@ def test_relative_mode_ignores_path_rules(tmp_path):
 
 
 def test_base_path_is_no_longer_applied(tmp_path):
-    # Removed in v3.7: it was inert in relative mode and was mistaken for
+    # Removed in v3.6.1: it was inert in relative mode and was mistaken for
     # an output directory. A config still carrying it must not silently
     # change the paths written.
     lines = write([make_track(root="/music", rel="Bach/01.flac")],

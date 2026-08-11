@@ -2,9 +2,17 @@
 
 ## Status (keep this section current)
 
-- **Released: v3.0, v3.1, v3.2 — all merged to `master` and tagged.**
-  Tag lineage: v1.0, v2.0, v3.0, v3.1, v3.2 (v3.2 on 2026-07-28, 158 tests
-  green). **Next work is v3.3 — see the v3.3 section below.**
+- **Released and tagged: v3.0 through v3.6.** Tag lineage: v1.0, v2.0,
+  v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
+  2026-08-05, 287 tests on SQLite / 293 on MariaDB).
+- **In progress: v3.6.1** on branch `v3.7-dev` — GUI and config bug
+  fixes; see the v3.6.1 section. Not merged: the file-chooser grab fix
+  needs the user's confirmation first, since it cannot be reproduced
+  without freezing the display it happens on.
+- **The version lives in three places and nowhere else**: the git tag,
+  the heading in this file, and the docstrings of test modules added by
+  that release. There is no `__version__` anywhere in the code, so a
+  "bump" is exactly those three edits.
 - Branch naming: use `v3.2-dev` style, **not** a bare version number — a
   branch and tag sharing a name (`v3.1`) made git refuse plain pushes
   ("src refspec matches more than one"). Merged release branches are
@@ -493,7 +501,14 @@ flag deciding whether analysis takes forty minutes or seven hours.
 
 Ended at 287 tests on SQLite, 293 on MariaDB.
 
-## v3.7 — Bug fixes, and an MA export path that was already there (branch `v3.7-dev`, started 2026-08-09)
+## v3.6.1 — Bug fixes, and an MA export path that was already there (branch `v3.7-dev`, started 2026-08-09)
+
+*Numbered as a patch, not v3.7 (decided 2026-08-11). Every `.0` on this
+project introduced a capability; this one adds none. `generate-all
+--format m3u --output-dir` behaves identically before and after. v3.5.1
+and v3.5.2 set the precedent — v3.5.2 was a single GUI fix, close kin to
+the file-chooser freeze here. The branch keeps its `v3.7-dev` name
+because renaming a pushed branch buys nothing.*
 
 Started as "add a Music Assistant export target". **It shipped as nothing
 of the kind: MA needed no new code at all.** Everything MA requires was

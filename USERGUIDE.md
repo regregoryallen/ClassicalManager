@@ -730,7 +730,7 @@ C:/Users/jane/Music -> /volume1/Music
   `relative_to_playlist` mode, which needs no rewriting; the app warns if both
   are set.
 
-`base_path` was removed in v3.7. It prepended a prefix to absolute paths, did
+`base_path` was removed in v3.6.1. It prepended a prefix to absolute paths, did
 nothing at all in relative mode, and was easily mistaken for an output folder.
 Use a **Path Rule** with `absolute` path style instead. A config file still
 carrying the key keeps working and logs a warning saying it is no longer

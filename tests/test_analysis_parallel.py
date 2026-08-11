@@ -213,7 +213,7 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
     rather than an error. Cheap to check statically, invisible otherwise —
     there is no display in CI to catch it at runtime.
 
-    Restoring a grab is exempt (v3.7). filedialog releases the caller's grab
+    Restoring a grab is exempt (v3.6.1). filedialog releases the caller's grab
     while an external zenity/kdialog chooser is up — otherwise the Tk grab
     freezes the chooser and the whole desktop with it — and takes it back
     afterwards. That window was already mapped and grabbed moments earlier,

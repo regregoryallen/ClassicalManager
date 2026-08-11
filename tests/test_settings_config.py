@@ -1,4 +1,4 @@
-"""v3.7: the settings dialog folds its fields into the loaded config.
+"""v3.6.1: the settings dialog folds its fields into the loaded config.
 
 The dialog shows Database, Plex and M3U. It does not show the
 database *connection* block, cron, webhook, or autosave — and it used to

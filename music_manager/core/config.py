@@ -369,7 +369,7 @@ def _validate_m3u(m3u: dict, context: str, path: Path) -> list[str]:
             f"'absolute'."
         )
 
-    # base_path was removed in v3.7: it prepended a prefix to absolute
+    # base_path was removed in v3.6.1: it prepended a prefix to absolute
     # paths, was inert in relative mode, and was mistaken for an output
     # directory. Left as a warning rather than an error so a config that
     # still carries it keeps loading.

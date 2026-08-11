@@ -424,6 +424,29 @@ class DialogsMixin:
         sqlite_rows = []
         panel_rows = sqlite_rows
         db_entry = add_browse_field("Database File", current_path)
+        default_note = add_note(
+            "This is the default, so it is not written to config.json — each "
+            "install opens the database beside it. Choose any other path and "
+            "it is stored.")
+
+        def refresh_default_note(*_):
+            """Say when a save will deliberately store nothing.
+
+            Saving the default path would pin one checkout's location into
+            config.json, so it is left out — which looks like the setting
+            was ignored unless the dialog says otherwise.
+            """
+            chosen = db_entry.get().strip()
+            if chosen and Path(chosen) != DATABASE_PATH:
+                default_note.grid_remove()
+            else:
+                default_note.grid()
+
+        # A trace rather than a key binding: Browse… fills the field in
+        # without the keyboard ever touching it.
+        db_path_var = tk.StringVar(value=str(current_path))
+        db_entry.configure(textvariable=db_path_var)
+        db_path_var.trace_add("write", refresh_default_note)
 
         mysql_rows = []
         panel_rows = mysql_rows
@@ -523,6 +546,9 @@ class DialogsMixin:
                 widget.grid_remove()
             for widget in (mysql_rows if mysql else sqlite_rows):
                 widget.grid()
+            if not mysql:
+                # Restoring the panel re-grids every row, note included.
+                refresh_default_note()
 
         backend_box.configure(command=show_backend)
         show_backend()

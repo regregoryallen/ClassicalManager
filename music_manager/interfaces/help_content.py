@@ -480,7 +480,9 @@ def build_help_content(text: tk.Text) -> None:
     body(
         "SQLite: the path to the .db file. To move a database, copy the .db "
         "file (and any -wal/-shm files) to the new location, then update this "
-        "setting.\n"
+        "setting. Left at the default it is not written to config.json, so "
+        "each install opens the database beside it; the dialog says so when "
+        "that is the case.\n"
     )
     body(
         "MySQL/MariaDB: host, port, database, user, charset, and either a "

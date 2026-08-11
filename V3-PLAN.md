@@ -626,7 +626,13 @@ release lets it write one.
 - A SQLite path equal to the default is **not** written out. The field is
   prefilled with the path in use, so writing it back unconditionally
   would pin `/home/…/ClassicalManager/music_manager.db` into config.json
-  and break the app the day the checkout moves.
+  — and a config that then moved between the dev checkout and
+  `~/.local/share/classical-manager` would have one opening the other's
+  database. The dialog **says so** while the field holds the default
+  (added 2026-08-11 after the user switched to SQLite, picked the default
+  file, and found nothing in config.json). Silence there reads as a
+  setting that was ignored. The note is driven by a `StringVar` trace, not
+  a key binding, because Browse… fills the field in without the keyboard.
 - The restart prompt now compares **resolved `DbSettings`**, not the raw
   section. Writing `database` for the first time rewrites keys without
   changing which database opens, and a restart prompt for that is noise.

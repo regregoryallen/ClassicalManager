@@ -101,6 +101,46 @@ def test_kdialog_keeps_save_dialogs(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# v3.6.2: confirmoverwrite=False means the file is being *chosen*
+#
+# Opening a second database pointed the Settings browse button at an
+# existing .db and got "A file named music_manager.db already exists. Do
+# you want to replace it?" — GTK4 dropped the property that turns that
+# prompt off, so zenity 4 always asks and no argument suppresses it. The
+# flag was being passed and silently ignored on Linux.
+# ---------------------------------------------------------------------------
+
+def test_choosing_an_existing_file_bypasses_zenity(monkeypatch):
+    fd, calls = _patch_backends(monkeypatch)
+    fd.asksaveasfilename(title="Select Database File", confirmoverwrite=False)
+    assert not calls["zenity"], "zenity would prompt before replacing"
+    assert calls["tk"], "tk honours confirmoverwrite"
+    assert calls["tk"][0]["confirmoverwrite"] is False
+
+
+def test_choosing_an_existing_file_bypasses_kdialog(monkeypatch):
+    fd, calls = _patch_backends(monkeypatch, zenity=False, kdialog=True)
+    fd.asksaveasfilename(title="Select Database File", confirmoverwrite=False)
+    assert not calls["zenity"], "kdialog prompts too"
+    assert calls["tk"][0]["confirmoverwrite"] is False
+
+
+def test_a_real_save_still_confirms(monkeypatch):
+    """Overwriting a playlist on export must keep asking."""
+    fd, calls = _patch_backends(monkeypatch)
+    fd.asksaveasfilename(title="Export M3U", initialfile="Sunday.m3u",
+                         initialdir="/home/u")
+    assert calls["tk"][0]["confirmoverwrite"] is True
+
+
+def test_a_real_save_without_a_name_keeps_zenity(monkeypatch):
+    """The confirmoverwrite branch must not steal the native dialog."""
+    fd, calls = _patch_backends(monkeypatch)
+    fd.asksaveasfilename(title="Save", initialdir="/home/u")
+    assert calls["zenity"] and not calls["tk"]
+
+
+# ---------------------------------------------------------------------------
 # v3.6.1: an external dialog must not run under a Tk input grab.
 #
 # zenity and kdialog are separate applications. A modal Tk dialog that

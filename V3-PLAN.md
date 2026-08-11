@@ -637,6 +637,20 @@ release lets it write one.
   section. Writing `database` for the first time rewrites keys without
   changing which database opens, and a restart prompt for that is noise.
 
+**Browsing to an existing database asked to replace it** (found
+2026-08-11). Pointing the browse button at a second `.db` produced *"A
+file named music_manager.db already exists. Do you want to replace it?"*
+— from GTK, not from us. The call already passed `confirmoverwrite=False`
+and `filedialog.py` had been dropping it on the floor for Linux: GTK4
+removed the property that turns the prompt off, so zenity 4's save
+chooser always asks and no argument spelling suppresses it (kdialog is
+the same). `confirmoverwrite=False` now routes to tkinter, whose
+`tk_getSaveFile` honours it (`tkfbox.tcl` only prompts when the flag is
+set). A save dialog is still the right control here — you must be able to
+name a database that does not exist yet — and every real save keeps its
+native chooser and its confirmation. Second time zenity has cost this one
+button: v3.6.1 fixed it freezing the desktop under a Tk grab.
+
 **Comments in config.json** (asked 2026-08-11): JSON has none, and adding
 a JSONC parser would be worse than useless here — `save_config`
 re-serializes the whole file, so the first Save would delete every

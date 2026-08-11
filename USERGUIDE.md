@@ -30,7 +30,8 @@ Key capabilities:
 - **Automatic work detection** from MusicBrainz IDs, WORK tags, or title-prefix heuristics
 - **Work-aware shuffling** that keeps movements together in the correct order
 - **Additive selection** at album, work, or track level with specificity-based exceptions
-- **Export to M3U, JSON, or Plex** with configurable path rewriting
+- **Export to M3U, JSON, or Plex** with configurable path rewriting — or into a
+  folder another music system imports, such as Music Assistant
 - **Non-destructive metadata overrides** to correct grouping without modifying audio files
 - **Multiple libraries** for distinct collections (e.g., classical, holiday music)
 - **Pin to position** to fix specific works at positions 1–5 at the start of a playlist
@@ -141,8 +142,8 @@ In the same config file or Settings dialog:
 
 - **Path Style**: `absolute` (full file paths) or `relative_to_playlist` (paths
   relative to the M3U file's location)
-- **Base Path**: Optional prefix prepended to absolute paths
-- **Path Rules**: Find/replace rules for path translation, same format as Plex
+- **Path Rules**: Find/replace rules for path translation, same format as Plex.
+  Only applied in `absolute` mode — relative paths need no rewriting.
 
 ### 3. Database Location
 
@@ -724,9 +725,16 @@ C:/Users/jane/Music -> /volume1/Music
 
 - **Path Style**: `absolute` for full paths, `relative_to_playlist` for paths
   relative to the M3U file's location
-- **Base Path**: Optional prefix for absolute paths
 - **Path Rules**: Same find/replace format as Plex, applied to M3U output paths.
-  Use forward slashes on all platforms.
+  Use forward slashes on all platforms. They are ignored in
+  `relative_to_playlist` mode, which needs no rewriting; the app warns if both
+  are set.
+
+`base_path` was removed in v3.7. It prepended a prefix to absolute paths, did
+nothing at all in relative mode, and was easily mistaken for an output folder.
+Use a **Path Rule** with `absolute` path style instead. A config file still
+carrying the key keeps working and logs a warning saying it is no longer
+applied.
 
 ---
 
@@ -955,6 +963,70 @@ If source folders are at different paths on each machine (e.g., `/mnt/Music` on
 Linux vs. `M:/Music` on Windows), scan from only one machine. The other machine
 can generate playlists using path rules to translate paths for its target.
 
+### Feeding Playlists to Another Music System
+
+Plex is not the only destination. Any system that can import M3U files can take
+CM's playlists — Music Assistant, Navidrome, Jellyfin, a hardware streamer, or a
+player that simply opens a folder of `.m3u` files. The pattern is the same in
+every case: **write the whole set of playlists into a folder that system looks
+at, then let it import them.**
+
+Nothing special is needed for this. It is `generate-all` writing to a directory,
+which CM has always done:
+
+```bash
+python main.py --cli generate-all --library "My Collection" \
+    --format m3u --output-dir /path/to/that/systems/playlist/folder
+```
+
+Every profile becomes `<Profile_Name>.m3u`, with spaces and slashes replaced by
+underscores. Rerunning overwrites the same files in place, so regenerating
+updates the playlists rather than accumulating copies. Profiles whose names begin
+with `__` are internal and are skipped.
+
+**Getting the paths right is the part that needs thought.** The other system has
+to be able to resolve every path in the file, and it often sees the same music at
+a different location than CM does — a container mount, a network share mapped
+elsewhere, a different drive letter. Two ways to handle that:
+
+- **Relative paths.** Set **Path Style** to `relative_to_playlist` and put the
+  playlist folder *inside* the music tree, alongside the album folders. Paths
+  come out as `../Composer/Album/track.flac`, which resolve identically no
+  matter where either system mounts the share. This is the simplest answer when
+  you can choose the folder, and it needs no maintenance.
+- **Absolute paths with a path rule.** Keep **Path Style** as `absolute` and add
+  a **Path Rule** rewriting your path to theirs — for example find
+  `/mnt/MediaLib` and replace with `/media/MediaLib`. Use this when the playlist
+  folder has to live outside the music tree. Path rules are ignored in relative
+  mode, so the two approaches are alternatives, not a combination.
+
+**Triggering the import** is the other system's job, and how depends on it. Most
+pick playlists up on their next library scan, so scheduling CM's export ahead of
+that scan is usually enough — see the cron script's `m3u` and `scan+m3u` modes,
+which read `cron.m3u_output_dir`. If the system exposes an API to start a scan,
+call it after the export. CM does not talk to these systems itself and holds no
+credentials for them; it writes files and stops there.
+
+Two things worth knowing before you rely on it:
+
+- **CM never deletes anything in that folder.** Renaming or deleting a profile
+  leaves its old `.m3u` behind, and the other system will keep showing that
+  playlist until you remove the file yourself. Tidy the folder by hand
+  occasionally, and take care if it also holds playlists you made elsewhere.
+- **Check the folder's name.** Some scanners skip directories beginning with an
+  underscore — Music Assistant does — so `Playlists` works where `_Playlists`
+  silently imports nothing.
+
+#### Music Assistant specifics
+
+If Music Assistant is the destination, configure its **File System** provider
+against the music share with *Import playlists (m3u files)* enabled, and give the
+playlists their own folder: an M3U placed inside an album folder is not imported.
+Home Assistant fixes MA's view of the share and does not expose it as
+configurable, so relative paths in a folder such as `Albums/Playlists` are the
+path style to reach for. Track order is preserved as written, and regenerating a
+playlist updates it in place without creating a duplicate.
+
 ---
 
 ## Configuration Reference
@@ -986,7 +1058,6 @@ can generate playlists using path rules to translate paths for its target.
     },
     "m3u": {
       "path_style": "absolute",
-      "base_path": "",
       "path_rules": []
     }
   },

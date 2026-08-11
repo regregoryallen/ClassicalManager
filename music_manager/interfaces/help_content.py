@@ -71,8 +71,8 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("M3U Export Configuration")
     bullet("Path Style \u2014 \"absolute\" for full paths, \"relative_to_playlist\" for relative paths")
-    bullet("Base Path \u2014 optional prefix for absolute paths")
-    bullet("Path Rules \u2014 same find/replace format as Plex")
+    bullet("Path Rules \u2014 same find/replace format as Plex; applied only "
+           "in absolute mode")
 
     # ── Getting Started ──
     heading("getting_started", "Getting Started")
@@ -493,8 +493,8 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("M3U Export")
     bullet("Path Style \u2014 absolute or relative_to_playlist")
-    bullet("Base Path \u2014 optional prefix for absolute paths")
-    bullet("Path Rules \u2014 same format as Plex path rules")
+    bullet("Path Rules \u2014 same format as Plex path rules; ignored in "
+           "relative_to_playlist mode, which needs no rewriting")
 
     # ── CLI ──
     heading("cli", "Command-Line Interface")
@@ -622,6 +622,25 @@ def build_help_content(text: tk.Text) -> None:
         "Only run the app on one machine at a time \u2014 SQLite does not "
         "support concurrent network access. If source folders differ between "
         "machines, scan from only one; use path rules on the other.\n"
+    )
+
+    subheading("Feeding Playlists to Another Music System")
+    body(
+        "Any system that imports M3U files — Music Assistant, Navidrome, "
+        "Jellyfin, a hardware streamer — can take these playlists. Write "
+        "the whole set into a folder it watches, then let it import them:\n"
+    )
+    code("  python main.py --cli generate-all --library \"My Collection\" "
+         "--format m3u --output-dir /that/systems/playlist/folder\n")
+    body(
+        "Rerunning overwrites the same files in place, so playlists update "
+        "rather than accumulate. The paths have to resolve on the other "
+        "system, which often sees the music at a different location: either "
+        "set Path Style to relative_to_playlist and put the folder inside "
+        "the music tree, or keep absolute paths and add a Path Rule "
+        "rewriting your path to theirs. CM never deletes anything in that "
+        "folder, so a renamed profile leaves its old file behind. Some "
+        "scanners skip folders whose name starts with an underscore.\n"
     )
 
     # ── Troubleshooting ──

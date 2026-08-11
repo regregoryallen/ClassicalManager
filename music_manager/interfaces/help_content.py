@@ -251,7 +251,7 @@ def build_help_content(text: tk.Text) -> None:
            "column headers to sort (numeric-aware)")
     bullet("Select items and click Add >> or double-click to include "
            "(double-click toggles: included items are removed, unselected items are included)")
-    bullet("Right-click: Play, Details (metadata incl. per-track volatility), "
+    bullet("Right-click: Play, Details (metadata incl. per-track dynamic range), "
            "Show Album, Show in Folder (opens your file manager at the "
            "track or album, selecting the file where the desktop supports it)")
     bullet("Show in profiles\u2026 \u2014 right-click to see which saved profiles include this item")
@@ -289,15 +289,27 @@ def build_help_content(text: tk.Text) -> None:
         "pass per track, with progress); results are cached for later searches.\n"
     )
     bullet("Max results \u2014 how many matches to return")
-    bullet("Volatility max \u2014 optional filter on internal variation (soft-to-loud, "
-           "sparse-to-dense). Tick the checkbox next to the slider to enable it; "
-           "moving the slider alone does nothing until enabled")
-    bullet("Blend \u2014 slide between nearest (single closest seed) and consensus "
-           "(favor tracks many seeds agree are close)")
-    bullet("Match column \u2014 % that is high when a track is as close to your seeds "
-           "as the seeds are to each other; self-calibrating per search. "
-           "Green = strong, amber = loose, red = weak")
-    bullet("Agreement column \u2014 how many seeds consider the track close (e.g. 12/31)")
+    bullet("Max dyn range \u2014 optional filter on how far a track swings between "
+           "quiet and loud, in dB (under 10 dB is even, over 25 dB very wide). "
+           "Tick the checkbox next to the slider to enable it; moving the "
+           "slider alone does nothing until enabled")
+    bullet("Blend \u2014 slide between nearest seed (the single closest seed "
+           "decides, so anything resembling any one seed gets in) and all "
+           "seeds (mean distance, so a track has to suit the whole set). "
+           "Starts in the middle")
+    bullet("Feature weights \u2014 expand the panel to re-weight the six groups "
+           "(timbre, register, dynamics, tempo, attack, harmony). 0 removes a "
+           "group entirely, 2 doubles its say; Reset to defaults restores. "
+           "Groups are size-normalized first, so a weight is a real decision "
+           "rather than a side effect of how many columns a group has")
+    bullet("Match column \u2014 where the track sits in your library, not against "
+           "the seed spread: 99.5% means closer than 99.5% of every track "
+           "searched. Green = strong (70% and up), amber = loose, "
+           "red = weak (under 40%)")
+    bullet("Rank column \u2014 position in that same ordering, as \"N of M\" over "
+           "every candidate considered (e.g. 3 of 2481)")
+    bullet("Dyn Range column \u2014 the track's own dynamic range, in dB \u2014 the "
+           "measure the Max dyn range filter applies")
     bullet("Double-click any column header to sort results by it \u2014 "
            "Match, Rank, and Dyn Range sort by value, not as text")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
@@ -430,7 +442,8 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Context Menu (right-click)")
     bullet("Play \u2014 open track in default player")
-    bullet("Details \u2014 read-only metadata popup (incl. per-track volatility) with copy buttons")
+    bullet("Details \u2014 read-only metadata popup (incl. per-track dynamic range "
+           "in dB) with copy buttons")
     bullet("Show Album \u2014 full album view with editing")
     bullet("Show in Folder \u2014 opens your file manager at the file")
     bullet("Set Work Name / Group Key / Composer \u2014 jump to edit fields")

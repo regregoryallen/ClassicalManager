@@ -36,6 +36,11 @@ Dry-run is the default. Nothing is written without --write.
 
 Selecting what to work on:
   --library NAME        Restrict to one library (default: all of them).
+  --list                List the selected works with their ids, and stop.
+                        Measures nothing. CM's GUI does not show work ids,
+                        so this is how you find one.
+  --album TEXT          Only works whose album title contains TEXT.
+  --work TEXT           Only works whose name contains TEXT.
   --work-id ID          Only this work. Repeatable. Overrides the
                         provenance filter below, but not the format one.
   --limit N             Stop after N selected works.
@@ -52,6 +57,21 @@ Writing:
                         copies, leaving the library untouched. The safe
                         way to check a round trip before the first real
                         write.
+  --preserve-mtime      Leave file mtimes alone. OFF by default, and
+                        think before turning it on: Music Assistant
+                        decides whether to re-read a file from its mtime,
+                        so preserving it makes a retag invisible to MA —
+                        even after a forced resync. FLAC padding absorbs
+                        the new tags, so the file size does not change
+                        either, and nothing downstream can tell.
+
+After a real run, follow it with
+
+  python main.py --cli scan-changes --library NAME
+
+so CM's stored mtimes catch up. That path updates track rows in place and
+keeps the similarity analyses; a *full* rescan restores analyses only when
+mtime and size both match, so it would discard them after a tagging run.
 
 Measurement:
   --reference LUFS      Reference loudness (default -18, ReplayGain 2.0).

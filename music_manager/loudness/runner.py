@@ -128,7 +128,8 @@ def sandbox_job(job, sandbox_dir):
 
 
 def process_work(job, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
-                 write=False, force=False, binary="rsgain"):
+                 write=False, force=False, binary="rsgain",
+                 preserve_mtime=False):
     """Measure one work, and write it when asked to."""
     key = work_key(job.relative_paths)
     outcome = WorkOutcome(job=job, key=key)
@@ -159,7 +160,7 @@ def process_work(job, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
     for track in measurement.tracks:
         values = tagio.tag_values(track, measurement, key, reference)
         try:
-            tagio.write_tags(track.path, values)
+            tagio.write_tags(track.path, values, preserve_mtime=preserve_mtime)
         except tagio.TagWriteError as exc:
             outcome.error = str(exc)
             return outcome
@@ -173,7 +174,7 @@ def process_work(job, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
 
 def run(selection, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
         write=False, force=False, workers=None, binary="rsgain",
-        sandbox=None, progress=None):
+        sandbox=None, progress=None, preserve_mtime=False):
     """Process every job in a selection, in parallel."""
     jobs = selection.jobs
     if sandbox:
@@ -211,7 +212,8 @@ def run(selection, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
         if stop.is_set():
             return
         record(process_work(job, reference=reference, ma_target=ma_target,
-                            write=write, force=force, binary=binary))
+                            write=write, force=force, binary=binary,
+                            preserve_mtime=preserve_mtime))
 
     if workers == 1:
         try:

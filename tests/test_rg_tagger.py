@@ -671,6 +671,77 @@ def test_version_is_read_without_importing_the_package():
     assert re.search(rf"\b{re.escape(__version__)}$", result.stdout.strip())
 
 
+# ---------------------------------------------------------------------------
+# Finding a work without knowing its id
+# ---------------------------------------------------------------------------
+
+def test_works_can_be_selected_by_album_title(lib, tmp_path):
+    """CM's GUI shows work ids nowhere, so --work-id alone was unusable."""
+    make_work(lib, tmp_path, "Adagietto", ["a.flac"], album_key="Mahler 5")
+    make_work(lib, tmp_path, "Prelude", ["b.flac"], album_key="WTC Book II")
+
+    selection = work_db.collect_works(album_like="mahler")
+
+    assert [job.work_name for job in selection.jobs] == ["Adagietto"]
+
+
+def test_works_can_be_selected_by_name(lib, tmp_path):
+    make_work(lib, tmp_path, "Symphony no. 5", ["a.flac"])
+    make_work(lib, tmp_path, "Piano Concerto", ["b.flac"], album_key="Other")
+
+    selection = work_db.collect_works(work_like="SYMPHONY")
+
+    assert [job.work_name for job in selection.jobs] == ["Symphony no. 5"]
+
+
+def test_name_filters_combine(lib, tmp_path):
+    make_work(lib, tmp_path, "Symphony no. 1", ["a.flac"], album_key="Brahms")
+    make_work(lib, tmp_path, "Symphony no. 2", ["b.flac"], album_key="Mahler")
+    make_work(lib, tmp_path, "Quartet", ["c.flac"], album_key="Brahms")
+
+    selection = work_db.collect_works(album_like="brahms", work_like="symphony")
+
+    assert [job.work_name for job in selection.jobs] == ["Symphony no. 1"]
+
+
+def test_a_filtered_out_work_is_not_reported_as_skipped(lib, tmp_path):
+    """It was never in scope. Listing thousands of them would bury the
+    works that really were refused, which is what skips are for."""
+    make_work(lib, tmp_path, "Wanted", ["a.flac"], album_key="Mahler 5")
+    make_work(lib, tmp_path, "Guessed", ["b.flac"], source="heuristic",
+              album_key="Elsewhere")
+
+    selection = work_db.collect_works(album_like="mahler")
+
+    assert len(selection.jobs) == 1
+    assert not selection.skipped
+
+
+def test_the_listing_shows_the_id_and_enough_to_recognise_the_work(lib,
+                                                                   tmp_path):
+    from music_manager.loudness import report as reporting
+
+    work = make_work(lib, tmp_path, "Symphony no. 5", ["a.flac", "b.flac"],
+                     source="mb_workid", album_key="Mahler 5")
+
+    text = "\n".join(reporting.render_listing(work_db.collect_works()))
+
+    assert str(work.id) in text
+    assert "Symphony no. 5" in text
+    assert "Mahler 5" in text
+    assert "mb_workid" in text
+    assert "flac" in text
+    assert "1 work(s), 2 track(s)" in text
+
+
+def test_the_listing_says_when_nothing_matched(lib, tmp_path):
+    from music_manager.loudness import report as reporting
+
+    text = "\n".join(reporting.render_listing(work_db.collect_works()))
+
+    assert "No works selected" in text
+
+
 def test_absolute_paths_are_built_from_the_source_folder(lib, tmp_path):
     make_work(lib, tmp_path, "W", ["sub/a.flac"])
 

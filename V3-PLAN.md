@@ -811,9 +811,53 @@ handoff's own design would have cost.)
   prerequisite of this tool alone, and the packaged Windows app never sees
   it.
 
+### Preserving mtimes made the whole thing invisible (found 2026-08-11)
+
+Handoff §5 said "preserve mtimes where practical — other tooling keys on
+them", and that was implemented as the default. It is exactly backwards.
+**MA decides whether to re-read a file from its mtime**, so preserving it
+means MA never notices the tags these files were written for. Verified
+the hard way: Mahler retagged at a -23 reference, confirmed as
+`-4.70 dB` on disk in Picard, and still playing at the -18 value after a
+forced resync in MA.
+
+FLAC makes it worse than it sounds. The new tags fit inside the existing
+padding, so **the file size does not change either** — measured at zero
+bytes' difference across all 48 WTC files. A preserved mtime therefore
+leaves a file of identical length with an identical timestamp, and
+nothing downstream can tell it was touched at all.
+
+The mtime now moves by default; `--preserve-mtime` opts back in.
+
+This collides with one thing inside CM, so the sequence matters.
+`_restore_analyses` ([scanner.py:1091](music_manager/core/scanner.py:1091))
+re-links a similarity analysis only when mtime **and** size both match,
+so a *full* rescan after a tagging run would discard every analysis and
+require the multi-hour librosa job again. Incremental `scan-changes` does
+not: it updates the track row in place
+([scanner.py:1546](music_manager/core/scanner.py:1546)) and the analysis
+survives. **So follow a tagging run with `scan-changes`** — CM's stored
+mtimes then match the files, and any later full rescan restores normally.
+
+### Selecting a work when the GUI does not show ids
+
+`--work-id` was the only way to name a work, and nothing in the GUI
+displays a work id, so in practice there was no way to use it. Added
+`--list` (the selected works with their ids, measuring nothing) plus
+`--album TEXT` and `--work TEXT` substring filters. These *select* rather
+than refuse: a work outside the filter is not reported as skipped, since
+listing several thousand of them would bury the works genuinely refused.
+
 ### Open risk
 
-**Whether MA reads ID3v2 `TXXX:REPLAYGAIN_*` on MP3 is untested.**
+**~~Whether MA reads ID3v2 `TXXX:REPLAYGAIN_*` on MP3 is untested.~~
+Settled 2026-08-11: it does.** Verified against real MP3 works (Mahler 5,
+Brahms symphonies, Bach sonatas) and FLAC (WTC Book II) through MA's
+quality display: applied gain matched `ALBUM_GAIN + 1.0 dB` throughout,
+which is the -17 re-target of a -18-referenced tag, and was constant
+across each work's movements. Works sharing one physical album each kept
+their own gain, confirming §2.3 at real-world scale rather than with
+probes. Original text follows, for the record:
 `CM-MA-findings.md` §7 lists formats other than FLAC as not covered, and
 MP3 is now 86% of the library and 62% of the multi-track works. Settled by
 playing one MP3 work and one FLAC work through MA's audio-pipeline view. If

@@ -43,6 +43,15 @@ def tag(
     work_id: list[int] = typer.Option(None, "--work-id",
                                       help="Tag only these works. Repeatable. "
                                            "Overrides the provenance filter."),
+    album: str = typer.Option(None, "--album", metavar="TEXT",
+                              help="Only works whose album title contains "
+                                   "TEXT (case-insensitive)."),
+    work: str = typer.Option(None, "--work", metavar="TEXT",
+                             help="Only works whose name contains TEXT "
+                                  "(case-insensitive)."),
+    list_only: bool = typer.Option(False, "--list",
+                                   help="List the selected works with their "
+                                        "ids and exit. Measures nothing."),
     limit: int = typer.Option(None, "--limit",
                               help="Stop after this many selected works."),
     include_heuristic: bool = typer.Option(
@@ -50,6 +59,11 @@ def tag(
         help="Also tag works whose grouping was guessed rather than tagged."),
     force: bool = typer.Option(False, "--force",
                                help="Retag works that are already current."),
+    preserve_mtime: bool = typer.Option(
+        False, "--preserve-mtime",
+        help="Leave file mtimes untouched. Off by default: Music Assistant "
+             "decides whether to re-read a file from its mtime, so "
+             "preserving it makes the retag invisible to MA."),
     workers: int = typer.Option(None, "-j", "--workers",
                                 help="Parallel measurements."),
     yes: bool = typer.Option(False, "-y", "--yes",
@@ -93,10 +107,16 @@ def tag(
     try:
         selection = work_db.collect_works(
             library_name=library, work_ids=work_id or None,
-            include_guessed=include_heuristic, limit=limit)
+            include_guessed=include_heuristic, limit=limit,
+            album_like=album, work_like=work)
     except LookupError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
+
+    if list_only:
+        for line in reporting.render_listing(selection):
+            typer.echo(line)
+        raise typer.Exit(0)
 
     if not selection.jobs:
         typer.echo("No works selected.")
@@ -123,7 +143,7 @@ def tag(
     result = runner.run(
         selection, reference=reference, ma_target=ma_target, write=write,
         force=force, workers=workers, binary=binary, sandbox=sandbox,
-        progress=progress)
+        progress=progress, preserve_mtime=preserve_mtime)
 
     if not quiet:
         typer.echo("")

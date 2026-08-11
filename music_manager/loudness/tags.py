@@ -167,12 +167,28 @@ def _write_mp3(path, values):
     tags.save(path)
 
 
-def write_tags(path, values, preserve_mtime=True):
+def write_tags(path, values, preserve_mtime=False):
     """Replace this tool's tags on one file, leaving every other tag alone.
 
-    mtimes are preserved by default because other tooling keys on them,
-    and a tagging run is not a content change as far as that tooling is
-    concerned.
+    **The mtime moves by default, and that is the point.** Preserving it
+    was the original behaviour, on the reasoning that other tooling keys
+    on mtimes and a tagging run is not a content change. Measured against
+    Music Assistant, that reasoning is backwards: MA decides whether to
+    re-read a file from its mtime, so preserving it makes the write
+    invisible to the one consumer these tags exist for. A retag was
+    confirmed correct on disk and still played at the old gain after a
+    forced resync.
+
+    FLAC makes it worse than it sounds. New tags fit inside the existing
+    padding, so the file size does not change either — leaving a file
+    that is byte-for-byte the same length with the same mtime, and
+    therefore untouched as far as any consumer can tell.
+
+    `preserve_mtime=True` remains available, but note that CM's own
+    analysis restore keys on mtime *and* size (`scanner._restore_analyses`),
+    so after a real tagging run the right follow-up is
+    `main.py --cli scan-changes`, which updates track rows in place and
+    keeps the similarity analyses.
     """
     suffix = Path(path).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:

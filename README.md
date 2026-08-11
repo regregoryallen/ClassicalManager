@@ -195,12 +195,25 @@ sudo apt install rsgain
 # predicted to clip on playback:
 ./rgtag.py --library "My Collection"
 
+# Find a particular work (the GUI does not show work ids):
+./rgtag.py --library "My Collection" --list --album "Mahler 5"
+
 # Tag copies in a scratch directory first, leaving the library untouched:
 ./rgtag.py --library "My Collection" --limit 5 --sandbox /tmp/rgtest
 
 # Then, for real:
 ./rgtag.py --library "My Collection" --limit 5 --write
+
+# Afterwards, let the database catch up with the changed files:
+python main.py --cli scan-changes --library "My Collection"
 ```
+
+That last step matters. Tagging updates file mtimes — it has to, because
+Music Assistant decides whether to re-read a file from its mtime, and
+preserving it would make the tags invisible to the player they were written
+for. `scan-changes` updates the affected tracks in place and keeps their
+similarity analyses; a **full** rescan straight after a tagging run would
+discard those analyses and make you re-run the audio analysis.
 
 `REPLAYGAIN_TRACK_GAIN` keeps its ordinary per-track meaning, so Kodi and other
 players are unaffected; the work gain rides in `REPLAYGAIN_ALBUM_GAIN`. Works

@@ -345,12 +345,25 @@ def test_the_written_state_matches_what_the_run_computed(lib, tmp_path):
         assert tagio.read_state(path) == (outcome.key, GAIN_VERSION)
 
 
-def test_mtimes_survive_a_real_run(lib, tmp_path):
+def test_a_real_run_moves_mtimes_so_ma_re_reads_the_files(lib, tmp_path):
+    build_work(lib, tmp_path, "Symphony", [LOUD, QUIET])
+    paths = work_db.collect_works().jobs[0].paths
+    old = os.stat(paths[0]).st_mtime_ns - 10**10
+    for path in paths:
+        os.utime(path, ns=(old, old))
+
+    runner.run(work_db.collect_works(), write=True, workers=1)
+
+    assert all(os.stat(p).st_mtime_ns > old for p in paths)
+
+
+def test_a_real_run_can_preserve_mtimes_on_request(lib, tmp_path):
     build_work(lib, tmp_path, "Symphony", [LOUD, QUIET])
     paths = work_db.collect_works().jobs[0].paths
     before = [os.stat(p).st_mtime_ns for p in paths]
 
-    runner.run(work_db.collect_works(), write=True, workers=1)
+    runner.run(work_db.collect_works(), write=True, workers=1,
+               preserve_mtime=True)
 
     assert [os.stat(p).st_mtime_ns for p in paths] == before
 

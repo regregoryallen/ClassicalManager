@@ -201,22 +201,44 @@ def test_an_mp3_with_no_id3_header_gets_one(tmp_path):
 # Surroundings
 # ---------------------------------------------------------------------------
 
-def test_mtime_is_preserved(audio):
-    """Other tooling keys on mtimes; tagging is not a content change."""
+def test_the_mtime_moves_so_downstream_consumers_notice(audio):
+    """Preserving the mtime made a retag invisible to Music Assistant.
+
+    MA decides whether to re-read a file from its mtime. A retag was
+    confirmed correct on disk with Picard and still played at the old
+    gain after a forced resync, because the file looked untouched. These
+    tags exist to be read by MA, so the write has to be visible.
+    """
     before = os.stat(audio).st_mtime_ns
+    os.utime(audio, ns=(before - 10**10, before - 10**10))
 
     tagio.write_tags(audio, VALUES)
+
+    assert os.stat(audio).st_mtime_ns > before - 10**10
+
+
+def test_the_mtime_can_still_be_preserved_on_request(audio):
+    before = os.stat(audio).st_mtime_ns
+
+    tagio.write_tags(audio, VALUES, preserve_mtime=True)
 
     assert os.stat(audio).st_mtime_ns == before
 
 
-def test_mtime_can_be_allowed_to_move(audio):
-    before = os.stat(audio).st_mtime_ns
-    os.utime(audio, ns=(before - 10**10, before - 10**10))
+def test_flac_tagging_does_not_change_the_file_size(tmp_path):
+    """Which is why the mtime is the only signal there is.
 
-    tagio.write_tags(audio, VALUES, preserve_mtime=False)
+    New tags fit inside FLAC's existing padding, so a preserved mtime
+    leaves a file of identical length and identical timestamp — nothing
+    downstream can tell it was touched.
+    """
+    path = make_audio(tmp_path / "t.flac")
+    before = os.path.getsize(path)
 
-    assert os.stat(audio).st_mtime_ns != before - 10**10
+    tagio.write_tags(path, VALUES, preserve_mtime=True)
+
+    assert os.path.getsize(path) == before
+    assert tagio.read_all(path) == VALUES
 
 
 def test_an_unsupported_format_is_refused(tmp_path):

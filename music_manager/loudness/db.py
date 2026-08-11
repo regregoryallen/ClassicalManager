@@ -105,7 +105,7 @@ def _member_order(track):
 
 
 def collect_works(library_name=None, work_ids=None, include_guessed=False,
-                  limit=None):
+                  limit=None, album_like=None, work_like=None):
     """Group CM's tracks into taggable works, with a reason for each refusal.
 
     Filters run in a deliberate order. An explicit `--work-id` overrides
@@ -113,6 +113,11 @@ def collect_works(library_name=None, work_ids=None, include_guessed=False,
     but never the format gate, which is about what this tool can write.
     `limit` applies last, so it counts works that will actually be
     tagged rather than works considered.
+
+    `album_like` and `work_like` are case-insensitive substring matches.
+    They exist because CM's GUI does not show work ids anywhere, so
+    `--work-id` alone left no practical way to name a work you had just
+    been looking at.
     """
     from music_manager.core.database import Album, Library, SourceFolder, Track
 
@@ -141,12 +146,22 @@ def collect_works(library_name=None, work_ids=None, include_guessed=False,
 
     selection = Selection()
     explicit = set(work_ids or ())
+    album_needle = (album_like or "").casefold()
+    work_needle = (work_like or "").casefold()
 
     for work_id in sorted(grouped):
         members = sorted(grouped[work_id], key=_member_order)
         work = members[0].work                 # one query per work, cached
         name, source = work.work_name, work.work_source
         album_title = members[0].album.title or ""
+
+        # Name filters select rather than refuse: a work the user did not
+        # ask about is not "skipped", it was never in scope, and listing
+        # 5,000 of them as skips would bury the ones that matter.
+        if album_needle and album_needle not in album_title.casefold():
+            continue
+        if work_needle and work_needle not in name.casefold():
+            continue
 
         def skip(reason, detail=""):
             selection.skipped.append(

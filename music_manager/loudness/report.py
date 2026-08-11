@@ -26,6 +26,34 @@ def _truncate(text, width):
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+def render_listing(selection):
+    """The selected works and their ids, for `--list`.
+
+    CM's GUI shows work ids nowhere, so without this there is no
+    practical way to name the work you are looking at for `--work-id`.
+    Measures nothing, so it answers in a second on the whole library.
+    """
+    if not selection.jobs:
+        return ["No works selected."]
+
+    lines = [f"{'work':>7}  {'trk':>3}  {'fmt':<4}  {'source':<10}  "
+             f"{'album':<34}  work"]
+    for job in selection.jobs:
+        suffix = job.relative_paths[0].rsplit(".", 1)[-1].lower()
+        lines.append(
+            f"{job.work_id:7d}  {job.size:3d}  {suffix:<4}  {job.source:<10}  "
+            f"{_truncate(job.album_title, 34):<34}  "
+            f"{_truncate(job.work_name, 46)}")
+    lines.append("")
+    lines.append(f"{len(selection.jobs)} work(s), "
+                 f"{sum(j.size for j in selection.jobs)} track(s)")
+    skipped = len(selection.skipped)
+    if skipped:
+        lines.append(f"{skipped} work(s) not selected — run without --list "
+                     f"to see why")
+    return lines
+
+
 def render(result, verbose=False, max_rows=20):
     """Build the summary as a list of lines."""
     selection = result.selection

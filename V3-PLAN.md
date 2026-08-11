@@ -827,6 +827,14 @@ bytes' difference across all 48 WTC files. A preserved mtime therefore
 leaves a file of identical length with an identical timestamp, and
 nothing downstream can tell it was touched at all.
 
+Isolated to a single variable before the fix went in: `touch` on the
+first Mahler movement alone, then a resync. That one track moved to
+**-3.70 dB** applied — which is its on-disk `-4.70 dB` plus MA's +1.0
+re-target — while its four untouched siblings kept serving the cached
++1.3. Same directory, same resync, one changed timestamp. Confirmed
+after the fix by a `--force` retag: timestamps moved, and MA picked up
+every work.
+
 The mtime now moves by default; `--preserve-mtime` opts back in.
 
 This collides with one thing inside CM, so the sequence matters.

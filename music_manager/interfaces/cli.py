@@ -318,7 +318,8 @@ def generate(
                    quiet=quiet)
 
 
-def _output_result(prof, result, *, format="m3u", output=None, target=None, quiet=False):
+def _output_result(prof, result, *, format="m3u", output=None, target=None,
+                   quiet=False):
     """Output a generated playlist to the specified format/target."""
     if target == "plex":
         from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
@@ -385,6 +386,8 @@ def generate_all(
 
     from music_manager.core.database import PlaylistProfile
     from music_manager.core.engine import generate_playlist
+    from music_manager.core.paths import (find_filename_collisions,
+                                          safe_profile_filename)
 
     lib = _get_library(library)
     profiles = list(PlaylistProfile.select().where(
@@ -394,6 +397,13 @@ def generate_all(
     if not profiles:
         typer.echo("No profiles found for this library.", err=True)
         raise typer.Exit(1)
+
+    # Distinct profile names can sanitize to one filename, in which case the
+    # later profile silently overwrites the earlier one's playlist.
+    for stem, names in find_filename_collisions([p.name for p in profiles]).items():
+        typer.echo(
+            f"Warning: profiles {', '.join(repr(n) for n in names)} all write "
+            f"to '{stem}.m3u'; only the last will survive.", err=True)
 
     if not quiet:
         typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
@@ -407,8 +417,7 @@ def generate_all(
             _output_result(prof, result, target=target, quiet=quiet)
         else:
             ext = ".json" if format == "json" else ".m3u"
-            safe_name = prof.name.replace(" ", "_").replace("/", "_")
-            output = str(out_path / f"{safe_name}{ext}")
+            output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
             _output_result(prof, result, format=format, output=output, quiet=quiet)
 
     if not quiet:

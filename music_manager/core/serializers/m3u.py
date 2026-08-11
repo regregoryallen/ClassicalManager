@@ -30,7 +30,6 @@ class M3USerializer(Serializer):
         target_config keys:
             output_path (str): Required. Path to write the .m3u file.
             path_style (str): 'absolute' (default) or 'relative_to_playlist'.
-            base_path (str): Optional base path prepended in absolute mode.
             path_rules (list): Prefix-rewrite rules for path realization.
             os_separator (str): Target OS separator, default '/'.
             display_template (str): Optional. 'classical' (default) or 'simple'.
@@ -58,10 +57,6 @@ class M3USerializer(Serializer):
                 track_path = _relative_path(rt, output_path)
             else:
                 track_path = realize_path(rt, path_rules, os_separator)
-                # Prepend base_path if set
-                base = target_config.get("base_path", "")
-                if base:
-                    track_path = base.rstrip("/\\") + "/" + track_path.lstrip("/\\")
 
             lines.append(f"#EXTINF:{seconds},{display}")
             lines.append(track_path)

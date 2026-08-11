@@ -25,6 +25,11 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 _config_path_override: Path | None = None
 
+# Config warnings are emitted once per (config path, message).  load_config
+# runs on nearly every CLI invocation and from several GUI paths, so an
+# undeduplicated warning would repeat a dozen times in one run.
+_warned: set[tuple[str, str]] = set()
+
 
 def set_config_path(path: Path) -> None:
     """Set a global override for the config file path."""
@@ -67,9 +72,32 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
             f"(line {exc.lineno}, col {exc.colno})"
         ) from exc
 
-    _validate(config, config_path)
+    for message in _validate(config, config_path):
+        key = (str(config_path), message)
+        if key not in _warned:
+            _warned.add(key)
+            logger.warning("%s: %s", config_path, message)
+
     logger.info("Configuration loaded from %s", config_path)
     return config
+
+
+def validate_config(config: dict[str, Any],
+                    path: Path | None = None) -> list[str]:
+    """Validate a config dict that has not been read from disk.
+
+    For callers that assemble config themselves — the settings dialog —
+    so they can find out they would write a file the app cannot load
+    before writing it, rather than on the next start.
+
+    Returns:
+        The same warnings load_config would emit.
+
+    Raises:
+        ConfigError: With a specific message describing the problem.
+    """
+    return _validate(
+        config, path or _config_path_override or DEFAULT_CONFIG_PATH)
 
 
 def save_config(config: dict[str, Any], path: Path | None = None) -> None:
@@ -204,12 +232,19 @@ def _validate_database(db: dict, path: Path) -> None:
             f"{path}: 'database' requires either 'password' or 'password_env'")
 
 
-def _validate(config: dict[str, Any], path: Path) -> None:
+def _validate(config: dict[str, Any], path: Path) -> list[str]:
     """Validate the structure and values of the loaded config.
+
+    Returns:
+        Warnings about configuration that is valid but near-certainly a
+        mistake — settings that read as active but do nothing.  Callers
+        emit these; load_config deduplicates them.
 
     Raises:
         ConfigError: With a specific message describing the problem.
     """
+    warnings: list[str] = []
+
     if not isinstance(config, dict):
         raise ConfigError(f"{path}: top level must be a JSON object")
 
@@ -235,7 +270,7 @@ def _validate(config: dict[str, Any], path: Path) -> None:
 
     # -- targets.m3u ----------------------------------------------------------
     if "m3u" in targets:
-        _validate_m3u(targets["m3u"], path)
+        warnings += _validate_m3u(targets["m3u"], "targets.m3u", path)
 
     # -- similarity_weights (optional) ----------------------------------------
     if "similarity_weights" in config:
@@ -274,6 +309,8 @@ def _validate(config: dict[str, Any], path: Path) -> None:
     if "webhook" in config:
         _validate_webhook(config["webhook"], path)
 
+    return warnings
+
 
 def _validate_plex(plex: dict, path: Path) -> None:
     """Validate the plex target section."""
@@ -300,25 +337,50 @@ def _validate_plex(plex: dict, path: Path) -> None:
     _validate_path_rules(plex.get("path_rules", []), "targets.plex.path_rules", path)
 
 
-def _validate_m3u(m3u: dict, path: Path) -> None:
-    """Validate the m3u target section."""
-    if not isinstance(m3u, dict):
-        raise ConfigError(f"{path}: 'targets.m3u' must be a JSON object")
+def _validate_m3u(m3u: dict, context: str, path: Path) -> list[str]:
+    """Validate the m3u target section.
 
+    Returns:
+        Warnings for settings that are valid but inert.
+    """
+    if not isinstance(m3u, dict):
+        raise ConfigError(f"{path}: '{context}' must be a JSON object")
+
+    path_style = m3u.get("path_style", "absolute")
     if "path_style" in m3u:
         valid_styles = {"absolute", "relative_to_playlist"}
-        if m3u["path_style"] not in valid_styles:
+        if path_style not in valid_styles:
             raise ConfigError(
-                f"{path}: 'targets.m3u.path_style' must be one of "
-                f"{valid_styles}, got {m3u['path_style']!r}"
+                f"{path}: '{context}.path_style' must be one of "
+                f"{valid_styles}, got {path_style!r}"
             )
 
-    if "base_path" in m3u and not isinstance(m3u["base_path"], str):
-        raise ConfigError(
-            f"{path}: 'targets.m3u.base_path' must be a string"
+    _validate_path_rules(m3u.get("path_rules", []), f"{context}.path_rules", path)
+
+    warnings: list[str] = []
+
+    # Relative mode takes a different branch in m3u.py and never calls
+    # realize_path, so path_rules are silently ignored.
+    if path_style == "relative_to_playlist" and m3u.get("path_rules"):
+        warnings.append(
+            f"'{context}' sets path_rules together with path_style "
+            f"'relative_to_playlist', which ignores them. Relative paths "
+            f"need no rewriting; remove path_rules or switch to path_style "
+            f"'absolute'."
         )
 
-    _validate_path_rules(m3u.get("path_rules", []), "targets.m3u.path_rules", path)
+    # base_path was removed in v3.6.1: it prepended a prefix to absolute
+    # paths, was inert in relative mode, and was mistaken for an output
+    # directory. Left as a warning rather than an error so a config that
+    # still carries it keeps loading.
+    if m3u.get("base_path"):
+        warnings.append(
+            f"'{context}.base_path' is no longer applied and can be removed. "
+            f"To rewrite paths for another machine, use path_rules with "
+            f"path_style 'absolute'."
+        )
+
+    return warnings
 
 
 def _validate_path_rules(rules: list, context: str, path: Path) -> None:

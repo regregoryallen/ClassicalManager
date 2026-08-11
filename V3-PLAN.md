@@ -2,9 +2,17 @@
 
 ## Status (keep this section current)
 
-- **Released: v3.0, v3.1, v3.2 — all merged to `master` and tagged.**
-  Tag lineage: v1.0, v2.0, v3.0, v3.1, v3.2 (v3.2 on 2026-07-28, 158 tests
-  green). **Next work is v3.3 — see the v3.3 section below.**
+- **Released and tagged: v3.0 through v3.6.** Tag lineage: v1.0, v2.0,
+  v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
+  2026-08-05, 287 tests on SQLite / 293 on MariaDB).
+- **In progress: v3.6.1** on branch `v3.7-dev` — GUI and config bug
+  fixes; see the v3.6.1 section. Not merged: the file-chooser grab fix
+  needs the user's confirmation first, since it cannot be reproduced
+  without freezing the display it happens on.
+- **The version lives in three places and nowhere else**: the git tag,
+  the heading in this file, and the docstrings of test modules added by
+  that release. There is no `__version__` anywhere in the code, so a
+  "bump" is exactly those three edits.
 - Branch naming: use `v3.2-dev` style, **not** a bare version number — a
   branch and tag sharing a name (`v3.1`) made git refuse plain pushes
   ("src refspec matches more than one"). Merged release branches are
@@ -394,6 +402,197 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   cannot catch type-mapping faults at all: it has one numeric type and
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
+
+## v3.6 — Similarity that measures what it claims to (tagged 2026-08-05)
+
+*Backfilled 2026-08-11 from the six commits in `v3.5.2..v3.6`, which is
+where the measured numbers below come from. v3.6 shipped without a
+section here; this records what changed, and the reasoning survives only
+as far as those commits carried it.*
+
+The theme is that several numbers Find Similar depended on were not
+measuring what their names said.
+
+**Feature vector v3, then v4.** Measured on the v2 vector across 20,000
+random pairs, timbre and register drove **74%** of every comparison while
+loudness and percussiveness drove **6%** — an accident of column count,
+since MFCC contributed 13 z-scored columns and loudness contributed 1.
+Features are now declared in `FEATURE_GROUPS`, each group normalised by
+`sqrt(size)` before its weight applies, so influence is a decision rather
+than a side effect. Register defaults to 0.6: cello and violin are close
+musically, but not when you specifically want violin.
+
+Two gaps closed with it. **Dynamic range replaced volatility**, which was
+`std/mean` of windowed RMS — a ratio, so a small mean inflated it and
+quiet music scored as highly dynamic. It correlated −0.39 with loudness;
+it was measuring quietness. It is now the dB difference between the 95th
+and 10th percentile of frame loudness, with mean loudness as a separate
+dimension so "how loud" and "how much it varies" stop being one
+confounded number. **Rhythm was entirely new** — tempo, onset rate, onset
+strength, zero-crossing rate. Correlation between v2 feature distance and
+tempo difference was 0.11: effectively blind.
+
+**HPSS removed.** `librosa.effects.harmonic` was 61–72% of analysis
+runtime and fed only tonnetz; computing tonnetz from the raw signal gives
+the same direction (cosine 0.998–0.999). A full re-analysis went from
+21.7 h to 6.9 h single-threaded while *gaining* features.
+
+**FEATURE_VERSION 4** came from gating silence out of the measurements.
+Six real tracks reported 150–186 dB of dynamic range — physically
+impossible — because any track with more than 10% silence put the 10th
+percentile in the digital-silence floor. The damage was not local:
+outliers at 186 dB against a median of 16.5 inflated that column's
+standard deviation by 30%, and z-scoring divides by it, so dynamic range
+had been counting about a third less than it should for *every* track.
+Frames more than 60 dB below the track's own peak are now excluded.
+
+**Scoring reworked.** Match % and Agreement both derived from the median
+distance among the seeds, which describes the seeds and says nothing
+about the library. Match % read 100% for all 2,000 results of a 5-seed
+search *and* all 2,000 of a 546-seed search. It is now a percentile of
+candidate distances — 99.5 means "closer than 99.5% of your library" —
+and each result carries its rank. Agreement saturated at both ends (0/4
+for every result in one search, 464/546 in another) and was removed;
+Blend now interpolates between distance to the nearest seed and mean
+distance to all seeds. Per-group weight sliders live in the Find Similar
+window, with rhythm split into tempo and attack — a regrouping of the
+same stored vector, so no re-analysis.
+
+Worth keeping: **seed-count-aware aggregation was planned and then not
+implemented.** Measuring it on v3 showed the features had already fixed
+most of the degradation from 4 seeds to 546, and mean-of-all actively
+hurt one profile. The evidence stopped supporting the plan.
+
+**MySQL concurrency.** `initialize_database` ran 49 queries — nine
+`create_tables`, three `get_columns`, the similarity `ensure_table`, two
+index inspections — on every GUI launch, CLI command and script. Free
+against SQLite; against a server with a second client connected it is
+metadata-lock contention on every table, and it wedged the instance
+twice, unkillable, needing a restart both times. A `schema_state` table
+now records the version the database was built to: **49 queries on first
+startup, 1 on every startup after.** Bumping `SCHEMA_VERSION` is how a
+future upgrade reaches an existing database. Separately, MySQL
+connections now use a `ReconnectMixin` — MariaDB's `wait_timeout` is 8
+hours and peewee holds one connection with no recovery, so a GUI left
+open overnight lost it.
+
+**Sidebar buttons tearing during scans.** `scan_status` was a `CTkLabel`
+created with no width, and its text is `[n/total] <filename>`, so every
+progress update changed the label's requested width to whatever file the
+scanner had reached — routinely wider than the 260px sidebar. That forced
+a pack re-layout of every sibling, and a CustomTkinter button repaints
+its whole rounded-rectangle canvas each time; the tearing was that
+repaint interrupted. `pack_propagate(False)` holds the frame but does
+nothing to stop a child asking for more. Fixed width plus truncation, and
+progress updates throttled to ~20/s.
+
+Recorded because it cost time: **the first two diagnoses were both
+wrong** — widget calls from the worker thread (already marshalled through
+`root.after`) and event-loop flooding (a scan over CIFS manages about
+twelve files a second; the arithmetic does not support it). The unbounded
+label was found by reading the widget construction, not by reasoning from
+the symptom.
+
+Also: the Find Similar dynamic-range filter still ran 0–1, correct for
+the old unitless ratio and wrong for dB — ticking it would have excluded
+every track. `SECONDS_PER_TRACK` dropped 10.5 → 3.1. And `-j/--workers`
+was missing from `main.py`'s `analyze-similarity` help line, which is the
+flag deciding whether analysis takes forty minutes or seven hours.
+
+Ended at 287 tests on SQLite, 293 on MariaDB.
+
+## v3.6.1 — Bug fixes, and an MA export path that was already there (branch `v3.7-dev`, started 2026-08-09)
+
+*Numbered as a patch, not v3.7 (decided 2026-08-11). Every `.0` on this
+project introduced a capability; this one adds none. `generate-all
+--format m3u --output-dir` behaves identically before and after. v3.5.1
+and v3.5.2 set the precedent — v3.5.2 was a single GUI fix, close kin to
+the file-chooser freeze here. The branch keeps its `v3.7-dev` name
+because renaming a pushed branch buys nothing.*
+
+Started as "add a Music Assistant export target". **It shipped as nothing
+of the kind: MA needed no new code at all.** Everything MA requires was
+already in CM —
+
+    main.py --cli generate-all --library MainMusic --format m3u \
+        --output-dir /mnt/MediaLib/Albums/Playlists
+
+with `targets.m3u.path_style` set to `relative_to_playlist`. MA's File
+System provider imports by scanning a folder, and CM has written batches
+of M3U files to a chosen folder for a long time. Measured MA behaviour is
+in `no_git/CM-MA-findings.md`; the export design doc
+(`no_git/CM-MA-export-handoff.md`) is superseded by this section.
+
+The route to that answer is worth recording, because it was not free.
+A separate `targets.ma` was built first, then renamed to a `publish`
+operation on the M3U target, then removed entirely. What settled it:
+`generate-all --target ma` and `generate-all --format m3u --output-dir`
+produced **byte-identical files** — diffed, not assumed. The second
+attempt collapsed the two targets but kept a `publish` config block, a
+`--publish` flag, `publish`/`scan+publish` in both cron and the webhook,
+and a separate module. That was renaming, not simplifying; the user
+called it and the whole apparatus came out (2026-08-11).
+
+**The lesson, since it will come up again:** the design document reasoned
+about MA's requirements without first checking what CM already did with
+them. Every requirement it derived was real; the conclusion that they
+needed new machinery was not. Check the existing capability against the
+new requirement before designing to it.
+
+Kept from the attempt, on their own merits:
+
+- `safe_profile_filename` / `find_filename_collisions` in `paths.py`, and
+  a warning when two profiles in one `generate-all` sanitize to the same
+  filename — the later one silently overwrote the earlier.
+- A warning channel in `config.py`, which had none: every path raised
+  `ConfigError`. `load_config` has thirteen call sites, so warnings are
+  emitted once per `(path, message)` rather than on every load. It carries
+  the pre-existing footgun the findings doc identified — `path_rules` set
+  alongside `path_style: relative_to_playlist`, which `m3u.py` ignores.
+- `validate_config`, so the settings dialog can check a config before
+  writing it.
+- Direct test coverage for `M3USerializer`, which had none despite being
+  the oldest output format and the file the Plex target hands off.
+
+**`base_path` was removed** (user's call, 2026-08-11). It prepended a
+prefix to absolute paths, did nothing at all in relative mode, and read as
+an output folder — the installed config had it set to
+`/mnt/MediaLib/Albums/Playlists` under `relative_to_playlist`, where it
+was inert. `path_rules` with `path_style: absolute` does the real job
+properly. A config still carrying the key keeps loading and gets a warning
+saying it no longer applies.
+
+Note the three filename sanitizers that still exist (`cli.py`,
+`webhook.py`, `classical-manager-cron.sh`); the first two disagree, as
+`Bach & Sons` → `Bach_&_Sons` from the CLI and `Bach___Sons` from the
+webhook. Left alone deliberately: the webhook's is stricter because its
+input arrives over HTTP, and the shell copy cannot call Python.
+
+**Found while adding a Settings section during the attempt: saving
+Settings deleted every config key the dialog does not show.** It rebuilt config.json from
+its own fields and wrote the whole file, so `database`, `cron`, `webhook`
+and `autosave_interval` all vanished on any save — and losing `database`
+drops this MariaDB install back to SQLite at `db_path`, quietly opening a
+different library. Within a section too: Plex's `strategy` is read by
+`plex.py`, has no widget, and did not survive. The save now updates the
+loaded config, the assembly lives in `apply_settings_fields` so it is
+testable without a display, and the result is validated before writing —
+an invalid config.json otherwise stops the app loading on its next start.
+
+A second, worse hazard in the same area: choosing a folder from Settings
+froze the whole desktop. Settings is modal, so it holds an X input grab,
+and zenity is a separate application — the grab stopped the chooser (and
+everything else) receiving input while the app blocked in `subprocess.run`
+for up to 300 seconds still holding it. `filedialog` now releases the grab
+around any external chooser. Latent since long before this work: the
+Database browse button in the same dialog hung identically.
+
+That browse button was also invisible. It was gridded into column 2, but
+the plain field rows span columns 1-2 with a 400px entry, which stretches
+column 2 past the visible width of the scrollable frame — and there is no
+horizontal scrollbar to reach it. The entry and its button now share one
+cell in their own frame, so nothing depends on column widths, and the
+button is labelled "Browse…" rather than "...".
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

@@ -4,6 +4,7 @@ V3 Phase 3: mechanically split from gui.py — methods are
 unchanged; this mixin is mounted on App in app.py.
 """
 
+import copy
 import json
 import io
 import logging
@@ -22,6 +23,55 @@ from music_manager.interfaces.gui.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def apply_settings_fields(config: dict, fields: dict) -> dict:
+    """Fold the settings dialog's field values into a loaded config.
+
+    Returns a new dict; `config` is not modified.
+
+    The dialog covers a fraction of config.json — the database connection,
+    cron, webhook and autosave settings have no fields here — so this
+    updates what was loaded instead of building a config from the fields.
+    Rebuilding deleted every unshown key, which silently dropped a
+    configured MySQL server back to SQLite. The same holds within a
+    section: 'strategy' on the Plex target has no field and must survive.
+
+    Split out of the dialog so it can be tested without a display.
+    """
+    new_config = copy.deepcopy(config)
+    new_config.setdefault("active_library", 1)
+    targets = new_config.setdefault("targets", {})
+
+    # -- Plex --
+    url = fields["plex_base_url"]
+    token = fields["plex_token"]
+    token_env = fields["plex_token_env"]
+    if url and (token or token_env):
+        plex_cfg = targets.setdefault("plex", {})
+        plex_cfg["base_url"] = url
+        for key, value in (("token", token), ("token_env", token_env),
+                           ("music_section", fields["plex_music_section"])):
+            if value:
+                plex_cfg[key] = value
+            else:
+                plex_cfg.pop(key, None)
+        plex_cfg["path_rules"] = fields["plex_path_rules"]
+    else:
+        # Clearing the URL or both token fields removes the target, as it
+        # did before.
+        targets.pop("plex", None)
+
+    # -- M3U --
+    m3u_cfg = targets.setdefault("m3u", {})
+    m3u_cfg["path_style"] = fields["m3u_path_style"]
+    m3u_cfg["path_rules"] = fields["m3u_path_rules"]
+
+    # -- Database path -- (stored in config.json, requires a restart)
+    if fields["db_path"]:
+        new_config["db_path"] = fields["db_path"]
+
+    return new_config
 
 
 class DialogsMixin:
@@ -179,7 +229,8 @@ class DialogsMixin:
         """Open the settings dialog for app-wide configuration."""
         ctk = self.ctk
 
-        from music_manager.core.config import load_config, DEFAULT_CONFIG_PATH, ConfigError
+        from music_manager.core.config import (load_config, DEFAULT_CONFIG_PATH,
+                                               ConfigError)
 
         # Load current config (or start with defaults)
         try:
@@ -222,12 +273,25 @@ class DialogsMixin:
             row += 1
             return entry
 
-        def add_browse_field(label, value="", width=350):
+        def add_browse_field(label, value="", width=310):
+            """A text field with a Browse button beside it.
+
+            The entry and the button share one cell, in their own frame.
+            Gridding the button into column 2 put it off the right edge:
+            the plain add_field rows span columns 1-2 with a 400px entry,
+            which stretches column 2 past the visible width of the
+            scrollable frame, and there is no horizontal scrollbar to
+            reach it.  Nothing here depends on column widths now.
+            """
             nonlocal row
             ctk.CTkLabel(frame, text=label).grid(
                 row=row, column=0, sticky="w", padx=(20, 5), pady=3)
-            entry = ctk.CTkEntry(frame, width=width)
-            entry.grid(row=row, column=1, sticky="w", padx=5, pady=3)
+
+            holder = ctk.CTkFrame(frame, fg_color="transparent")
+            holder.grid(row=row, column=1, columnspan=2, sticky="w",
+                        padx=5, pady=3)
+            entry = ctk.CTkEntry(holder, width=width)
+            entry.pack(side="left")
             if value:
                 entry.insert(0, str(value))
 
@@ -242,9 +306,8 @@ class DialogsMixin:
                     entry.delete(0, "end")
                     entry.insert(0, path)
 
-            ctk.CTkButton(frame, text="...", width=30,
-                          command=browse).grid(
-                row=row, column=2, padx=5, pady=3)
+            ctk.CTkButton(holder, text="Browse…", width=80,
+                          command=browse).pack(side="left", padx=(6, 0))
             row += 1
             return entry
 
@@ -297,7 +360,6 @@ class DialogsMixin:
                        padx=5, pady=3)
         m3u_style.set(m3u.get("path_style", "absolute"))
         row += 1
-        m3u_base = add_field("Base Path", m3u.get("base_path", ""))
 
         # M3U path rules
         add_section("M3U Path Rules")
@@ -335,45 +397,35 @@ class DialogsMixin:
             return rules
 
         def save():
-            # Build config
-            new_config = {"active_library": config.get("active_library", 1),
-                          "targets": {}}
-
-            # Plex
-            url = plex_url.get().strip()
-            tok = plex_token.get().strip()
-            tok_env = plex_token_env.get().strip()
-            section = plex_section_default.get().strip()
-            if url and (tok or tok_env):
-                plex_cfg = {"base_url": url}
-                if tok:
-                    plex_cfg["token"] = tok
-                if tok_env:
-                    plex_cfg["token_env"] = tok_env
-                if section:
-                    plex_cfg["music_section"] = section
-                plex_cfg["path_rules"] = parse_rules(plex_rules_text)
-                new_config["targets"]["plex"] = plex_cfg
-
-            # M3U
-            new_config["targets"]["m3u"] = {
-                "path_style": m3u_style.get(),
-                "base_path": m3u_base.get().strip(),
-                "path_rules": parse_rules(m3u_rules_text),
+            fields = {
+                "plex_base_url": plex_url.get().strip(),
+                "plex_token": plex_token.get().strip(),
+                "plex_token_env": plex_token_env.get().strip(),
+                "plex_music_section": plex_section_default.get().strip(),
+                "plex_path_rules": parse_rules(plex_rules_text),
+                "m3u_path_style": m3u_style.get(),
+                "m3u_path_rules": parse_rules(m3u_rules_text),
+                "db_path": db_entry.get().strip(),
             }
+            new_config = apply_settings_fields(config, fields)
 
-            # Database path (stored in config.json, requires restart).
-            # The field shows the effective path, so compare against that
-            # — and persist it, turning an implicit fallback into an
-            # explicit setting.
+            # The database field shows the effective path, so compare
+            # against that rather than against a possibly-absent setting.
             from music_manager.core.config import get_db_path
-            new_db = db_entry.get().strip()
-            current_db = str(get_db_path())
-            db_changed = bool(new_db) and new_db != current_db
-            if new_db:
-                new_config["db_path"] = new_db
-            elif config.get("db_path"):
-                new_config["db_path"] = config["db_path"]
+            db_changed = (bool(fields["db_path"])
+                          and fields["db_path"] != str(get_db_path()))
+
+            # Check it before writing it: an invalid config.json stops the
+            # app loading at all, and finding that out on the next start is
+            # far worse than a message here.
+            from music_manager.core.config import validate_config
+            try:
+                validate_config(new_config)
+            except ConfigError as exc:
+                messagebox.showerror(
+                    "Settings", f"Not saved — these settings are not valid:"
+                                f"\n\n{exc}", parent=dlg)
+                return
 
             # Write config.json
             from music_manager.core.config import save_config

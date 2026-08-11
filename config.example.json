@@ -1,6 +1,5 @@
 {
   "active_library": 1,
-  "db_path": "",
   "autosave_interval": 60,
   "_analysis_workers_comment": "Optional. Processes for audio analysis. Omitted here, which means three quarters of the cores; set a positive integer to override. Analysis is CPU-bound; measured scaling flattens past about 12 workers.",
   "_similarity_weights_comment": "Optional. Relative influence of each feature group in Find Similar. Groups are normalised by size first, so these are real weights rather than a side effect of how many columns a group has. 0 removes a group; 2 doubles its say. Adjustable live from the Find Similar window. Groups: timbre = instrument and texture — solo vs ensemble; register = high vs low — separates violin from cello; dynamics = how loud, and how much it swells; tempo = pace in BPM; attack = percussiveness and note density; harmony = tonal centre",
@@ -12,15 +11,21 @@
     "attack": 1.0,
     "harmony": 0.4
   },
+  "_comment_comment": "JSON has no comment syntax. Any key starting with '_' is ignored, so notes live in keys like this one — including inside a section.",
   "_database_comment": [
-    "Optional. Omit this section entirely to use SQLite at db_path.",
+    "Optional, and easier to set in the GUI: Settings -> Database writes",
+    "this section. Omit it entirely to use SQLite at db_path.",
     "For MySQL/MariaDB, set backend to 'mysql' and fill in the rest.",
     "Use either 'password' or 'password_env' (an environment variable",
     "name); password_env wins when the variable is set, so a shared or",
-    "backed-up config need not carry the credential."
+    "backed-up config need not carry the credential.",
+    "Switching backend opens a different database; it copies nothing.",
+    "Use 'migrate-db' to move an existing library across."
   ],
   "database": {
     "backend": "sqlite",
+    "_path_comment": "SQLite only. Omit for music_manager.db beside the app.",
+    "path": "",
     "host": "your-db-server",
     "port": 3306,
     "name": "classical_manager",

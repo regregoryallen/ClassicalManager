@@ -111,6 +111,27 @@ def test_unknown_weight_group_is_rejected_by_validation(tmp_path):
         cfg._config_path_override = None
 
 
+def test_a_comment_key_among_the_weights_is_allowed(tmp_path):
+    """config.json has no comment syntax, so notes are written as
+    '_'-prefixed keys — the convention config.example.json already uses.
+    Every other section ignores unknown keys; this one rejected them,
+    making a note here the one way to stop the app loading."""
+    import json
+    from music_manager.core.config import load_config, set_config_path
+    import music_manager.core.config as cfg
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "active_library": 1, "targets": {},
+        "similarity_weights": {"_comment": "raised for chamber music",
+                               "harmony": 0.9}}))
+    set_config_path(path)
+    try:
+        load_config()
+        assert resolve_group_weights()["harmony"] == 0.9
+    finally:
+        cfg._config_path_override = None
+
+
 # ---------------------------------------------------------------------------
 # Dynamic range replaces the scale-relative volatility
 # ---------------------------------------------------------------------------

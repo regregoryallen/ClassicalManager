@@ -149,7 +149,22 @@ def _save_start_path(initialdir, initialfile):
 
 
 def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
-                      initialdir=None, filetypes=None, parent=None, **kwargs):
+                      initialdir=None, filetypes=None, parent=None,
+                      confirmoverwrite=True, **kwargs):
+    # confirmoverwrite=False means "this file is being chosen, not
+    # written" — picking which database to open, where landing on an
+    # existing file is the whole point. Neither zenity nor kdialog can be
+    # told that: GTK4 dropped the property that used to turn the prompt
+    # off, so zenity 4's save chooser always asks "already exists…
+    # replace?" and there is no argument to suppress it. tkinter's dialog
+    # honours the flag, so those callers get it. Verified on zenity 4.0.1.
+    if not confirmoverwrite:
+        return filedialog.asksaveasfilename(
+            title=title, defaultextension=defaultextension,
+            initialfile=initialfile, initialdir=initialdir,
+            filetypes=filetypes or [], parent=parent,
+            confirmoverwrite=False, **kwargs)
+
     # Save dialogs deliberately prefer tkinter over zenity when a
     # filename is suggested. zenity 4 (GTK4) dropped support for
     # pre-filling the name: its --filename maps to a "select this
@@ -181,4 +196,5 @@ def asksaveasfilename(title="Save As", defaultextension="", initialfile="",
     return filedialog.asksaveasfilename(
         title=title, defaultextension=defaultextension,
         initialfile=initialfile, initialdir=initialdir,
-        filetypes=filetypes or [], parent=parent, **kwargs)
+        filetypes=filetypes or [], parent=parent,
+        confirmoverwrite=True, **kwargs)

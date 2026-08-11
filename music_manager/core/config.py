@@ -280,6 +280,12 @@ def _validate(config: dict[str, Any], path: Path) -> list[str]:
                 f"{path}: 'similarity_weights' must be a JSON object")
         from music_manager.core.similarity import DEFAULT_GROUP_WEIGHTS
         for name, value in weights.items():
+            # config.json has no comment syntax, so notes are written as
+            # '_'-prefixed sibling keys (see config.example.json). Every
+            # other section ignores unknown keys; this one rejected them,
+            # which made a comment here the one way to break the file.
+            if name.startswith("_"):
+                continue
             if name not in DEFAULT_GROUP_WEIGHTS:
                 raise ConfigError(
                     f"{path}: unknown similarity group {name!r}. Valid: "

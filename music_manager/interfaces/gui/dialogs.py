@@ -24,18 +24,78 @@ from music_manager.interfaces.gui.common import (
 
 logger = logging.getLogger(__name__)
 
+# The backend as config.json spells it, and as the dialog shows it.
+BACKEND_LABELS = {
+    "sqlite": "SQLite (file)",
+    "mysql": "MySQL / MariaDB (server)",
+}
+
+
+def _apply_database_fields(config: dict, fields: dict) -> None:
+    """Write the chosen backend into config['database'], in place.
+
+    Settings belonging to the backend that was *not* chosen are left where
+    they are, so switching to SQLite for an afternoon and back again does
+    not make you retype a server.
+
+    The legacy top-level 'db_path' is dropped once a 'database' section
+    exists. resolve_db_settings prefers database.path, so keeping both
+    would leave config.json naming one database and the app opening
+    another — the exact confusion this dialog is meant to end.
+    """
+    from music_manager.core.config import DEFAULT_DB_CHARSET, DEFAULT_DB_PORT
+    from music_manager.core.database import DATABASE_PATH
+
+    backend = fields["db_backend"]
+    db = config.setdefault("database", {})
+    db["backend"] = backend
+
+    if backend == "sqlite":
+        path = fields["db_path"].strip()
+        # The field is prefilled with the path in use, so writing it back
+        # unconditionally would freeze the bundled default into config.json
+        # and break the app the day the checkout moves. Storing nothing
+        # means "wherever the app lives", which is what it already meant.
+        if path and Path(path) != DATABASE_PATH:
+            db["path"] = path
+        else:
+            db.pop("path", None)
+    else:
+        db["host"] = fields["db_host"].strip()
+        db["name"] = fields["db_name"].strip()
+        db["user"] = fields["db_user"].strip()
+        db["charset"] = fields["db_charset"].strip() or DEFAULT_DB_CHARSET
+
+        port = fields["db_port"].strip()
+        if not port:
+            db["port"] = DEFAULT_DB_PORT
+        else:
+            # Anything non-numeric is stored as typed so that
+            # validate_config rejects it by name. Silently substituting
+            # the default would connect somewhere the user did not ask for.
+            db["port"] = int(port) if port.isdigit() else port
+
+        for key in ("password", "password_env"):
+            value = fields[f"db_{key}"].strip()
+            if value:
+                db[key] = value
+            else:
+                db.pop(key, None)
+
+    config.pop("db_path", None)
+
 
 def apply_settings_fields(config: dict, fields: dict) -> dict:
     """Fold the settings dialog's field values into a loaded config.
 
     Returns a new dict; `config` is not modified.
 
-    The dialog covers a fraction of config.json — the database connection,
-    cron, webhook and autosave settings have no fields here — so this
-    updates what was loaded instead of building a config from the fields.
-    Rebuilding deleted every unshown key, which silently dropped a
-    configured MySQL server back to SQLite. The same holds within a
-    section: 'strategy' on the Plex target has no field and must survive.
+    The dialog covers a fraction of config.json — cron, webhook and
+    autosave settings have no fields here — so this updates what was
+    loaded instead of building a config from the fields. Rebuilding
+    deleted every unshown key, which silently dropped a configured MySQL
+    server back to SQLite. The same holds within a section: 'strategy' on
+    the Plex target has no field and must survive.
 
     Split out of the dialog so it can be tested without a display.
     """
@@ -67,9 +127,8 @@ def apply_settings_fields(config: dict, fields: dict) -> dict:
     m3u_cfg["path_style"] = fields["m3u_path_style"]
     m3u_cfg["path_rules"] = fields["m3u_path_rules"]
 
-    # -- Database path -- (stored in config.json, requires a restart)
-    if fields["db_path"]:
-        new_config["db_path"] = fields["db_path"]
+    # -- Database -- (stored in config.json, takes effect on restart)
+    _apply_database_fields(new_config, fields)
 
     return new_config
 
@@ -253,6 +312,16 @@ class DialogsMixin:
 
         row = 0
 
+        # Rows belonging to a backend panel, so they can be hidden when the
+        # other backend is chosen. Everything is built in the one grid:
+        # a nested frame per backend would have its own column widths, and
+        # the labels would not line up with the rest of the dialog.
+        panel_rows = None
+
+        def track(*widgets):
+            if panel_rows is not None:
+                panel_rows.extend(widgets)
+
         def add_section(label):
             nonlocal row
             ctk.CTkLabel(frame, text=label,
@@ -261,17 +330,31 @@ class DialogsMixin:
                 padx=10, pady=(12, 4))
             row += 1
 
-        def add_field(label, value="", width=400):
+        def add_field(label, value="", width=400, show=None):
             nonlocal row
-            ctk.CTkLabel(frame, text=label).grid(
-                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
-            entry = ctk.CTkEntry(frame, width=width)
+            caption = ctk.CTkLabel(frame, text=label)
+            caption.grid(row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+            entry = ctk.CTkEntry(frame, width=width,
+                                 **({"show": show} if show else {}))
             entry.grid(row=row, column=1, columnspan=2, sticky="w",
                        padx=5, pady=3)
             if value:
                 entry.insert(0, str(value))
+            track(caption, entry)
             row += 1
             return entry
+
+        def add_note(text, padx=30):
+            """A greyed-out line of explanation under the row above it."""
+            nonlocal row
+            note = ctk.CTkLabel(frame, text=text, text_color="gray",
+                                wraplength=560, justify="left",
+                                font=ctk.CTkFont(size=11))
+            note.grid(row=row, column=0, columnspan=3, sticky="w",
+                      padx=padx, pady=(0, 2))
+            track(note)
+            row += 1
+            return note
 
         def add_browse_field(label, value="", width=310):
             """A text field with a Browse button beside it.
@@ -284,8 +367,8 @@ class DialogsMixin:
             reach it.  Nothing here depends on column widths now.
             """
             nonlocal row
-            ctk.CTkLabel(frame, text=label).grid(
-                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+            caption = ctk.CTkLabel(frame, text=label)
+            caption.grid(row=row, column=0, sticky="w", padx=(20, 5), pady=3)
 
             holder = ctk.CTkFrame(frame, fg_color="transparent")
             holder.grid(row=row, column=1, columnspan=2, sticky="w",
@@ -308,16 +391,171 @@ class DialogsMixin:
 
             ctk.CTkButton(holder, text="Browse…", width=80,
                           command=browse).pack(side="left", padx=(6, 0))
+            track(caption, holder)
             row += 1
             return entry
 
         # -- Database --
         add_section("Database")
-        from music_manager.core.config import get_db_path
-        # Show the path actually in use. A missing or empty db_path falls
-        # back to the bundled default, and showing blank there left you
-        # guessing which database was open.
-        db_entry = add_browse_field("Database File", str(get_db_path()))
+        from music_manager.core.config import (DEFAULT_DB_CHARSET,
+                                               DEFAULT_DB_PORT)
+        from music_manager.core.database import DATABASE_PATH
+
+        db_cfg = config.get("database")
+        if not isinstance(db_cfg, dict):
+            db_cfg = {}
+        current_backend = db_cfg.get("backend", "sqlite")
+        # The path in use, by the same precedence resolve_db_settings
+        # applies. Reading it from the config directly rather than
+        # resolving keeps the dialog openable when the settings are the
+        # thing that is broken — a password_env naming an unset variable
+        # raises, and this is where you would come to fix it.
+        current_path = db_cfg.get("path") or config.get("db_path") or DATABASE_PATH
+
+        ctk.CTkLabel(frame, text="Backend").grid(
+            row=row, column=0, sticky="w", padx=(20, 5), pady=3)
+        backend_box = ctk.CTkComboBox(frame, values=list(BACKEND_LABELS.values()),
+                                      width=260, state="readonly")
+        backend_box.grid(row=row, column=1, columnspan=2, sticky="w",
+                         padx=5, pady=3)
+        backend_box.set(BACKEND_LABELS[current_backend])
+        row += 1
+
+        sqlite_rows = []
+        panel_rows = sqlite_rows
+        db_entry = add_browse_field("Database File", current_path)
+        default_note = add_note(
+            "This is the default, so it is not written to config.json — each "
+            "install opens the database beside it. Choose any other path and "
+            "it is stored.")
+
+        def refresh_default_note(*_):
+            """Say when a save will deliberately store nothing.
+
+            Saving the default path would pin one checkout's location into
+            config.json, so it is left out — which looks like the setting
+            was ignored unless the dialog says otherwise.
+            """
+            chosen = db_entry.get().strip()
+            if chosen and Path(chosen) != DATABASE_PATH:
+                default_note.grid_remove()
+            else:
+                default_note.grid()
+
+        # A trace rather than a key binding: Browse… fills the field in
+        # without the keyboard ever touching it.
+        db_path_var = tk.StringVar(value=str(current_path))
+        db_entry.configure(textvariable=db_path_var)
+        db_path_var.trace_add("write", refresh_default_note)
+
+        mysql_rows = []
+        panel_rows = mysql_rows
+        db_host = add_field("Host", db_cfg.get("host", ""))
+        db_port = add_field("Port", db_cfg.get("port", DEFAULT_DB_PORT),
+                            width=100)
+        db_name = add_field("Database", db_cfg.get("name", ""))
+        db_user = add_field("User", db_cfg.get("user", ""))
+        # Only a password written in config.json is shown. One taken from
+        # the environment stays there: displaying it would copy the secret
+        # into the file on the next save.
+        db_password = add_field("Password", db_cfg.get("password", ""),
+                                show="•")
+        db_password_env = add_field("Password Env Var",
+                                    db_cfg.get("password_env", ""))
+        add_note("Env var wins when it is set, so a shared config need not "
+                 "carry the password.")
+        db_charset = add_field("Charset",
+                               db_cfg.get("charset", DEFAULT_DB_CHARSET),
+                               width=150)
+
+        def test_connection():
+            """Try the entered settings without saving them."""
+            port = db_port.get().strip()
+            if not port.isdigit():
+                messagebox.showerror("Database", "Port must be a number.",
+                                     parent=dlg)
+                return
+            name = db_name.get().strip()
+            if not name:
+                messagebox.showerror("Database",
+                                     "Enter the database name first.",
+                                     parent=dlg)
+                return
+
+            import os
+            password = db_password.get()
+            env_name = db_password_env.get().strip()
+            if env_name and os.environ.get(env_name):
+                password = os.environ[env_name]
+
+            params = dict(host=db_host.get().strip() or "localhost",
+                          port=int(port), user=db_user.get().strip(),
+                          password=password, database=name,
+                          charset=db_charset.get().strip() or DEFAULT_DB_CHARSET,
+                          connect_timeout=5)
+            test_btn.configure(state="disabled", text="Testing…")
+
+            def finished(error):
+                if not dlg.winfo_exists():
+                    return
+                test_btn.configure(state="normal", text="Test Connection")
+                if error:
+                    messagebox.showerror(
+                        "Database", f"Could not connect:\n\n{error}",
+                        parent=dlg)
+                else:
+                    messagebox.showinfo("Database", "Connected successfully.",
+                                        parent=dlg)
+
+            def worker():
+                # An unreachable host blocks for the whole timeout, so this
+                # cannot run on the UI thread.
+                error = None
+                try:
+                    import pymysql
+                    pymysql.connect(**params).close()
+                except Exception as exc:
+                    error = exc
+                dlg.after(0, lambda: finished(error))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        test_btn = ctk.CTkButton(frame, text="Test Connection", width=140,
+                                 command=test_connection)
+        test_btn.grid(row=row, column=1, sticky="w", padx=5, pady=(6, 3))
+        track(test_btn)
+        row += 1
+        panel_rows = None
+
+        def selected_backend():
+            label = backend_box.get()
+            for key, text in BACKEND_LABELS.items():
+                if text == label:
+                    return key
+            return "sqlite"
+
+        def show_backend(_=None):
+            """Show the chosen backend's rows and hide the other's.
+
+            grid_remove keeps each row's placement, so the rows come back
+            where they were, and an emptied row collapses to nothing —
+            no gap where the hidden panel used to be.
+            """
+            mysql = selected_backend() == "mysql"
+            for widget in (sqlite_rows if mysql else mysql_rows):
+                widget.grid_remove()
+            for widget in (mysql_rows if mysql else sqlite_rows):
+                widget.grid()
+            if not mysql:
+                # Restoring the panel re-grids every row, note included.
+                refresh_default_note()
+
+        backend_box.configure(command=show_backend)
+        show_backend()
+
+        add_note("Changing this opens a different database — it does not copy "
+                 "anything across. Use the migrate-db command to move an "
+                 "existing library.")
 
         # -- Plex --
         add_section("Plex")
@@ -327,17 +565,11 @@ class DialogsMixin:
                                    plex.get("token_env", ""))
         plex_section_default = add_field("Default Section",
                                          plex.get("music_section", ""))
-        ctk.CTkLabel(frame, text="(Per-library section in sidebar overrides this)",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=30, pady=0)
-        row += 1
+        add_note("(Per-library section in sidebar overrides this)")
 
         # Plex path rules
         add_section("Plex Path Rules")
-        ctk.CTkLabel(frame, text="One per line:  find -> replace",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
-        row += 1
+        add_note("One per line:  find -> replace", padx=20)
         plex_rules_text = tk.Text(frame, height=4, width=60,
                                   bg="#343638", fg="#dce4ee",
                                   insertbackground="#dce4ee",
@@ -363,10 +595,7 @@ class DialogsMixin:
 
         # M3U path rules
         add_section("M3U Path Rules")
-        ctk.CTkLabel(frame, text="One per line:  find -> replace",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=20, pady=0)
-        row += 1
+        add_note("One per line:  find -> replace", padx=20)
         m3u_rules_text = tk.Text(frame, height=4, width=60,
                                  bg="#343638", fg="#dce4ee",
                                  insertbackground="#dce4ee",
@@ -405,15 +634,28 @@ class DialogsMixin:
                 "plex_path_rules": parse_rules(plex_rules_text),
                 "m3u_path_style": m3u_style.get(),
                 "m3u_path_rules": parse_rules(m3u_rules_text),
+                "db_backend": selected_backend(),
                 "db_path": db_entry.get().strip(),
+                "db_host": db_host.get().strip(),
+                "db_port": db_port.get().strip(),
+                "db_name": db_name.get().strip(),
+                "db_user": db_user.get().strip(),
+                "db_password": db_password.get(),
+                "db_password_env": db_password_env.get().strip(),
+                "db_charset": db_charset.get().strip(),
             }
             new_config = apply_settings_fields(config, fields)
 
-            # The database field shows the effective path, so compare
-            # against that rather than against a possibly-absent setting.
-            from music_manager.core.config import get_db_path
-            db_changed = (bool(fields["db_path"])
-                          and fields["db_path"] != str(get_db_path()))
+            # Compare what the app would connect to, not the raw section:
+            # writing 'database' for the first time rewrites keys without
+            # changing the database, and a restart prompt for that would be
+            # noise. Settings too broken to resolve count as changed.
+            from music_manager.core.config import resolve_db_settings
+            try:
+                db_changed = (resolve_db_settings(new_config)
+                              != resolve_db_settings(config))
+            except Exception:
+                db_changed = True
 
             # Check it before writing it: an invalid config.json stops the
             # app loading at all, and finding that out on the next start is
@@ -434,7 +676,8 @@ class DialogsMixin:
             if db_changed:
                 messagebox.showinfo(
                     "Restart Required",
-                    "Database path changed. Restart the app for it to take effect.",
+                    "The database settings changed. Restart the app for them "
+                    "to take effect.",
                     parent=dlg)
 
             dlg.destroy()

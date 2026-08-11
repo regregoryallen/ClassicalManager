@@ -130,4 +130,6 @@ def tag(
     for line in reporting.render(result, verbose=verbose):
         typer.echo(line)
 
+    if result.interrupted:
+        raise typer.Exit(130)          # the conventional status for SIGINT
     raise typer.Exit(1 if result.failed else 0)

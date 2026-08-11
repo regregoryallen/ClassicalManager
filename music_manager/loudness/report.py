@@ -31,6 +31,16 @@ def render(result, verbose=False, max_rows=20):
     selection = result.selection
     lines = ["", "--- ReplayGain Report ---"]
 
+    if result.interrupted:
+        lines.append("INTERRUPTED — this is a partial run.")
+        if result.unprocessed:
+            lines.append(f"  {result.unprocessed} selected work(s) were "
+                         f"never started.")
+        if result.wrote:
+            lines.append("  Works already written are complete and will be "
+                         "skipped on the next run.")
+        lines.append("")
+
     considered = len(selection.jobs) + len(selection.skipped)
     lines.append(f"Works considered:   {considered}")
     lines.append(f"Works selected:     {len(selection.jobs)}")

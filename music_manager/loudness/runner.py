@@ -14,6 +14,7 @@ import concurrent.futures as cf
 import logging
 import os
 import shutil
+import threading
 from dataclasses import dataclass, field
 
 from music_manager.loudness import db as work_db
@@ -24,6 +25,11 @@ from music_manager.loudness.gain import (
 from music_manager.loudness.measure import MeasurementError, measure_work
 
 logger = logging.getLogger(__name__)
+
+# How long an interrupted run waits for the works already in flight.
+# Long enough for a 45-minute symphony to finish measuring, short enough
+# that a second Ctrl-C is rarely needed.
+INTERRUPT_GRACE_SECONDS = 30.0
 
 
 @dataclass
@@ -56,6 +62,8 @@ class RunResult:
     wrote: bool = False
     reference: float = REFERENCE_LUFS
     ma_target: float = MA_TARGET_LUFS
+    interrupted: bool = False
+    unprocessed: int = 0
 
     @property
     def tagged(self):
@@ -179,26 +187,65 @@ def run(selection, *, reference=REFERENCE_LUFS, ma_target=MA_TARGET_LUFS,
         return result
 
     workers = workers or default_worker_count()
-    done = 0
+    stop = threading.Event()
+    lock = threading.Lock()
 
     def record(outcome):
-        nonlocal done
-        done += 1
-        result.outcomes.append(outcome)
+        """Called from whichever thread finished the work.
+
+        Results are recorded here rather than in the consuming loop so
+        that a Ctrl-C in the main thread cannot lose a work that was
+        already finished but not yet collected.
+        """
+        with lock:
+            result.outcomes.append(outcome)
+            done = len(result.outcomes)
         if progress:
             progress(done, len(jobs), outcome)
 
+    def one(job):
+        # Queued work evaporates on interrupt; work already started runs
+        # to completion, which is what keeps a half-written work
+        # impossible. Worker threads never see the KeyboardInterrupt —
+        # Python raises it only in the main thread.
+        if stop.is_set():
+            return
+        record(process_work(job, reference=reference, ma_target=ma_target,
+                            write=write, force=force, binary=binary))
+
     if workers == 1:
-        for job in jobs:
-            record(process_work(job, reference=reference, ma_target=ma_target,
-                                write=write, force=force, binary=binary))
+        try:
+            for job in jobs:
+                one(job)
+        except KeyboardInterrupt:
+            result.interrupted = True
+        result.unprocessed = len(jobs) - len(result.outcomes)
         return result
 
-    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(process_work, job, reference=reference,
-                               ma_target=ma_target, write=write, force=force,
-                               binary=binary)
-                   for job in jobs]
+    # Not a `with` block: its __exit__ waits for every queued future, so
+    # a Ctrl-C part way through a library would hang until the whole run
+    # finished — the opposite of interrupting it.
+    pool = cf.ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = [pool.submit(one, job) for job in jobs]
         for future in cf.as_completed(futures):
-            record(future.result())
+            future.result()             # surface any unexpected exception
+    except KeyboardInterrupt:
+        result.interrupted = True
+        stop.set()
+        # Drop the queue, then give the handful already running a bounded
+        # moment to finish so the report counts what actually happened.
+        # rsgain is started in its own session and so does not receive
+        # the terminal's SIGINT; a work in flight completes or not at all.
+        pool.shutdown(wait=False, cancel_futures=True)
+        # Only the running ones. `shutdown(cancel_futures=True)` leaves the
+        # rest in CANCELLED, and `cf.wait` counts only CANCELLED_AND_NOTIFIED
+        # as done — so waiting on the full list blocks for the whole timeout
+        # on futures that will never run.
+        cf.wait([f for f in futures if f.running()],
+                timeout=INTERRUPT_GRACE_SECONDS)
+    else:
+        pool.shutdown(wait=True)
+
+    result.unprocessed = len(jobs) - len(result.outcomes)
     return result

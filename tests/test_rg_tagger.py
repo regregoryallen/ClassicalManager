@@ -402,6 +402,131 @@ def test_an_unknown_library_is_named_in_the_error(lib, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Interrupting a run
+# ---------------------------------------------------------------------------
+
+def fake_selection(count):
+    """A selection of jobs that never touch the disk."""
+    return work_db.Selection(jobs=[
+        work_db.WorkJob(work_id=index, work_name=f"W{index}",
+                        source="mb_workid", album_title="A",
+                        paths=[f"/m/{index}.flac"],
+                        relative_paths=[f"{index}.flac"])
+        for index in range(count)])
+
+
+def test_an_interrupt_keeps_the_works_that_finished(monkeypatch):
+    """Ctrl-C reports a partial run rather than losing it."""
+    from music_manager.loudness import runner
+
+    seen = []
+
+    def fake(job, **kwargs):
+        seen.append(job)
+        if len(seen) == 3:
+            raise KeyboardInterrupt
+        return runner.WorkOutcome(job=job, tagged=True, tracks_written=1)
+
+    monkeypatch.setattr(runner, "process_work", fake)
+
+    result = runner.run(fake_selection(10), workers=1)
+
+    assert result.interrupted
+    assert len(result.outcomes) == 2
+    assert result.tracks_written == 2
+    assert result.unprocessed == 8
+
+
+def test_an_interrupt_does_not_wait_for_the_queue(monkeypatch):
+    """The pool's own __exit__ waits for every queued job.
+
+    That is why `run` does not use it as a context manager: a Ctrl-C part
+    way through the library would otherwise hang until the whole run
+    finished, which is the opposite of interrupting it.
+    """
+    import time
+
+    from music_manager.loudness import runner
+
+    started = []
+
+    def fake(job, **kwargs):
+        started.append(job)
+        time.sleep(0.05)
+        return runner.WorkOutcome(job=job)
+
+    def interrupt(futures):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner, "process_work", fake)
+    monkeypatch.setattr(runner.cf, "as_completed", interrupt)
+
+    began = time.monotonic()
+    result = runner.run(fake_selection(200), workers=2)
+    elapsed = time.monotonic() - began
+
+    assert result.interrupted
+    assert len(started) < 200          # the queue was dropped, not drained
+    assert elapsed < 2.0               # 200 jobs at 0.05s would be 5s
+
+
+def test_an_uninterrupted_run_is_not_marked_interrupted(monkeypatch):
+    from music_manager.loudness import runner
+
+    monkeypatch.setattr(runner, "process_work",
+                        lambda job, **kw: runner.WorkOutcome(job=job))
+
+    result = runner.run(fake_selection(4), workers=2)
+
+    assert not result.interrupted
+    assert result.unprocessed == 0
+    assert len(result.outcomes) == 4
+
+
+def test_the_report_says_a_run_was_interrupted():
+    from music_manager.loudness import report as reporting
+    from music_manager.loudness import runner
+
+    result = runner.RunResult(selection=fake_selection(10), wrote=True,
+                              interrupted=True, unprocessed=7)
+
+    text = "\n".join(reporting.render(result))
+
+    assert "INTERRUPTED" in text
+    assert "7 selected work(s) were never started" in text
+
+
+def test_rsgain_runs_in_its_own_session(monkeypatch, tmp_path):
+    """So the terminal's Ctrl-C cannot kill a measurement in flight.
+
+    SIGINT goes to the whole foreground process group; without this a
+    work being measured would die and be reported as a failure rather
+    than as the interruption it was.
+    """
+    from music_manager.loudness import measure
+
+    path = tmp_path / "a.flac"
+    path.write_bytes(b"")
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = ("Filename\tL\tG\tPeak\tPeakdB\tType\tClip\n"
+                  "a.flac\t-20.00\t2.00\t0.5\t-6.02\tTrue\tN\n"
+                  "Album\t-20.00\t2.00\t0.5\t-6.02\tTrue\tN\n")
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return Result()
+
+    monkeypatch.setattr(measure.subprocess, "run", fake_run)
+    measure.measure_work([str(path)])
+
+    assert captured["start_new_session"] is True
+
+
+# ---------------------------------------------------------------------------
 # The entry point
 # ---------------------------------------------------------------------------
 

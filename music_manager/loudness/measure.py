@@ -196,7 +196,13 @@ def measure_work(paths, reference=REFERENCE_LUFS, binary="rsgain"):
 
     command = build_command(paths, reference, binary)
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        # Its own session, so the terminal's Ctrl-C does not reach it.
+        # SIGINT goes to the whole foreground process group, which would
+        # otherwise kill rsgain mid-measurement and report it as a
+        # failure rather than as the interruption it was. A work in
+        # flight now finishes or is abandoned whole.
+        result = subprocess.run(command, capture_output=True, text=True,
+                                start_new_session=True)
     except OSError as exc:
         raise MeasurementError(f"could not run rsgain: {exc}") from exc
 

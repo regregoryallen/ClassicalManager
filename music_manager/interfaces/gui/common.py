@@ -62,6 +62,44 @@ SCOPE_UNASSIGNED = "Unassigned (no profile)"
 
 
 # ---------------------------------------------------------------------------
+# Wheel scrolling for scrollable frames
+# ---------------------------------------------------------------------------
+
+def bind_wheel_scroll(scrollable):
+    """Let the mouse wheel scroll a CTkScrollableFrame on X11.
+
+    CustomTkinter binds only "<MouseWheel>", which Windows and macOS send
+    but X11 never does — there a wheel turn arrives as Button-4/Button-5.
+    Its own Linux branch is unreachable as a result, so on Linux the
+    Settings dialog could not be scrolled by wheel at all. Trees and text
+    widgets never had this problem: Tk gives those class-level Button-4/5
+    bindings of their own.
+
+    Bound on the enclosing Toplevel rather than with bind_all. A Toplevel
+    is in every descendant's bindtags, so this catches the wheel wherever
+    it lands in the dialog, and the binding dies with the window instead
+    of outliving it application-wide the way CustomTkinter's does. A wheel
+    turn over a Treeview or Text still reaches that widget's own class
+    binding first; the canvas check is what stops this from scrolling the
+    frame underneath it as well.
+    """
+    canvas = scrollable._parent_canvas
+
+    def on_wheel(event, direction):
+        widget = event.widget
+        if isinstance(widget, str):  # not a registered Tk widget
+            return
+        if not scrollable.check_if_master_is_canvas(widget):
+            return
+        if canvas.yview() != (0.0, 1.0):
+            canvas.yview("scroll", direction, "units")
+
+    top = scrollable.winfo_toplevel()
+    top.bind("<Button-4>", lambda e: on_wheel(e, -1), add="+")
+    top.bind("<Button-5>", lambda e: on_wheel(e, 1), add="+")
+
+
+# ---------------------------------------------------------------------------
 # UI update rate limiting
 # ---------------------------------------------------------------------------
 

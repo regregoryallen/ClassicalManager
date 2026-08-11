@@ -2,19 +2,23 @@
 
 ## Status (keep this section current)
 
-- **Released and tagged: v3.0 through v3.6.2.** Tag lineage: v1.0, v2.0,
+- **Released and tagged: v3.0 through v3.6.3.** Tag lineage: v1.0, v2.0,
   v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
   2026-08-05, 287 tests on SQLite / 293 on MariaDB), v3.6.1 (merged as
   `e054f8e`), v3.6.2 (merged as `2742dc9` on 2026-08-11, 352 tests green
   on SQLite — the database backend is chosen in Settings; see that
-  section). Both branches deleted after merging, as is the convention.
+  section), v3.6.3 (2026-08-11, 361 tests green on SQLite — four small
+  tweaks; see that section). Branches deleted after merging, as is the
+  convention.
 - **Nothing in progress.** Still to come from the loudness/MA programme:
   the loudness analysis and the work-scoped ReplayGain tagger, each with
   its own version.
-- **The version lives in three places and nowhere else**: the git tag,
-  the heading in this file, and the docstrings of test modules added by
-  that release. There is no `__version__` anywhere in the code, so a
-  "bump" is exactly those three edits.
+- **The version lives in four places and nowhere else**: `__version__` in
+  `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
+  this file, and the docstrings of test modules added by that release. A
+  "bump" is exactly those four edits. `__version__` must be bumped in the
+  commit that then gets tagged — if the two drift, the tag is right and
+  the app lies about itself.
 - Branch naming: use `v3.2-dev` style, **not** a bare version number — a
   branch and tag sharing a name (`v3.1`) made git refuse plain pushes
   ("src refspec matches more than one"). Merged release branches are
@@ -663,6 +667,48 @@ deep-copies the loaded config and only touches keys it owns. One section
 rejected it: `similarity_weights` validated its keys against the known
 groups, making a note there the single way to write a config.json the app
 refuses to load. It now skips `_` keys, like everywhere else.
+
+## v3.6.3 — Small tweaks, and a version the app can state (branch `v3.6.3-dev`, 2026-08-11)
+
+Four items off the user's list, one commit.
+
+- **Rank and Dyn Range sorted as text** in Find Similar — 1, 10, 11 rather
+  than 1, 2, 3. `numeric_sort_key` knew `12 trk`, `95%`, `M:SS` and `N/M`
+  but not `1 of 500` or `12.3 dB`, so it returned `None` and
+  `_sort_treeview_column` fell back to a string sort. Rank sorts by the
+  rank, not the pool size, which is identical on every row anyway.
+- **A blank cell no longer disqualifies a numeric column.** The sort
+  required *every* value to parse, so one unanalysed track — empty Match
+  and Dyn Range — dropped the whole column back to text. Blanks are held
+  out and reattached at the end, staying out of the way in either
+  direction.
+- **Show Album** added to the Find Similar context menu, matching the
+  builder tree's menu.
+- **The wheel now scrolls `CTkScrollableFrame`.** CustomTkinter binds only
+  `<MouseWheel>`, which X11 never sends — there a wheel turn is
+  Button-4/Button-5 — so its own Linux branch
+  (`ctk_scrollable_frame.py:262`) is unreachable and the Settings dialog
+  could not be wheel-scrolled on Linux at all. It worked on Windows, which
+  is why the behaviour looked inconsistent. `bind_wheel_scroll` in
+  `common.py` binds on the enclosing **Toplevel**, not with `bind_all`: a
+  Toplevel is in every descendant's bindtags, so it catches the wheel
+  anywhere in the dialog and dies with the window instead of outliving it
+  application-wide the way CustomTkinter's binding does. The canvas check
+  is what stops a wheel turn over a Treeview from scrolling the frame
+  underneath it as well. Trees and text widgets never needed this: Tk
+  gives those class-level Button-4/5 bindings.
+- **`__version__` in `music_manager/__init__.py`**, plus `--version` on
+  `main.py` and the version in the window title. A literal, not
+  `git describe`: that needs a `.git` directory *and* the git executable,
+  and the Windows setup path assumes only Python — a frozen build would
+  report "unknown" for the same commit that reads 3.6.3 in a checkout.
+  `--version` is answered in `main.py` before routing, so it means the
+  same thing on either side of `--cli` and needs no database.
+
+`help_content.py` still describes an **Agreement column** (`12/31`) that
+the v3.6 rewrite replaced with Rank; the sorting and context-menu bullets
+were updated here, that one was left for whoever re-reads the Find Similar
+help as a whole.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

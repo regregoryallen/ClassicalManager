@@ -147,7 +147,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         "which one am I looking at?" a real question; answering it in the
         title beats discovering the answer later.
         """
-        base = "Classical Music Playlist Manager"
+        from music_manager import __version__
+        base = f"Classical Music Playlist Manager {__version__}"
         try:
             from music_manager.core.config import resolve_db_settings
             settings = resolve_db_settings()

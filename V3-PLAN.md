@@ -6,8 +6,9 @@
   v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
   2026-08-05, 287 tests on SQLite / 293 on MariaDB), v3.6.1 (merged to
   `master` as `e054f8e`; branch `v3.7-dev` deleted afterwards).
-- **In progress: v3.6.2** on branch `v3.6.2-dev` — the database backend
-  is chosen in Settings; see the v3.6.2 section.
+- **v3.6.2 merged to `master` as `2742dc9`** (2026-08-11, 352 tests green
+  on SQLite) — the database backend is chosen in Settings; see the v3.6.2
+  section. **Not yet tagged**, and branch `v3.6.2-dev` not yet deleted.
 - **The version lives in three places and nowhere else**: the git tag,
   the heading in this file, and the docstrings of test modules added by
   that release. There is no `__version__` anywhere in the code, so a

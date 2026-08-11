@@ -395,6 +395,104 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
 
+## v3.6 — Similarity that measures what it claims to (tagged 2026-08-05)
+
+*Backfilled 2026-08-11 from the six commits in `v3.5.2..v3.6`, which is
+where the measured numbers below come from. v3.6 shipped without a
+section here; this records what changed, and the reasoning survives only
+as far as those commits carried it.*
+
+The theme is that several numbers Find Similar depended on were not
+measuring what their names said.
+
+**Feature vector v3, then v4.** Measured on the v2 vector across 20,000
+random pairs, timbre and register drove **74%** of every comparison while
+loudness and percussiveness drove **6%** — an accident of column count,
+since MFCC contributed 13 z-scored columns and loudness contributed 1.
+Features are now declared in `FEATURE_GROUPS`, each group normalised by
+`sqrt(size)` before its weight applies, so influence is a decision rather
+than a side effect. Register defaults to 0.6: cello and violin are close
+musically, but not when you specifically want violin.
+
+Two gaps closed with it. **Dynamic range replaced volatility**, which was
+`std/mean` of windowed RMS — a ratio, so a small mean inflated it and
+quiet music scored as highly dynamic. It correlated −0.39 with loudness;
+it was measuring quietness. It is now the dB difference between the 95th
+and 10th percentile of frame loudness, with mean loudness as a separate
+dimension so "how loud" and "how much it varies" stop being one
+confounded number. **Rhythm was entirely new** — tempo, onset rate, onset
+strength, zero-crossing rate. Correlation between v2 feature distance and
+tempo difference was 0.11: effectively blind.
+
+**HPSS removed.** `librosa.effects.harmonic` was 61–72% of analysis
+runtime and fed only tonnetz; computing tonnetz from the raw signal gives
+the same direction (cosine 0.998–0.999). A full re-analysis went from
+21.7 h to 6.9 h single-threaded while *gaining* features.
+
+**FEATURE_VERSION 4** came from gating silence out of the measurements.
+Six real tracks reported 150–186 dB of dynamic range — physically
+impossible — because any track with more than 10% silence put the 10th
+percentile in the digital-silence floor. The damage was not local:
+outliers at 186 dB against a median of 16.5 inflated that column's
+standard deviation by 30%, and z-scoring divides by it, so dynamic range
+had been counting about a third less than it should for *every* track.
+Frames more than 60 dB below the track's own peak are now excluded.
+
+**Scoring reworked.** Match % and Agreement both derived from the median
+distance among the seeds, which describes the seeds and says nothing
+about the library. Match % read 100% for all 2,000 results of a 5-seed
+search *and* all 2,000 of a 546-seed search. It is now a percentile of
+candidate distances — 99.5 means "closer than 99.5% of your library" —
+and each result carries its rank. Agreement saturated at both ends (0/4
+for every result in one search, 464/546 in another) and was removed;
+Blend now interpolates between distance to the nearest seed and mean
+distance to all seeds. Per-group weight sliders live in the Find Similar
+window, with rhythm split into tempo and attack — a regrouping of the
+same stored vector, so no re-analysis.
+
+Worth keeping: **seed-count-aware aggregation was planned and then not
+implemented.** Measuring it on v3 showed the features had already fixed
+most of the degradation from 4 seeds to 546, and mean-of-all actively
+hurt one profile. The evidence stopped supporting the plan.
+
+**MySQL concurrency.** `initialize_database` ran 49 queries — nine
+`create_tables`, three `get_columns`, the similarity `ensure_table`, two
+index inspections — on every GUI launch, CLI command and script. Free
+against SQLite; against a server with a second client connected it is
+metadata-lock contention on every table, and it wedged the instance
+twice, unkillable, needing a restart both times. A `schema_state` table
+now records the version the database was built to: **49 queries on first
+startup, 1 on every startup after.** Bumping `SCHEMA_VERSION` is how a
+future upgrade reaches an existing database. Separately, MySQL
+connections now use a `ReconnectMixin` — MariaDB's `wait_timeout` is 8
+hours and peewee holds one connection with no recovery, so a GUI left
+open overnight lost it.
+
+**Sidebar buttons tearing during scans.** `scan_status` was a `CTkLabel`
+created with no width, and its text is `[n/total] <filename>`, so every
+progress update changed the label's requested width to whatever file the
+scanner had reached — routinely wider than the 260px sidebar. That forced
+a pack re-layout of every sibling, and a CustomTkinter button repaints
+its whole rounded-rectangle canvas each time; the tearing was that
+repaint interrupted. `pack_propagate(False)` holds the frame but does
+nothing to stop a child asking for more. Fixed width plus truncation, and
+progress updates throttled to ~20/s.
+
+Recorded because it cost time: **the first two diagnoses were both
+wrong** — widget calls from the worker thread (already marshalled through
+`root.after`) and event-loop flooding (a scan over CIFS manages about
+twelve files a second; the arithmetic does not support it). The unbounded
+label was found by reading the widget construction, not by reasoning from
+the symptom.
+
+Also: the Find Similar dynamic-range filter still ran 0–1, correct for
+the old unitless ratio and wrong for dB — ticking it would have excluded
+every track. `SECONDS_PER_TRACK` dropped 10.5 → 3.1. And `-j/--workers`
+was missing from `main.py`'s `analyze-similarity` help line, which is the
+flag deciding whether analysis takes forty minutes or seven hours.
+
+Ended at 287 tests on SQLite, 293 on MariaDB.
+
 ## v3.7 — Bug fixes, and an MA export path that was already there (branch `v3.7-dev`, started 2026-08-09)
 
 Started as "add a Music Assistant export target". **It shipped as nothing

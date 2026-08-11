@@ -131,7 +131,3 @@ def tag(
         typer.echo(line)
 
     raise typer.Exit(1 if result.failed else 0)
-
-
-def main():
-    app()

@@ -401,6 +401,63 @@ def test_an_unknown_library_is_named_in_the_error(lib, tmp_path):
         work_db.collect_works(library_name="Nope")
 
 
+# ---------------------------------------------------------------------------
+# The entry point
+# ---------------------------------------------------------------------------
+
+def _declared_options():
+    """Every option string the typer command actually accepts."""
+    import inspect
+
+    from music_manager.loudness.cli import tag
+
+    names = set()
+    for parameter in inspect.signature(tag).parameters.values():
+        default = parameter.default
+        flags = [f for f in getattr(default, "param_decls", None) or []
+                 if f.startswith("-")]
+        names.update(flags or [f"--{parameter.name.replace('_', '-')}"])
+    return names
+
+
+def test_the_help_documents_every_flag():
+    """main.py's help lost -j/--workers once; this stops a repeat.
+
+    That flag decided whether analysis took forty minutes or seven hours,
+    and it was missing from the help line for a whole release.
+    """
+    import rgtag
+
+    undocumented = {flag for flag in _declared_options()
+                    if flag not in rgtag._HELP}
+
+    assert not undocumented
+
+
+def test_the_help_documents_every_tag_written():
+    """The tag list in the help is the tool's contract with other players."""
+    import rgtag
+
+    for name in (tagio.TRACK_GAIN, tagio.TRACK_PEAK, tagio.ALBUM_GAIN,
+                 tagio.ALBUM_PEAK, tagio.REFERENCE, tagio.GAIN_SCOPE,
+                 tagio.WORK_KEY, tagio.VERSION):
+        assert name in rgtag._HELP
+
+
+def test_version_is_read_without_importing_the_package():
+    """--version must work from an interpreter with no dependencies."""
+    import re
+    import subprocess
+    import sys
+
+    result = subprocess.run([sys.executable, "rgtag.py", "--version"],
+                            capture_output=True, text=True)
+
+    from music_manager import __version__
+    assert result.returncode == 0
+    assert re.search(rf"\b{re.escape(__version__)}$", result.stdout.strip())
+
+
 def test_absolute_paths_are_built_from_the_source_folder(lib, tmp_path):
     make_work(lib, tmp_path, "W", ["sub/a.flac"])
 

@@ -2,13 +2,15 @@
 
 ## Status (keep this section current)
 
-- **Released and tagged: v3.0 through v3.6.1.** Tag lineage: v1.0, v2.0,
+- **Released and tagged: v3.0 through v3.6.2.** Tag lineage: v1.0, v2.0,
   v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
-  2026-08-05, 287 tests on SQLite / 293 on MariaDB), v3.6.1 (merged to
-  `master` as `e054f8e`; branch `v3.7-dev` deleted afterwards).
-- **v3.6.2 merged to `master` as `2742dc9`** (2026-08-11, 352 tests green
-  on SQLite) — the database backend is chosen in Settings; see the v3.6.2
-  section. **Not yet tagged**, and branch `v3.6.2-dev` not yet deleted.
+  2026-08-05, 287 tests on SQLite / 293 on MariaDB), v3.6.1 (merged as
+  `e054f8e`), v3.6.2 (merged as `2742dc9` on 2026-08-11, 352 tests green
+  on SQLite — the database backend is chosen in Settings; see that
+  section). Both branches deleted after merging, as is the convention.
+- **Nothing in progress.** Still to come from the loudness/MA programme:
+  the loudness analysis and the work-scoped ReplayGain tagger, each with
+  its own version.
 - **The version lives in three places and nowhere else**: the git tag,
   the heading in this file, and the docstrings of test modules added by
   that release. There is no `__version__` anywhere in the code, so a

@@ -483,6 +483,94 @@ def test_an_uninterrupted_run_is_not_marked_interrupted(monkeypatch):
     assert len(result.outcomes) == 4
 
 
+def clipping_outcome(work_id, size, today, tagged):
+    """An outcome carrying only what the clipping report reads."""
+    from music_manager.loudness import runner
+
+    job = work_db.WorkJob(work_id=work_id, work_name=f"W{work_id}",
+                          source="mb_workid", album_title="A",
+                          paths=[f"/m/{work_id}-{i}.flac" for i in range(size)],
+                          relative_paths=[f"{work_id}-{i}.flac"
+                                          for i in range(size)])
+    return runner.WorkOutcome(
+        job=job, measurement=measurement([-20.0] * size),
+        exposed=tagged > MA_LIMITER_DBFS, peak_dbfs=tagged,
+        per_track_peak_dbfs=today)
+
+
+def clipping_report(outcomes):
+    from music_manager.loudness import report as reporting
+    from music_manager.loudness import runner
+
+    result = runner.RunResult(selection=fake_selection(0))
+    result.outcomes = outcomes
+    return "\n".join(reporting.render(result))
+
+
+def test_single_track_exposure_is_named_as_pre_existing():
+    """Most exposed works are single-track and clip today regardless.
+
+    Reporting them as though tagging caused it made a 2,287-work list
+    that hid the ~80 works the decision actually turns on.
+    """
+    text = clipping_report([clipping_outcome(i, 1, 5.0, 5.0)
+                            for i in range(30)])
+
+    assert "30 of those are single-track works" in text
+    assert "clip identically today" in text
+    assert "Made worse by work-scoping" not in text
+
+
+def test_the_regression_table_lists_only_works_made_worse():
+    text = clipping_report([
+        clipping_outcome(1, 3, today=0.0, tagged=4.0),    # worse by 4
+        clipping_outcome(2, 3, today=6.0, tagged=1.0),    # better
+        clipping_outcome(3, 1, today=9.0, tagged=9.0),    # single track
+    ])
+
+    assert "Made worse by work-scoping" in text
+    table = text.split("Made worse by work-scoping")[1]
+    assert " 1 " in table
+    assert "W1" in table
+    assert "W2" not in table
+    assert "W3" not in table
+
+
+def test_regressions_are_sorted_by_how_much_worse():
+    text = clipping_report([
+        clipping_outcome(1, 2, today=0.0, tagged=1.0),
+        clipping_outcome(2, 2, today=0.0, tagged=8.0),
+        clipping_outcome(3, 2, today=0.0, tagged=4.0),
+    ])
+
+    table = text.split("Made worse by work-scoping")[1]
+    assert [w for w in ("W1", "W2", "W3") if w in table] == ["W1", "W2", "W3"]
+    assert table.index("W2") < table.index("W3") < table.index("W1")
+
+
+def test_newly_exposed_works_are_called_out():
+    """Under the limiter today, over it after tagging.
+
+    The only group where this tool creates a problem rather than
+    inheriting or reducing one.
+    """
+    text = clipping_report([
+        clipping_outcome(1, 2, today=-6.0, tagged=2.0),   # newly exposed
+        clipping_outcome(2, 2, today=3.0, tagged=5.0),    # already exposed
+    ])
+
+    assert "1 of those are newly exposed" in text
+    table = text.split("Made worse by work-scoping")[1]
+    assert "yes" in table
+
+
+def test_a_run_with_no_regressions_prints_no_table():
+    text = clipping_report([clipping_outcome(1, 3, today=8.0, tagged=2.0)])
+
+    assert "1 peak lower than they do today" in text
+    assert "Made worse by work-scoping" not in text
+
+
 def test_the_report_says_a_run_was_interrupted():
     from music_manager.loudness import report as reporting
     from music_manager.loudness import runner

@@ -86,7 +86,15 @@ def render(result, verbose=False, max_rows=20):
 
 
 def _clipping_section(result, max_rows):
-    """Works whose playback peak meets MA's limiter."""
+    """Works whose playback peak meets MA's limiter.
+
+    Sorting this by absolute peak buries the only part that is a
+    decision. Most exposed works are single-track, where work gain *is*
+    track gain and MA already normalizes them exactly this way — they
+    clip today and will clip identically after tagging. What this tool
+    changes is the multi-track works, and what matters among those is the
+    ones it makes worse.
+    """
     measured = [o for o in result.outcomes if o.measurement is not None]
     if not measured:
         return []
@@ -99,26 +107,54 @@ def _clipping_section(result, max_rows):
     if not exposed:
         return lines
 
-    # Only multi-track works can differ: a standalone work's gain *is*
-    # its track gain, so work-scoped and per-track are the same number.
-    multi = [o for o in exposed if o.job.size > 1]
-    better = sum(1 for o in multi if o.peak_dbfs < o.per_track_peak_dbfs - 0.05)
-    worse = sum(1 for o in multi if o.peak_dbfs > o.per_track_peak_dbfs + 0.05)
-    if multi:
-        lines.append(
-            f"  of the {len(multi)} multi-track work(s) among them, "
-            f"{better} peak lower than they do today untagged and {worse} "
-            f"higher — MA normalizes per track now")
-        lines.append("  (single-track works are identical either way)")
+    single = [o for o in exposed if o.job.size == 1]
+    if single:
+        lines.append(f"  {len(single)} of those are single-track works that MA "
+                     f"already normalizes this way —")
+        lines.append("    they clip identically today; tagging changes "
+                     "nothing for them")
+
+    multi = [o for o in measured if o.job.size > 1]
+    changed = [o for o in multi
+               if abs(o.peak_dbfs - o.per_track_peak_dbfs) > 0.05]
+    worse = sorted((o for o in changed if o.peak_dbfs > o.per_track_peak_dbfs),
+                   key=lambda o: o.peak_dbfs - o.per_track_peak_dbfs,
+                   reverse=True)
+    better = [o for o in changed if o.peak_dbfs < o.per_track_peak_dbfs]
+
     lines.append("")
-    lines.append(f"  {'work':>6}  {'work-scoped':>11}  {'per-track':>9}  name")
-    for outcome in exposed[:max_rows]:
+    lines.append(f"  Multi-track works, where work-scoping changes the "
+                 f"answer: {len(multi)}")
+    lines.append(f"    {len(better):5d} peak lower than they do today")
+    lines.append(f"    {len(worse):5d} peak higher than they do today")
+
+    # The sharpest category: under the limiter today, over it after
+    # tagging. This is the only group where the tool creates a problem
+    # rather than inheriting or reducing one.
+    newly = [o for o in worse
+             if o.per_track_peak_dbfs <= MA_LIMITER_DBFS
+             and o.peak_dbfs > MA_LIMITER_DBFS]
+    if newly:
+        lines.append(f"    {len(newly):5d} of those are newly exposed — under "
+                     f"the limiter today, over it after tagging")
+
+    if not worse:
+        return lines
+
+    lines.append("")
+    lines.append("  Made worse by work-scoping (worst first):")
+    lines.append(f"  {'work':>6}  {'today':>6}  {'tagged':>7}  {'change':>7}  "
+                 f"{'new?':>4}  name")
+    newly_ids = {id(o) for o in newly}
+    for outcome in worse[:max_rows]:
+        delta = outcome.peak_dbfs - outcome.per_track_peak_dbfs
+        flag = "yes" if id(outcome) in newly_ids else ""
         lines.append(
-            f"  {outcome.job.work_id:6d}  {outcome.peak_dbfs:+10.1f}  "
-            f"{outcome.per_track_peak_dbfs:+8.1f}  "
-            f"{_truncate(outcome.job.work_name, 44)}")
-    if len(exposed) > max_rows:
-        lines.append(f"  ... and {len(exposed) - max_rows} more")
+            f"  {outcome.job.work_id:6d}  {outcome.per_track_peak_dbfs:+6.1f}  "
+            f"{outcome.peak_dbfs:+7.1f}  {delta:+7.1f}  {flag:>4}  "
+            f"{_truncate(outcome.job.work_name, 40)}")
+    if len(worse) > max_rows:
+        lines.append(f"  ... and {len(worse) - max_rows} more")
     return lines
 
 

@@ -10,9 +10,10 @@
   section), v3.6.3 (2026-08-11, 361 tests green on SQLite — four small
   tweaks; see that section). Branches deleted after merging, as is the
   convention.
-- **Nothing in progress.** Still to come from the loudness/MA programme:
-  the loudness analysis and the work-scoped ReplayGain tagger, each with
-  its own version.
+- **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
+  `v3.7-dev`, started 2026-08-11; see that section). Still to come from the
+  loudness/MA programme after it: the loudness analysis for sleep-playlist
+  curation, with its own version.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -709,6 +710,115 @@ Four items off the user's list, one commit.
 the v3.6 rewrite replaced with Rank; the sorting and context-menu bullets
 were updated here, that one was left for whoever re-reads the Find Similar
 help as a whole.
+
+## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
+
+Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;
+measured MA behaviour, which is binding: `no_git/CM-MA-findings.md`.
+
+MA applies `REPLAYGAIN_ALBUM_GAIN` in playlist context, and every existing
+scanner scopes album gain to the *folder*. For classical repertoire the
+loudness unit is the **Work**, not the disc. This tool writes work-scoped
+gain into `ALBUM_GAIN` so a symphony sits on MA's target as a whole while
+its movements keep their relative levels.
+
+It is a **separate entry point** (`rgtag.py`), not a CM feature: it is the
+only component needing an external scanner binary, it runs per acquisition
+rather than continuously, and keeping it outside the app answers the parent
+document's "does this open the V2 tag-writeback door?" by construction.
+
+### Task 0 — the checks the handoff demanded before any design
+
+Following the v3.6.1 lesson: check what already satisfies the requirement
+before building to it. All three checks were run against the live library.
+
+**Can an existing scanner be told what a work is? Yes.** `rsgain custom`
+takes an explicit file list and treats *that list* as the album unit —
+directory scoping belongs to `easy` mode alone. Verified by measurement,
+not just by the man page: across the 20-work sample, rsgain's album
+loudness matched an independent `ffmpeg ebur128` measurement of the
+concatenated audio to within **0.04 dB**, which is entirely ffmpeg's 0.1 dB
+print resolution. `-s s` changed 0 of 75 mtimes. So this project is an
+orchestrator, and the `ffmpeg` + hand-rolled-R128 design in the handoff
+does not get built.
+
+**Provenance distribution** (MainMusic: 5,519 works / 7,279 tracks):
+
+| work_source | works | tracks | multi-track works |
+|---|---:|---:|---:|
+| standalone | 3,804 | 3,804 | 0 |
+| mb_workid | 1,430 | 2,201 | ~235 |
+| heuristic | 165 | 815 | 165 |
+| override | 85 | 278 | 85 |
+| work_tag | 35 | 181 | 33 |
+
+No `import` works exist. Two facts reframe the job: **only ~519 works are
+multi-track**, so for everyone else `W == G_m` and this writes plain
+ReplayGain; and **`heuristic` is 165 works, every one multi-track** — a
+third of the works the feature actually exists for. Excluding it is not the
+free choice the handoff assumed, so it sits behind `--include-heuristic`,
+default off, and the dry-run report is how those groupings get reviewed.
+
+**Speed, measured not estimated.** rsgain computes track and album gain in
+one pass, so the handoff's N+1 passes are N: **0.16 s per audio-minute**
+against the 20-work sample. The library is 31,111 audio-minutes → **1.37 h
+serial, ~10 min at 8 workers**. (The `ffmpeg` design measured 0.46 s per
+audio-minute, 3.96 h serial — recorded because it is the number the
+handoff's own design would have cost.)
+
+### Three things the handoff did not anticipate
+
+- **The library is 86% MP3** — 6,335 mp3, 1,004 flac, 31 m4a, 7 ape. §4 of
+  the handoff assumed "FLAC is probably the only case" and would skip any
+  work containing a non-FLAC file, which is 322 of the 519 multi-track
+  works. Scope is FLAC **and** MP3. No work mixes formats, which is what
+  makes a per-format writer tractable. m4a and ape are skipped and reported.
+- **673 files already carry ReplayGain tags** (405 FLAC, 268 MP3), written
+  with **lowercase** keys. Vorbis comment keys are case-insensitive so FLAC
+  is safe; **ID3v2 `TXXX` descriptions are not**, so writing uppercase onto
+  those 268 MP3s would leave two conflicting frames per tag. The writer
+  deletes by case-insensitive match before writing, and there is a test
+  pinning exactly that.
+- **The clipping report fires almost everywhere, and handoff §7's
+  correction is confirmed.** At MA's -17 LUFS target, 17 of the 20 sample
+  works exceed the -1.5 dBFS limiter — but the *untagged status quo* is
+  worse on 14 of them, because MA measures per track today (work 5508:
+  +1.8 dBFS work-scoped against **+7.0** per-track). The limiter is already
+  engaging on this library; work gain reduces exposure rather than adding
+  it. The report prints both figures side by side so that stays visible.
+
+### Design decisions
+
+- **rsgain measures, CM writes.** rsgain runs scan-only (`-s s -O`) for the
+  numbers; every tag is written by one `mutagen` pass of ours. Two writers
+  per file would have split idempotency, mtime handling and the
+  lowercase-collision fix across a binary we do not control — and rsgain
+  cannot write the `CM_GAIN_*` state tags at all.
+- **`-c n`** — rsgain's clipping protection stays off. It would silently
+  adjust the gains; clipping is *reported*, not applied.
+- **`-l -18`**, the ReplayGain 2.0 reference. Decoupled from MA's target
+  because MA re-targets rather than applying the tag verbatim, so MA's
+  target can change later without retagging.
+- **Dry-run is the default**; `--write` is required to touch a file. The
+  inverse of CM's usual convention, deliberately: ~7,000 irreplaceable files.
+- **The tool reads CM's database and never writes it.** No new tables, no
+  columns, no migration; state lives in the files as `CM_GAIN_WORK_KEY`
+  (a digest of ordered member paths) and `CM_GAIN_VERSION`. It connects
+  without running DDL — a second process creating tables against the live
+  server is exactly the metadata-lock contention v3.6 fixed.
+- **No new Python dependencies.** `mutagen`, `typer` and `peewee` are
+  already in `requirements.txt`; `rsgain` is a documented runtime
+  prerequisite of this tool alone, and the packaged Windows app never sees
+  it.
+
+### Open risk
+
+**Whether MA reads ID3v2 `TXXX:REPLAYGAIN_*` on MP3 is untested.**
+`CM-MA-findings.md` §7 lists formats other than FLAC as not covered, and
+MP3 is now 86% of the library and 62% of the multi-track works. Settled by
+playing one MP3 work and one FLAC work through MA's audio-pipeline view. If
+MA ignores MP3 ReplayGain the tags remain correct for Kodi, but the MA half
+of the design would cover only 1,004 files.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

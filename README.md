@@ -173,11 +173,47 @@ Works are detected using a five-step precedence chain:
 4. **Title-prefix heuristic** — contiguous tracks whose titles share a common prefix with movement markers
 5. **Standalone** — remaining tracks become single-track works
 
+## Work-scoped ReplayGain (Linux, optional)
+
+`rgtag.py` writes ReplayGain tags scoped to the **work** rather than the album
+folder, so a symphony is normalized as one unit and its movements keep their
+relative levels. It is a separate tool, not part of the application: it is the
+only thing here that writes to your audio files.
+
+It needs [rsgain](https://github.com/complexlogic/rsgain), which the application
+itself does not:
+
+```bash
+sudo apt install rsgain
+```
+
+**Dry-run is the default — nothing is written without `--write`.**
+
+```bash
+# See what would happen across the whole library, including which
+# groupings were excluded as untrustworthy and which works are
+# predicted to clip on playback:
+./rgtag.py --library "My Collection"
+
+# Tag copies in a scratch directory first, leaving the library untouched:
+./rgtag.py --library "My Collection" --limit 5 --sandbox /tmp/rgtest
+
+# Then, for real:
+./rgtag.py --library "My Collection" --limit 5 --write
+```
+
+`REPLAYGAIN_TRACK_GAIN` keeps its ordinary per-track meaning, so Kodi and other
+players are unaffected; the work gain rides in `REPLAYGAIN_ALBUM_GAIN`. Works
+whose grouping was guessed by the title-prefix heuristic are excluded unless you
+pass `--include-heuristic` — review them in the dry-run report first, because a
+wrong grouping writes a wrong gain into files.
+
 ## Requirements
 
 - Python 3.12+
 - Tkinter (included on Windows/macOS; `sudo apt install python3-tk` on Debian/Ubuntu)
 - Optional on Linux: `zenity` or `kdialog` for native file dialogs
+- Optional on Linux: `rsgain`, needed only by `rgtag.py` (see above)
 
 ## Documentation
 

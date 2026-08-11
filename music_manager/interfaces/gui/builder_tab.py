@@ -633,8 +633,6 @@ class BuilderTabMixin:
                       command=self._export_json).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Push to Plex", width=110,
                       command=self._push_plex).pack(side="left", padx=4)
-        ctk.CTkButton(bot, text="Publish", width=110,
-                      command=self._publish_playlist).pack(side="left", padx=4)
         ctk.CTkButton(bot, text="Find Similar", width=110,
                       command=self._find_similar_tracks).pack(side="left", padx=4)
 
@@ -1517,40 +1515,6 @@ class BuilderTabMixin:
                                    f"({result.track_count} tracks)")
             except (PlexConnectionError, PlexPushError) as exc:
                 messagebox.showerror("Plex Error", str(exc))
-            except Exception as exc:
-                messagebox.showerror("Error", str(exc))
-            finally:
-                self._delete_temp_profile(profile)
-
-    def _publish_playlist(self):
-        """Write the playlist to the configured publish folder.
-
-        This is a push to a configured destination, not a save-as: the
-        folder is fixed in config because something else watches it, so
-        there is no file dialog.  Export M3U remains the save-as.
-        """
-        self._save_before_export()
-        profile = self._build_temp_profile()
-        if not profile:
-            return
-
-        with self._busy():
-            try:
-                from music_manager.core.engine import generate_playlist
-                from music_manager.core.serializers.publish import (
-                    PublishError, publish_playlist)
-
-                result = generate_playlist(profile)
-                # The temp profile is named '__temp_...'; the playlist file
-                # takes the name the user typed, as the CLI does.
-                display_name = self.profile_name_entry.get().strip() or "Untitled"
-                output_path = publish_playlist(result.playlist, display_name)
-                messagebox.showinfo(
-                    "Publish",
-                    f"Wrote '{display_name}' ({result.track_count} tracks) to:\n"
-                    f"{output_path}")
-            except PublishError as exc:
-                messagebox.showerror("Publish", str(exc))
             except Exception as exc:
                 messagebox.showerror("Error", str(exc))
             finally:

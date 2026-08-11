@@ -17,7 +17,7 @@ from tkinter import messagebox, ttk
 from music_manager.interfaces import filedialog
 from pathlib import Path
 
-from music_manager.core.config import PUBLISH_DEFAULT_PATH_STYLE, PROJECT_ROOT
+from music_manager.core.config import PROJECT_ROOT
 from music_manager.interfaces.gui.common import (
     _PREFS_PATH, _load_prefs, _save_prefs, _ScanCancelled, _GUILogHandler,
 )
@@ -65,22 +65,7 @@ def apply_settings_fields(config: dict, fields: dict) -> dict:
     # -- M3U --
     m3u_cfg = targets.setdefault("m3u", {})
     m3u_cfg["path_style"] = fields["m3u_path_style"]
-    m3u_cfg["base_path"] = fields["m3u_base_path"]
     m3u_cfg["path_rules"] = fields["m3u_path_rules"]
-
-    # -- Publish --
-    # A publish folder is what enables publishing; there is no separate
-    # flag. Only written once there is something to say, so an untouched
-    # dialog does not add an empty block to a config that never had one.
-    folder = fields["publish_output_dir"]
-    if folder or "publish" in m3u_cfg:
-        publish_cfg = m3u_cfg.setdefault("publish", {})
-        if folder:
-            publish_cfg["output_dir"] = folder
-        else:
-            publish_cfg.pop("output_dir", None)
-        publish_cfg["path_style"] = (fields["publish_path_style"]
-                                     or PUBLISH_DEFAULT_PATH_STYLE)
 
     # -- Database path -- (stored in config.json, requires a restart)
     if fields["db_path"]:
@@ -255,7 +240,6 @@ class DialogsMixin:
 
         plex = config.get("targets", {}).get("plex", {})
         m3u = config.get("targets", {}).get("m3u", {})
-        published = config.get("targets", {}).get("m3u", {}).get("publish", {})
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Settings")
@@ -289,12 +273,25 @@ class DialogsMixin:
             row += 1
             return entry
 
-        def add_browse_field(label, value="", width=350):
+        def add_browse_field(label, value="", width=310):
+            """A text field with a Browse button beside it.
+
+            The entry and the button share one cell, in their own frame.
+            Gridding the button into column 2 put it off the right edge:
+            the plain add_field rows span columns 1-2 with a 400px entry,
+            which stretches column 2 past the visible width of the
+            scrollable frame, and there is no horizontal scrollbar to
+            reach it.  Nothing here depends on column widths now.
+            """
             nonlocal row
             ctk.CTkLabel(frame, text=label).grid(
                 row=row, column=0, sticky="w", padx=(20, 5), pady=3)
-            entry = ctk.CTkEntry(frame, width=width)
-            entry.grid(row=row, column=1, sticky="w", padx=5, pady=3)
+
+            holder = ctk.CTkFrame(frame, fg_color="transparent")
+            holder.grid(row=row, column=1, columnspan=2, sticky="w",
+                        padx=5, pady=3)
+            entry = ctk.CTkEntry(holder, width=width)
+            entry.pack(side="left")
             if value:
                 entry.insert(0, str(value))
 
@@ -309,32 +306,8 @@ class DialogsMixin:
                     entry.delete(0, "end")
                     entry.insert(0, path)
 
-            ctk.CTkButton(frame, text="...", width=30,
-                          command=browse).grid(
-                row=row, column=2, padx=5, pady=3)
-            row += 1
-            return entry
-
-        def add_dir_field(label, value="", width=350):
-            nonlocal row
-            ctk.CTkLabel(frame, text=label).grid(
-                row=row, column=0, sticky="w", padx=(20, 5), pady=3)
-            entry = ctk.CTkEntry(frame, width=width)
-            entry.grid(row=row, column=1, sticky="w", padx=5, pady=3)
-            if value:
-                entry.insert(0, str(value))
-
-            def browse():
-                path = filedialog.askdirectory(
-                    title=f"Select {label}", parent=dlg,
-                    initialdir=entry.get().strip() or None)
-                if path:
-                    entry.delete(0, "end")
-                    entry.insert(0, path)
-
-            ctk.CTkButton(frame, text="...", width=30,
-                          command=browse).grid(
-                row=row, column=2, padx=5, pady=3)
+            ctk.CTkButton(holder, text="Browse…", width=80,
+                          command=browse).pack(side="left", padx=(6, 0))
             row += 1
             return entry
 
@@ -387,7 +360,6 @@ class DialogsMixin:
                        padx=5, pady=3)
         m3u_style.set(m3u.get("path_style", "absolute"))
         row += 1
-        m3u_base = add_field("Base Path", m3u.get("base_path", ""))
 
         # M3U path rules
         add_section("M3U Path Rules")
@@ -405,35 +377,6 @@ class DialogsMixin:
         for mr in m3u.get("path_rules", []):
             m3u_rules_text.insert("end",
                                   f"{mr['find']} -> {mr['replace']}\n")
-        row += 1
-
-        # -- Publish --
-        # Setting a folder is what enables publishing; there is no flag.
-        add_section("Publish Playlists")
-        publish_output = add_dir_field("Publish Folder",
-                                       published.get("output_dir", ""))
-        ctk.CTkLabel(frame,
-                     text="(A folder something else watches, e.g. a Music "
-                          "Assistant File System provider. Empty disables it. "
-                          "MA skips folder names starting with '_'.)",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=30, pady=0)
-        row += 1
-        publish_style = ctk.CTkComboBox(
-            frame, values=["relative_to_playlist", "absolute"], width=200)
-        ctk.CTkLabel(frame, text="Path Style").grid(
-            row=row, column=0, sticky="w", padx=(20, 5), pady=3)
-        publish_style.grid(row=row, column=1, columnspan=2, sticky="w",
-                           padx=5, pady=3)
-        publish_style.set(published.get("path_style",
-                                        PUBLISH_DEFAULT_PATH_STYLE))
-        row += 1
-        ctk.CTkLabel(frame,
-                     text="(Relative survives the watcher seeing the share at "
-                          "a different mount point. Absolute needs a path rule "
-                          "to rewrite the prefix.)",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=30, pady=0)
         row += 1
 
         # -- Buttons --
@@ -461,10 +404,7 @@ class DialogsMixin:
                 "plex_music_section": plex_section_default.get().strip(),
                 "plex_path_rules": parse_rules(plex_rules_text),
                 "m3u_path_style": m3u_style.get(),
-                "m3u_base_path": m3u_base.get().strip(),
                 "m3u_path_rules": parse_rules(m3u_rules_text),
-                "publish_output_dir": publish_output.get().strip(),
-                "publish_path_style": publish_style.get(),
                 "db_path": db_entry.get().strip(),
             }
             new_config = apply_settings_fields(config, fields)

@@ -156,19 +156,12 @@ class JobManager:
                                "--format", "m3u", "--output",
                                os.path.join(self._m3u_output_dir,
                                             f"{safe_name}.m3u")] + q
-            # Publishing derives its own output path from
-            # targets.m3u.publish.output_dir, so no path is passed and
-            # nothing here needs sanitizing for the filesystem.
-            publish_args = base + ["generate", "--profile", profile,
-                                   "--publish"] + q
         else:
             plex_args = base + ["generate-all", "--library", self._library,
                                 "--target", "plex"] + q
             m3u_args = base + ["generate-all", "--library", self._library,
                                "--format", "m3u",
                                "--output-dir", self._m3u_output_dir] + q
-            publish_args = base + ["generate-all", "--library", self._library,
-                                   "--publish"] + q
 
         steps = {
             "plex": [plex_args],
@@ -176,8 +169,6 @@ class JobManager:
             "scan+plex": [scan_args, plex_args],
             "m3u": [m3u_args],
             "scan+m3u": [scan_args, m3u_args],
-            "publish": [publish_args],
-            "scan+publish": [scan_args, publish_args],
         }
         return steps[command]
 

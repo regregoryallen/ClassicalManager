@@ -652,7 +652,7 @@ print(json.dumps(cfg, indent=2))
 
     # --- M3U target ---
     local cfg_m3u_enabled=0
-    local cfg_m3u_style="" cfg_m3u_base="" cfg_m3u_rules="[]"
+    local cfg_m3u_style="" cfg_m3u_rules="[]"
 
     echo -e "${BOLD}M3U Export${RESET}"
     echo "  Generate .m3u playlist files for use in other music players."
@@ -670,11 +670,6 @@ print(json.dumps(cfg, indent=2))
             2|relative_to_playlist|relative) cfg_m3u_style="relative_to_playlist" ;;
             *)                     cfg_m3u_style="absolute" ;;
         esac
-
-        echo ""
-        echo "  Base path is an optional prefix prepended to absolute paths in M3U files."
-        echo "  Leave empty unless your player expects a specific root path."
-        ask "Base path" cfg_m3u_base ""
 
         echo ""
         if ask_yn "Add M3U path rewrite rules?" "n"; then
@@ -742,7 +737,6 @@ print(json.dumps(cfg, indent=2))
     CFG_PLEX_RULES="$cfg_plex_rules" \
     CFG_M3U_ENABLED="$cfg_m3u_enabled" \
     CFG_M3U_STYLE="$cfg_m3u_style" \
-    CFG_M3U_BASE="$cfg_m3u_base" \
     CFG_M3U_RULES="$cfg_m3u_rules" \
     CFG_CRON_ENABLED="$cfg_cron_enabled" \
     CFG_CRON_LIBRARY="$cfg_cron_library" \
@@ -800,7 +794,6 @@ if os.environ.get('CFG_PLEX_ENABLED') == '1':
 if os.environ.get('CFG_M3U_ENABLED') == '1':
     m3u = {
         'path_style': os.environ.get('CFG_M3U_STYLE', 'absolute'),
-        'base_path': os.environ.get('CFG_M3U_BASE', ''),
         'path_rules': json.loads(os.environ.get('CFG_M3U_RULES', '[]'))
     }
     config['targets']['m3u'] = m3u

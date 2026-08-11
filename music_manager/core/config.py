@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -18,14 +18,6 @@ logger = logging.getLogger(__name__)
 VALID_BACKENDS = ("sqlite", "mysql")
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_CHARSET = "utf8mb4"
-
-# Whatever watches the publish folder usually sees the share at a different
-# mount point than CM does — Home Assistant fixes Music Assistant's at
-# /media/MediaLib and does not expose it — so absolute paths would have to be
-# written in the watcher's terms. A relative path inside the library is
-# identical from either, and is the only form measured against MA. Absolute
-# with path_rules rewriting the prefix works too, but is unmeasured.
-PUBLISH_DEFAULT_PATH_STYLE = "relative_to_playlist"
 
 # Resolve project root (two levels up from this file)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -345,14 +337,8 @@ def _validate_plex(plex: dict, path: Path) -> None:
     _validate_path_rules(plex.get("path_rules", []), "targets.plex.path_rules", path)
 
 
-def _validate_m3u(m3u: dict, context: str, path: Path,
-                  default_style: str = "absolute") -> list[str]:
-    """Validate an M3U-shaped target section.
-
-    Shared by 'targets.m3u' and its 'publish' block, which take the same
-    serializer options; `context` names the section in messages and
-    `default_style` is the path_style that target applies when the key is
-    absent, so the inert-key warning reasons about the effective value.
+def _validate_m3u(m3u: dict, context: str, path: Path) -> list[str]:
+    """Validate the m3u target section.
 
     Returns:
         Warnings for settings that are valid but inert.
@@ -360,7 +346,7 @@ def _validate_m3u(m3u: dict, context: str, path: Path,
     if not isinstance(m3u, dict):
         raise ConfigError(f"{path}: '{context}' must be a JSON object")
 
-    path_style = m3u.get("path_style", default_style)
+    path_style = m3u.get("path_style", "absolute")
     if "path_style" in m3u:
         valid_styles = {"absolute", "relative_to_playlist"}
         if path_style not in valid_styles:
@@ -369,62 +355,29 @@ def _validate_m3u(m3u: dict, context: str, path: Path,
                 f"{valid_styles}, got {path_style!r}"
             )
 
-    if "base_path" in m3u and not isinstance(m3u["base_path"], str):
-        raise ConfigError(
-            f"{path}: '{context}.base_path' must be a string"
-        )
-
     _validate_path_rules(m3u.get("path_rules", []), f"{context}.path_rules", path)
 
-    # Relative mode takes a different branch in m3u.py and never calls
-    # realize_path, so path_rules and base_path are silently ignored.
     warnings: list[str] = []
-    if path_style == "relative_to_playlist":
-        inert = [key for key in ("path_rules", "base_path") if m3u.get(key)]
-        if inert:
-            warnings.append(
-                f"'{context}' sets {' and '.join(inert)} together with "
-                f"path_style 'relative_to_playlist', which ignores them. "
-                f"Relative paths need no rewriting; remove the unused keys "
-                f"or switch to path_style 'absolute'."
-            )
 
-    # The publish sub-section takes the same keys plus output_dir, and is
-    # only nested one level — a publish block inside a publish block is a
-    # mistake, not a feature.
-    if "publish" in m3u and context.endswith(".m3u"):
-        warnings += _validate_publish(m3u["publish"], f"{context}.publish", path)
-
-    return warnings
-
-
-def _validate_publish(published: dict, context: str, path: Path) -> list[str]:
-    """Validate the publish sub-section of the M3U target.
-
-    Returns:
-        Warnings for settings that are valid but inert, or that would make
-        the published playlists invisible to whatever watches the folder.
-    """
-    if not isinstance(published, dict):
-        raise ConfigError(f"{path}: '{context}' must be a JSON object")
-
-    output_dir = published.get("output_dir")
-    if output_dir is not None and not isinstance(output_dir, str):
-        raise ConfigError(
-            f"{path}: '{context}.output_dir' must be a string, "
-            f"got {type(output_dir).__name__}"
+    # Relative mode takes a different branch in m3u.py and never calls
+    # realize_path, so path_rules are silently ignored.
+    if path_style == "relative_to_playlist" and m3u.get("path_rules"):
+        warnings.append(
+            f"'{context}' sets path_rules together with path_style "
+            f"'relative_to_playlist', which ignores them. Relative paths "
+            f"need no rewriting; remove path_rules or switch to path_style "
+            f"'absolute'."
         )
 
-    warnings = _validate_m3u(published, context, path,
-                             default_style=PUBLISH_DEFAULT_PATH_STYLE)
-
-    # Music Assistant's scanner skips directories whose name starts with an
-    # underscore, so playlists written there are never imported (measured).
-    if PurePosixPath(output_dir or "").name.startswith("_"):
+    # base_path was removed in v3.7: it prepended a prefix to absolute
+    # paths, was inert in relative mode, and was mistaken for an output
+    # directory. Left as a warning rather than an error so a config that
+    # still carries it keeps loading.
+    if m3u.get("base_path"):
         warnings.append(
-            f"'{context}.output_dir' is {output_dir!r}, whose final "
-            f"directory begins with '_'. Music Assistant skips those when "
-            f"scanning, so playlists published there are never imported."
+            f"'{context}.base_path' is no longer applied and can be removed. "
+            f"To rewrite paths for another machine, use path_rules with "
+            f"path_style 'absolute'."
         )
 
     return warnings
@@ -454,8 +407,7 @@ def _validate_cron(cron: dict, path: Path) -> None:
     if not isinstance(cron, dict):
         raise ConfigError(f"{path}: 'cron' must be a JSON object")
 
-    valid_modes = {"plex", "m3u", "publish", "scan", "scan+plex",
-                   "scan+m3u", "scan+publish"}
+    valid_modes = {"plex", "m3u", "scan", "scan+plex", "scan+m3u"}
     if "mode" in cron and cron["mode"] not in valid_modes:
         raise ConfigError(
             f"{path}: 'cron.mode' must be one of {valid_modes}, "
@@ -496,8 +448,8 @@ def _validate_webhook(webhook: dict, path: Path) -> None:
             raise ConfigError(
                 f"{path}: 'webhook.allowed_commands' must be a list"
             )
-        valid_cmds = {"plex", "m3u", "publish", "scan", "scan+plex",
-                      "scan+m3u", "scan+publish", "exclude-track"}
+        valid_cmds = {"plex", "m3u", "scan", "scan+plex", "scan+m3u",
+                      "exclude-track"}
         for cmd in cmds:
             if cmd not in valid_cmds:
                 raise ConfigError(

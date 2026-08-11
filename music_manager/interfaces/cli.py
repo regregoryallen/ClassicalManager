@@ -304,45 +304,24 @@ def generate(
     format: str = typer.Option("m3u", help="Output format: m3u, json"),
     output: str = typer.Option(None, help="Output file path"),
     target: str = typer.Option(None, help="Target: plex"),
-    publish: bool = typer.Option(
-        False, "--publish",
-        help="Write to the configured publish folder instead of --output"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
     """Generate a playlist and export or push it."""
     _setup_logging(verbose)
 
-    if publish and output:
-        typer.echo("Error: --publish writes to the configured folder; "
-                   "--output cannot be combined with it.", err=True)
-        raise typer.Exit(1)
-
     from music_manager.core.engine import generate_playlist
     prof = _get_profile(profile)
     result = generate_playlist(prof)
 
     _output_result(prof, result, format=format, output=output, target=target,
-                   publish=publish, quiet=quiet)
+                   quiet=quiet)
 
 
 def _output_result(prof, result, *, format="m3u", output=None, target=None,
-                   publish=False, quiet=False):
+                   quiet=False):
     """Output a generated playlist to the specified format/target."""
-    if publish:
-        from music_manager.core.serializers.publish import (PublishError,
-                                                            publish_playlist)
-        try:
-            output_path = publish_playlist(result.playlist, prof.name)
-        except PublishError as exc:
-            typer.echo(f"Cannot publish: {exc}", err=True)
-            raise typer.Exit(1)
-        except OSError as exc:
-            typer.echo(f"Could not write playlist: {exc}", err=True)
-            raise typer.Exit(1)
-        if not quiet:
-            typer.echo(f"Published '{prof.name}' to {output_path}")
-    elif target == "plex":
+    if target == "plex":
         from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
         from music_manager.core.config import load_config
         config = load_config()
@@ -393,51 +372,12 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None,
                    f"{result.total_duration_ms // 1000}s total", err=True)
 
 
-def _report_publish_folder() -> None:
-    """Report playlist files in the publish folder that no profile accounts for.
-
-    CM never deletes them — the folder may hold hand-made playlists CM
-    knows nothing about.  Those are a permanent part of this list, which is
-    why it is worded as files this run did not write.
-
-    The folder is not library-scoped, so every library's profiles count as
-    accounting for a file; otherwise a shared folder would report one
-    library's playlists while generating another's.  Internal '__' profiles
-    are excluded from batches, so their leftovers are genuinely unaccounted
-    for and are listed.
-    """
-    from music_manager.core.database import PlaylistProfile
-    from music_manager.core.serializers.publish import (PublishError,
-                                                        find_unwritten_files,
-                                                        publish_config)
-    try:
-        published = publish_config()
-    except PublishError:
-        return
-
-    accounted = [p.name for p in PlaylistProfile.select().where(
-        ~PlaylistProfile.name.startswith("__"))]
-    extra = find_unwritten_files(published, accounted)
-    if not extra:
-        return
-
-    typer.echo(f"\n{len(extra)} playlist file(s) in this folder were not "
-               f"written by this run:")
-    for candidate in extra:
-        typer.echo(f"  {candidate.name}")
-    typer.echo("Hand-made playlists will always appear here. Nothing was "
-               "deleted; remove any stale files yourself.")
-
-
 @app.command("generate-all")
 def generate_all(
     library: str = typer.Option(..., help="Library name"),
     format: str = typer.Option("m3u", help="Output format: m3u, json"),
     output_dir: str = typer.Option(".", help="Output directory for files"),
     target: str = typer.Option(None, help="Target: plex"),
-    publish: bool = typer.Option(
-        False, "--publish",
-        help="Write to the configured publish folder instead of --output-dir"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress; only show errors"),
 ):
@@ -473,16 +413,13 @@ def generate_all(
         if not quiet:
             typer.echo(f"\n--- {prof.name} ---")
         result = generate_playlist(prof)
-        if publish or target:
-            _output_result(prof, result, target=target, publish=publish,
-                           quiet=quiet)
+        if target:
+            _output_result(prof, result, target=target, quiet=quiet)
         else:
             ext = ".json" if format == "json" else ".m3u"
             output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
             _output_result(prof, result, format=format, output=output, quiet=quiet)
 
-    if publish and not quiet:
-        _report_publish_folder()
 
     if not quiet:
         typer.echo(f"\nDone: {len(profiles)} profiles generated.")

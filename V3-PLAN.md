@@ -395,72 +395,68 @@ not a JSON round trip; the JSON export stays a portable curation backup.
   ignores column widths, which is why it passed a FLOAT that shifted file
   mtimes by half an hour and TEXT columns MySQL cannot index.
 
-## v3.7 — Publishing playlists to a watched folder (branch `v3.7-dev`, started 2026-08-09)
+## v3.7 — Bug fixes, and an MA export path that was already there (branch `v3.7-dev`, started 2026-08-09)
 
-Driven by wanting Music Assistant to see CM's playlists. MA's File System
-provider imports playlists by scanning a folder, so writing the file is
-the entire job — no API client, no authentication, no new serializer, and
-no database work. Design and measured MA behaviour:
-`no_git/CM-MA-export-handoff.md` and `no_git/CM-MA-findings.md`.
+Started as "add a Music Assistant export target". **It shipped as nothing
+of the kind: MA needed no new code at all.** Everything MA requires was
+already in CM —
 
-**Built first as a separate `targets.ma`, then collapsed into the M3U
-target (user's call, 2026-08-09).** The observation that forced it: the
-two outputs are byte-identical. `generate-all --target ma` and
-`generate-all --format m3u --output-dir <dir>` diff clean when
-`path_style` is `relative_to_playlist` — the batch-export-to-a-folder
-capability already existed, and cron's `m3u` mode with `m3u_output_dir`
-already *was* the MA mode. Only two things were genuinely new: the
-unwritten-files report, and a GUI push with no save-as dialog.
+    main.py --cli generate-all --library MainMusic --format m3u \
+        --output-dir /mnt/MediaLib/Albums/Playlists
 
-So the M3U target now has two operations rather than there being two
-targets:
+with `targets.m3u.path_style` set to `relative_to_playlist`. MA's File
+System provider imports by scanning a folder, and CM has written batches
+of M3U files to a chosen folder for a long time. Measured MA behaviour is
+in `no_git/CM-MA-findings.md`; the export design doc
+(`no_git/CM-MA-export-handoff.md`) is superseded by this section.
 
-- **Export** — save-as, path chosen per run (`--output`, file dialog).
-- **Publish** — `targets.m3u.publish.output_dir`, no per-run path, plus
-  the report. `--publish` on `generate` and `generate-all`; cron modes
-  `publish`/`scan+publish`; the same webhook commands.
+The route to that answer is worth recording, because it was not free.
+A separate `targets.ma` was built first, then renamed to a `publish`
+operation on the M3U target, then removed entirely. What settled it:
+`generate-all --target ma` and `generate-all --format m3u --output-dir`
+produced **byte-identical files** — diffed, not assumed. The second
+attempt collapsed the two targets but kept a `publish` config block, a
+`--publish` flag, `publish`/`scan+publish` in both cron and the webhook,
+and a separate module. That was renaming, not simplifying; the user
+called it and the whole apparatus came out (2026-08-11).
 
-Nothing in it is Music-Assistant-specific, so the naming does not pretend
-otherwise — MA is one thing that might watch the folder. That also
-restores the meaning of `--target` (push to a service) versus `--format`
-(write a file); MA consumes files, so it was never a target.
+**The lesson, since it will come up again:** the design document reasoned
+about MA's requirements without first checking what CM already did with
+them. Every requirement it derived was real; the conclusion that they
+needed new machinery was not. Check the existing capability against the
+new requirement before designing to it.
 
-Publishing has its own `path_style`, separate from export's. Export wants
-absolute; publishing wants relative, because the watcher usually sees the
-share at a different mount point. A configured folder is what enables
-publishing — the `enabled` flag the separate target had needed is gone.
+Kept from the attempt, on their own merits:
 
-**Publishing defaults to relative paths, and Home Assistant forces that.**
-HA fixes MA's view of the share at `/media/MediaLib` and does not expose it
-as configurable; CM sees the same files at a different absolute path. A
-relative playlist in a folder inside the library is identical from either
-mount point. This is also the only style the validation session measured —
-`../` traversal resolves, absolute paths against MA's provider were never
-tested. The alternative is absolute paths with a `path_rules` entry
-rewriting `/mnt/MediaLib` → `/media/MediaLib`, which `realize_path` already
-supports; it stays configurable for that reason, but is unmeasured.
+- `safe_profile_filename` / `find_filename_collisions` in `paths.py`, and
+  a warning when two profiles in one `generate-all` sanitize to the same
+  filename — the later one silently overwrote the earlier.
+- A warning channel in `config.py`, which had none: every path raised
+  `ConfigError`. `load_config` has thirteen call sites, so warnings are
+  emitted once per `(path, message)` rather than on every load. It carries
+  the pre-existing footgun the findings doc identified — `path_rules` set
+  alongside `path_style: relative_to_playlist`, which `m3u.py` ignores.
+- `validate_config`, so the settings dialog can check a config before
+  writing it.
+- Direct test coverage for `M3USerializer`, which had none despite being
+  the oldest output format and the file the Plex target hands off.
 
-Constraints that came out of reviewing the design against the code:
+**`base_path` was removed** (user's call, 2026-08-11). It prepended a
+prefix to absolute paths, did nothing at all in relative mode, and read as
+an output folder — the installed config had it set to
+`/mnt/MediaLib/Albums/Playlists` under `relative_to_playlist`, where it
+was inert. `path_rules` with `path_style: absolute` does the real job
+properly. A config still carrying the key keeps loading and gets a warning
+saying it no longer applies.
 
-- **`config.py` had no warning channel** — every path raised `ConfigError`.
-  `load_config` has thirteen call sites including per-invocation CLI
-  reloads, so warnings are emitted once per `(path, message)` rather than
-  on every load.
-- **Three filename sanitizers already existed** (`cli.py`, `webhook.py`,
-  `classical-manager-cron.sh`), and the first two disagree: `Bach & Sons`
-  becomes `Bach_&_Sons` from the CLI and `Bach___Sons` from the webhook.
-  Pre-existing and left alone — the webhook's is deliberately stricter
-  because its input arrives over HTTP, and the shell copy cannot call
-  Python. The shared helper exists so the batch write and the orphan check
-  agree, not to unify all three.
-- **Orphaned files are reported, never deleted** (user decision,
-  2026-08-09). The directory may hold hand-made playlists CM knows nothing
-  about, so pruning risks destroying what CM did not create. Those same
-  hand-made playlists are permanently in the report, which is why it is
-  worded as files this run did not write rather than as orphans.
+Note the three filename sanitizers that still exist (`cli.py`,
+`webhook.py`, `classical-manager-cron.sh`); the first two disagree, as
+`Bach & Sons` → `Bach_&_Sons` from the CLI and `Bach___Sons` from the
+webhook. Left alone deliberately: the webhook's is stricter because its
+input arrives over HTTP, and the shell copy cannot call Python.
 
-**Found while adding the Settings section for publishing: saving Settings
-deleted every config key the dialog does not show.** It rebuilt config.json from
+**Found while adding a Settings section during the attempt: saving
+Settings deleted every config key the dialog does not show.** It rebuilt config.json from
 its own fields and wrote the whole file, so `database`, `cron`, `webhook`
 and `autosave_interval` all vanished on any save — and losing `database`
 drops this MariaDB install back to SQLite at `db_path`, quietly opening a
@@ -476,7 +472,14 @@ and zenity is a separate application — the grab stopped the chooser (and
 everything else) receiving input while the app blocked in `subprocess.run`
 for up to 300 seconds still holding it. `filedialog` now releases the grab
 around any external chooser. Latent since long before this work: the
-Database browse button in the same dialog hangs identically.
+Database browse button in the same dialog hung identically.
+
+That browse button was also invisible. It was gridded into column 2, but
+the plain field rows span columns 1-2 with a 400px entry, which stretches
+column 2 past the visible width of the scrollable frame — and there is no
+horizontal scrollbar to reach it. The entry and its button now share one
+cell in their own frame, so nothing depends on column widths, and the
+button is labelled "Browse…" rather than "...".
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

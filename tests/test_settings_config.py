@@ -1,6 +1,6 @@
 """v3.7: the settings dialog folds its fields into the loaded config.
 
-The dialog shows Database, Plex, M3U and Publish. It does not show the
+The dialog shows Database, Plex and M3U. It does not show the
 database *connection* block, cron, webhook, or autosave — and it used to
 rebuild config.json from its fields alone, deleting every one of them.
 For a MariaDB install that silently dropped the server and fell back to
@@ -20,10 +20,7 @@ DEFAULT_FIELDS = {
     "plex_music_section": "",
     "plex_path_rules": [],
     "m3u_path_style": "absolute",
-    "m3u_base_path": "",
     "m3u_path_rules": [],
-    "publish_output_dir": "",
-    "publish_path_style": "relative_to_playlist",
     "db_path": "",
 }
 
@@ -49,8 +46,7 @@ def full_config():
         "targets": {
             "plex": {"base_url": "http://plex:32400", "token_env": "TOK",
                      "strategy": "item_match", "path_rules": []},
-            "m3u": {"path_style": "absolute", "base_path": "",
-                    "path_rules": []},
+            "m3u": {"path_style": "absolute", "path_rules": []},
         },
         "cron": {"library": "MainMusic", "mode": "plex", "verbosity": "-q"},
         "webhook": {"host": "0.0.0.0", "port": 5588,
@@ -87,8 +83,8 @@ def test_target_keys_without_a_field_survive():
 
 def test_the_original_config_is_not_mutated():
     original = full_config()
-    apply_settings_fields(original, fields(publish_output_dir="/mnt/P"))
-    assert "publish" not in original["targets"]["m3u"]
+    apply_settings_fields(original, fields(db_path="/tmp/other.db"))
+    assert original["db_path"] == ""
 
 
 def test_an_untouched_dialog_round_trips_the_config():
@@ -127,9 +123,11 @@ def test_clearing_the_plex_url_removes_the_target():
 
 def test_m3u_fields_are_applied():
     saved = apply_settings_fields(full_config(), fields(
-        m3u_path_style="relative_to_playlist", m3u_base_path="/media"))
-    assert saved["targets"]["m3u"]["path_style"] == "relative_to_playlist"
-    assert saved["targets"]["m3u"]["base_path"] == "/media"
+        m3u_path_style="relative_to_playlist",
+        m3u_path_rules=[{"find": "/a", "replace": "/b"}]))
+    m3u = saved["targets"]["m3u"]
+    assert m3u["path_style"] == "relative_to_playlist"
+    assert m3u["path_rules"] == [{"find": "/a", "replace": "/b"}]
 
 
 def test_db_path_is_applied_when_set():
@@ -143,65 +141,11 @@ def test_an_empty_db_path_leaves_the_existing_one():
     assert apply_settings_fields(config, fields())["db_path"] == "/keep/me.db"
 
 
-# --- The Publish section ------------------------------------------------------
-# It lives inside targets.m3u, because publishing and exporting are two
-# operations of one target rather than two targets.
-
-def test_publish_is_written_under_the_m3u_target():
-    saved = apply_settings_fields(full_config(), fields(
-        publish_output_dir="/mnt/MediaLib/Albums/Playlists"))
-    published = saved["targets"]["m3u"]["publish"]
-    assert published["output_dir"] == "/mnt/MediaLib/Albums/Playlists"
-    assert published["path_style"] == "relative_to_playlist"
-
-
-def test_the_publish_path_style_is_independent_of_the_export_one():
-    saved = apply_settings_fields(full_config(), fields(
-        m3u_path_style="absolute", publish_output_dir="/mnt/P",
-        publish_path_style="relative_to_playlist"))
-    m3u = saved["targets"]["m3u"]
-    assert m3u["path_style"] == "absolute"
-    assert m3u["publish"]["path_style"] == "relative_to_playlist"
-
-
-def test_publishing_absolute_is_allowed():
-    # With a path rule rewriting the mount prefix, absolute is a valid
-    # answer to a watcher on a different mount point.
-    saved = apply_settings_fields(full_config(), fields(
-        publish_output_dir="/mnt/P", publish_path_style="absolute"))
-    assert saved["targets"]["m3u"]["publish"]["path_style"] == "absolute"
-
-
-def test_no_publish_block_is_added_when_the_section_is_untouched():
-    saved = apply_settings_fields(full_config(), fields(
-        plex_base_url="http://plex:32400", plex_token_env="TOK"))
-    assert "publish" not in saved["targets"]["m3u"]
-
-
-def test_clearing_the_folder_disables_publishing():
-    # There is no enabled flag — an empty folder is how you turn it off.
-    config = full_config()
-    config["targets"]["m3u"]["publish"] = {"output_dir": "/mnt/P"}
-    saved = apply_settings_fields(config, fields())
-    assert "output_dir" not in saved["targets"]["m3u"]["publish"]
-
-
-def test_publish_keys_without_a_field_survive():
-    config = full_config()
-    config["targets"]["m3u"]["publish"] = {
-        "output_dir": "/mnt/P",
-        "path_rules": [{"find": "/mnt/MediaLib", "replace": "/media/MediaLib"}]}
-    saved = apply_settings_fields(config, fields(publish_output_dir="/mnt/P"))
-    assert saved["targets"]["m3u"]["publish"]["path_rules"] == [
-        {"find": "/mnt/MediaLib", "replace": "/media/MediaLib"}]
-
-
 # --- Validating before writing ------------------------------------------------
 
 def test_a_config_the_dialog_builds_is_valid(tmp_path):
     saved = apply_settings_fields(full_config(), fields(
-        plex_base_url="http://plex:32400", plex_token_env="TOK",
-        publish_output_dir="/mnt/MediaLib/Albums/Playlists"))
+        plex_base_url="http://plex:32400", plex_token_env="TOK"))
     assert validate_config(saved, tmp_path / "config.json") == []
 
 
@@ -209,13 +153,15 @@ def test_an_invalid_path_style_is_caught_before_writing(tmp_path):
     # The dialog validates and refuses to save rather than writing a
     # config.json the app cannot load on its next start.
     saved = apply_settings_fields(full_config(), fields(
-        publish_output_dir="/mnt/P", publish_path_style="sideways"))
-    with pytest.raises(ConfigError, match=r"targets\.m3u\.publish\.path_style"):
+        m3u_path_style="sideways"))
+    with pytest.raises(ConfigError, match=r"targets\.m3u\.path_style"):
         validate_config(saved, tmp_path / "config.json")
 
 
-def test_an_underscore_folder_warns_but_still_saves(tmp_path):
-    saved = apply_settings_fields(full_config(), fields(
-        publish_output_dir="/mnt/MediaLib/Albums/_Playlists"))
+def test_a_leftover_base_path_warns_but_still_saves(tmp_path):
+    config = full_config()
+    config["targets"]["m3u"]["base_path"] = "/mnt/MediaLib/Albums/Playlists"
+    saved = apply_settings_fields(config, fields(
+        plex_base_url="http://plex:32400", plex_token_env="TOK"))
     warnings = validate_config(saved, tmp_path / "config.json")
-    assert len(warnings) == 1 and "skips those" in warnings[0]
+    assert len(warnings) == 1 and "no longer applied" in warnings[0]

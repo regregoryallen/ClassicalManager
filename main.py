@@ -31,21 +31,14 @@ CLI commands:
   preview --profile NAME [-v]
       Dry-run a profile and output the resolved playlist as JSON.
 
-  generate --profile NAME [--format m3u|json] [--output FILE] [--target plex]
-           [--publish] [-v]
+  generate --profile NAME [--format m3u|json] [--output FILE] [--target plex] [-v]
       Generate and export a single playlist.
-      --output is required for M3U format, and unused by --target.
-      --publish writes to the configured publish folder instead.
+      --output is required for M3U format.
 
-  generate-all --library NAME [--format m3u|json] [--output-dir DIR]
-               [--target plex] [--publish] [-v] [-q]
+  generate-all --library NAME [--format m3u|json] [--output-dir DIR] [--target plex] [-v] [-q]
       Generate all profiles for a library.
       --output-dir sets where files are written (default: current directory).
       Each profile becomes <profile_name>.m3u (or .json).
-      --publish writes them to targets.m3u.publish.output_dir instead — a
-      folder something else watches, such as a Music Assistant File System
-      provider — and afterwards lists any playlist files there that this
-      run did not write. It never deletes them.
 
   analyze-similarity --library NAME [-j N] [-v] [-q]
       Pre-compute audio similarity features (librosa) for all
@@ -94,7 +87,6 @@ Examples:
   python main.py --cli generate --profile "Sunday" --format m3u --output playlist.m3u
   python main.py --cli generate-all --library "My Collection" --output-dir ./playlists
   python main.py --cli generate-all --library "My Collection" --target plex -q
-  python main.py --cli generate-all --library "My Collection" --publish -q
 
 Run 'python main.py --cli <command> --help' for full option details.
 """

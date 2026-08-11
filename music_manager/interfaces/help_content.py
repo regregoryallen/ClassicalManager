@@ -52,9 +52,10 @@ def build_help_content(text: tk.Text) -> None:
     subheading("Database Location")
     body(
         "The database is stored as music_manager.db in the project directory by "
-        "default. To change this, open Settings and set a new path. The change "
-        "takes effect after restarting the app. Both the GUI and CLI read this "
-        "setting from config.json.\n"
+        "default. To put it somewhere else — or to use a MySQL/MariaDB server "
+        "instead, which several machines can share at once — open Settings and "
+        "choose under Database. The change takes effect after restarting the "
+        "app. Both the GUI and CLI read this setting from config.json.\n"
     )
 
     subheading("Plex Configuration")
@@ -472,9 +473,26 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Database")
     body(
-        "Path to the SQLite database file. Both GUI and CLI read this. Changing "
-        "the path requires a restart. To move the database, copy the .db file "
-        "(and any -wal/-shm files) to the new location, then update this setting.\n"
+        "Choose the backend — a SQLite file, or a MySQL/MariaDB server "
+        "— and the rest of the section changes to match. Both GUI and CLI "
+        "read this, and a change takes effect on restart.\n"
+    )
+    body(
+        "SQLite: the path to the .db file. To move a database, copy the .db "
+        "file (and any -wal/-shm files) to the new location, then update this "
+        "setting.\n"
+    )
+    body(
+        "MySQL/MariaDB: host, port, database, user, charset, and either a "
+        "password or the name of an environment variable holding one. The "
+        "variable wins whenever it is set, so a shared config need not carry "
+        "the credential. Test Connection tries the values on screen without "
+        "saving them.\n"
+    )
+    body(
+        "Switching backend opens a different database — it does not copy "
+        "anything across. Use the migrate-db command to move an existing "
+        "library.\n"
     )
 
     subheading("Plex")
@@ -618,10 +636,14 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Sharing a Database")
     body(
-        "Place the database on a shared drive (set db_path in config.json). "
+        "Place the database on a shared drive (Settings \u2192 Database). "
         "Only run the app on one machine at a time \u2014 SQLite does not "
         "support concurrent network access. If source folders differ between "
         "machines, scan from only one; use path rules on the other.\n"
+    )
+    body(
+        "For several machines at once, use the MySQL/MariaDB backend "
+        "instead, and migrate-db to move an existing library onto it.\n"
     )
 
     subheading("Feeding Playlists to Another Music System")
@@ -668,7 +690,8 @@ def build_help_content(text: tk.Text) -> None:
     body(" \u2014 Use Scan Library... \u2192 Quick scan for routine updates; reserve Full rebuild for first scans and recovery. Either mode can be cancelled.\n")
     bold("\"Cannot open database\"")
     body(" \u2014 Database likely locked by another instance or network share unmounted. GUI offers local fallback.\n")
-    bold("Database path change not taking effect")
-    body(" \u2014 Requires a restart. Close and reopen the app.\n")
+    bold("Database change not taking effect")
+    body(" \u2014 Requires a restart. Close and reopen the app. The window title "
+         "names the database in use.\n")
     bold("File dialogs look different on Linux")
     body(" \u2014 Install zenity (GNOME) or kdialog (KDE) for native dialogs.\n")

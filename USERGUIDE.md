@@ -691,10 +691,24 @@ All changes are saved to `config.json`.
 
 ### Database
 
-- **Database File**: Path to the SQLite database. Both the GUI and CLI read this from
-  `config.json`. Changing the path requires a restart. To move the database, copy the
+- **Backend**: `SQLite (file)` or `MySQL / MariaDB (server)`. The rest of the section
+  changes to match. Both the GUI and CLI read this from `config.json`, and a change
+  takes effect on restart.
+- **SQLite** — **Database File**: path to the `.db` file. To move a database, copy the
   `.db` file (and any `-wal`/`-shm` files) to the new location, then update this
-  setting.
+  setting. Leave it at the default and nothing is written to `config.json`, so the
+  app keeps using the database beside it wherever the app is installed.
+- **MySQL / MariaDB** — **Host**, **Port**, **Database**, **User**, **Charset**, and
+  either **Password** or **Password Env Var**. The environment variable wins whenever
+  it is set, so a config you share or back up need not carry the credential. Only a
+  password stored in `config.json` is shown in the dialog — one that comes from the
+  environment stays there.
+- **Test Connection** tries the values on screen without saving them, so a typo shows
+  up here rather than on the next start.
+
+Switching backend opens a different database; it does not copy anything across. To
+move an existing library, use `migrate-db` (see
+[Sharing a Database Across Systems](#sharing-a-database-across-systems)).
 
 ### Plex
 
@@ -918,13 +932,14 @@ for rescanning to work.
 
 There are two ways, and they behave quite differently.
 
-**A shared SQLite file.** Set `db_path` to a path on a shared drive. Simple, but
-only one machine may run the app at a time — SQLite does not support concurrent
-access over a network filesystem.
+**A shared SQLite file.** Point **Database File** in Settings at a path on a shared
+drive. Simple, but only one machine may run the app at a time — SQLite does not
+support concurrent access over a network filesystem.
 
-**A MySQL or MariaDB server.** Set the `database` section (see below) and several
-machines can use one library at once. This is also more robust: no `-wal` files
-to keep together when copying, and no lock errors when a share drops out.
+**A MySQL or MariaDB server.** Choose that backend in Settings (or write the
+`database` section by hand, see below) and several machines can use one library at
+once. This is also more robust: no `-wal` files to keep together when copying, and
+no lock errors when a share drops out.
 
 Create the database and user on the server first:
 
@@ -949,7 +964,7 @@ python main.py --cli migrate-db --target mysql://cmanager@dbhost:3306/classical_
 Supply the password in `$CM_TARGET_DB_PASSWORD` rather than in the URL, where it
 would be visible in the process list. Add `--dry-run` first to see the row counts.
 Every table is verified by content hash after copying, and the source database is
-only ever read. Then set the `database` section in `config.json` and restart.
+only ever read. Then point Settings → Database at the server and restart.
 
 The window title shows which database is open — a file name for SQLite, or
 `schema @ host` for a server — so there is no doubt which one you are looking at.
@@ -1079,11 +1094,12 @@ playlist updates it in place without creating a duplicate.
 
 | Field | Notes |
 |-------|-------|
-| `db_path` | Optional. Omit or leave empty for the default (`music_manager.db` in the project directory). Both GUI and CLI read this. Ignored when `database.backend` is `mysql`. |
+| `db_path` | Legacy, still read. Superseded by `database.path`, which wins when both are present. Saving from the Settings dialog rewrites it as `database.path` and removes this key. |
 | `similarity_weights` | Optional. Per-group influence in Find Similar: `timbre`, `register`, `dynamics`, `tempo`, `attack`, `harmony`. Groups are normalised by size before weighting, so a weight is a decision rather than a consequence of how many columns a group has. 0 removes a group, 2 doubles it. The Find Similar window has sliders for the same values. |
 | `analysis_workers` | Optional. Processes used by audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound and the measured speedup flattens past about 12 workers, so more is not linearly faster. The GUI's Analyze Audio dialog lets you choose per run; this sets the default for the GUI, CLI, webhook and cron alike. |
-| `database` | Optional. Omit entirely for SQLite at `db_path` — which is what every existing install does. |
+| `database` | Optional. Omit entirely for SQLite at `db_path`. Settings → Database writes this section. |
 | `database.backend` | `sqlite` or `mysql`. `mysql` also covers MariaDB. |
+| `database.path` | SQLite only. Omit for `music_manager.db` in the project directory. Settings leaves it out when you keep the default, so an install that moves still finds its database. |
 | `database.host` / `port` / `name` / `user` | Server connection. Port defaults to 3306. |
 | `database.password` | Stored in `config.json`, which the installer sets to mode 600. |
 | `database.password_env` | Name of an environment variable holding the password. Wins over `password` when the variable is set, so a shared or backed-up config need not carry the credential. |

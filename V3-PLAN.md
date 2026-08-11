@@ -2,13 +2,12 @@
 
 ## Status (keep this section current)
 
-- **Released and tagged: v3.0 through v3.6.** Tag lineage: v1.0, v2.0,
+- **Released and tagged: v3.0 through v3.6.1.** Tag lineage: v1.0, v2.0,
   v3.0, v3.1, v3.2, v3.3, v3.4, v3.5, v3.5.1, v3.5.2, v3.6 (v3.6 on
-  2026-08-05, 287 tests on SQLite / 293 on MariaDB).
-- **In progress: v3.6.1** on branch `v3.7-dev` — GUI and config bug
-  fixes; see the v3.6.1 section. Not merged: the file-chooser grab fix
-  needs the user's confirmation first, since it cannot be reproduced
-  without freezing the display it happens on.
+  2026-08-05, 287 tests on SQLite / 293 on MariaDB), v3.6.1 (merged to
+  `master` as `e054f8e`; branch `v3.7-dev` deleted afterwards).
+- **In progress: v3.6.2** on branch `v3.6.2-dev` — the database backend
+  is chosen in Settings; see the v3.6.2 section.
 - **The version lives in three places and nowhere else**: the git tag,
   the heading in this file, and the docstrings of test modules added by
   that release. There is no `__version__` anywhere in the code, so a
@@ -593,6 +592,54 @@ column 2 past the visible width of the scrollable frame — and there is no
 horizontal scrollbar to reach it. The entry and its button now share one
 cell in their own frame, so nothing depends on column widths, and the
 button is labelled "Browse…" rather than "...".
+
+## v3.6.2 — The database is chosen in Settings (branch `v3.6.2-dev`, started 2026-08-11)
+
+The `database` section landed in v3.5 and the settings dialog never
+caught up: it showed one SQLite file browser, wrote the legacy top-level
+`db_path`, and said nothing about a backend. On this MariaDB install the
+field displayed a path that was not in use, and editing it changed
+nothing. v3.6.1 stopped the dialog *destroying* that section; this
+release lets it write one.
+
+- **Backend chooser** — SQLite or MySQL/MariaDB, with the rest of the
+  section swapping to match: a file browser, or host / port / database /
+  user / password / password env var / charset.
+- Both panels are built in the **one grid**, hidden with `grid_remove()`.
+  A nested frame per backend was tried first and looked wrong: it has its
+  own column widths, so the server fields did not line up with the Plex
+  fields below. An emptied grid row collapses to nothing, so hiding a
+  panel leaves no gap.
+- **Test Connection** tries the entered values on a worker thread with a
+  5-second timeout, and reports the driver's own error. An unreachable
+  host blocks for the whole timeout, so it cannot run on the UI thread —
+  and the alternative is discovering a typo on the next start, since a
+  database change only takes effect on restart.
+- The password field is masked and shows **only a password stored in
+  `config.json`**. One resolved from `password_env` stays in the
+  environment; displaying it would copy the secret into the file on the
+  next save.
+- **The legacy `db_path` is retired on save.** `resolve_db_settings`
+  already prefers `database.path`, so a config carrying both named one
+  database and opened another. Reading `db_path` is unchanged, so
+  configs that never meet the dialog keep working.
+- A SQLite path equal to the default is **not** written out. The field is
+  prefilled with the path in use, so writing it back unconditionally
+  would pin `/home/…/ClassicalManager/music_manager.db` into config.json
+  and break the app the day the checkout moves.
+- The restart prompt now compares **resolved `DbSettings`**, not the raw
+  section. Writing `database` for the first time rewrites keys without
+  changing which database opens, and a restart prompt for that is noise.
+
+**Comments in config.json** (asked 2026-08-11): JSON has none, and adding
+a JSONC parser would be worse than useless here — `save_config`
+re-serializes the whole file, so the first Save would delete every
+comment. The `_`-prefixed key convention already in
+`config.example.json` survives a round trip, because the dialog
+deep-copies the loaded config and only touches keys it owns. One section
+rejected it: `similarity_weights` validated its keys against the known
+groups, making a note there the single way to write a config.json the app
+refuses to load. It now skips `_` keys, like everywhere else.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

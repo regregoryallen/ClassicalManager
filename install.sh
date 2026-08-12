@@ -511,6 +511,9 @@ configure_app() {
 
         case "$config_choice" in
             1)
+                # Read by setup_webhook_service, which runs later and also
+                # writes to config.json — "keep" has to mean keep there too.
+                KEEP_CONFIG=1
                 success "Keeping existing configuration"
                 return 0
                 ;;
@@ -966,29 +969,46 @@ setup_webhook_service() {
         return 0
     fi
 
-    echo ""
-    local wh_port
-    ask "Webhook port" wh_port "5588"
-
-    echo ""
-    echo "  Allow \"thumbs down\" (exclude-track)? This lets a remote button"
-    echo "  remove the playing track from a playlist profile — the only"
-    echo "  webhook command that modifies saved data."
-    local wh_thumbs="false" wh_token=""
-    if ask_yn "Allow exclude-track?" "y"; then
-        wh_thumbs="true"
-        echo ""
-        echo "  A shared token is recommended when writes are allowed."
-        echo "  Leave blank for none (trusted LAN only)."
-        ask "Webhook token (optional)" wh_token ""
-    fi
-
-    # Write webhook section to config.json
     local config_file="$INSTALL_DIR/config.json"
     local venv_python="$INSTALL_DIR/venv/bin/python"
 
-    WH_PORT="$wh_port" WH_THUMBS="$wh_thumbs" WH_TOKEN="${wh_token:-}" \
-    "$venv_python" -c "
+    # This step writes to config.json, so it has to honour the choice made
+    # back in the Configuration step.  With an existing webhook section to
+    # keep, install and restart the unit but leave the file alone.
+    local keep_webhook_config=""
+    if [ -n "${KEEP_CONFIG:-}" ] && "$venv_python" -c "
+import json, sys
+with open('$config_file') as f:
+    sys.exit(0 if json.load(f).get('webhook') else 1)
+" 2>/dev/null; then
+        keep_webhook_config=1
+        echo ""
+        success "Keeping the existing webhook settings in config.json"
+    fi
+
+    if [ -z "$keep_webhook_config" ]; then
+        echo ""
+        local wh_port
+        ask "Webhook port" wh_port "5588"
+
+        echo ""
+        echo "  Allow \"thumbs down\" (exclude-track)? This lets a remote button"
+        echo "  remove the playing track from a playlist profile — the only"
+        echo "  webhook command that modifies saved data."
+        local wh_thumbs="false" wh_token=""
+        if ask_yn "Allow exclude-track?" "y"; then
+            wh_thumbs="true"
+            echo ""
+            echo "  A shared token is recommended when writes are allowed."
+            echo "  Blank keeps any token already configured, or means none."
+            ask "Webhook token (optional)" wh_token ""
+        fi
+
+        # Merge into the existing section rather than replacing it: the
+        # interview knows about four keys, and config.json may hold others
+        # it must not destroy — library, libraries, token_env, a custom host.
+        WH_PORT="$wh_port" WH_THUMBS="$wh_thumbs" WH_TOKEN="${wh_token:-}" \
+        "$venv_python" -c "
 import json, os
 
 config_file = '$config_file'
@@ -999,11 +1019,10 @@ commands = ['plex', 'scan', 'scan+plex', 'scan+m3u', 'm3u']
 if os.environ.get('WH_THUMBS') == 'true':
     commands.append('exclude-track')
 
-webhook = {
-    'host': '0.0.0.0',
-    'port': int(os.environ.get('WH_PORT', '5588')),
-    'allowed_commands': commands,
-}
+webhook = config.get('webhook') or {}
+webhook.setdefault('host', '0.0.0.0')
+webhook['port'] = int(os.environ.get('WH_PORT', '5588'))
+webhook['allowed_commands'] = commands
 token = os.environ.get('WH_TOKEN', '').strip()
 if token:
     webhook['token'] = token
@@ -1013,6 +1032,7 @@ with open(config_file, 'w') as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
     f.write('\n')
 " || { warn "Failed to update config.json with webhook settings"; return 1; }
+    fi
 
     # Install systemd user service
     local systemd_dir="$HOME/.config/systemd/user"

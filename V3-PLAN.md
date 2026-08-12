@@ -766,6 +766,17 @@ serial, ~10 min at 8 workers**. (The `ffmpeg` design measured 0.46 s per
 audio-minute, 3.96 h serial — recorded because it is the number the
 handoff's own design would have cost.)
 
+**Memory is a non-issue, unlike the librosa analysis** — measured, because
+the comparison is the obvious worry. rsgain streams: peak RSS is 37 MB for
+a *60-minute single track* and 57 MB for a 40-track, 106-minute Passion,
+so it scales with track count (~0.5 MB each, one gating state per file
+held for the album combination) and is flat in duration. The whole process
+tree at `-j 20` peaked at **795 MB**, of which 92 MB was the Python parent
+(which already holds every track row in the library). Compare the "Analysis
+memory" section below: librosa costs 219 MB + 93 MB *per audio-minute* per
+worker, so that same 60-minute track is ~5.8 GB there against 37 MB here.
+The ceiling on `--workers` is CPU threads, not RAM.
+
 ### Three things the handoff did not anticipate
 
 - **The library is 86% MP3** — 6,335 mp3, 1,004 flac, 31 m4a, 7 ape. §4 of

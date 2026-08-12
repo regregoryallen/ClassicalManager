@@ -1118,7 +1118,7 @@ playlist updates it in place without creating a duplicate.
 | `webhook.host` | Bind address. Default: `0.0.0.0` (all interfaces). |
 | `webhook.port` | Listen port. Default: `5588`. |
 | `webhook.library` | Default library, used when a request does not name one. Falls back to `active_library` if omitted. |
-| `webhook.libraries` | Optional. Maps a library name to its own `m3u_output_dir`, letting one service serve several libraries. A request may name only libraries listed here. See [Serving several libraries](#serving-several-libraries). |
+| `webhook.libraries` | Optional. Maps a library name to its own `m3u_output_dir`, letting one service serve several libraries. A leading `~` is expanded to your home directory. A request may name only libraries listed here. See [Serving several libraries](#serving-several-libraries). |
 | `webhook.allowed_commands` | List of allowed commands. Default: all five modes. |
 
 ### gui_prefs.json (auto-managed)

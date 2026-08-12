@@ -13,9 +13,10 @@
 - **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
   `v3.7-dev`, started 2026-08-11; see that section). Riding along on the
   same branch: the multi-library webhook and the `cron.m3u_output_dir`
-  tilde fix (2026-08-12), which carries a behaviour change — see that
-  section. Still to come from the loudness/MA programme after it: the
-  loudness analysis for sleep-playlist curation, with its own version.
+  tilde fix (2026-08-12), the latter carrying a behaviour change — see
+  *Riding along on `v3.7-dev`*. Still to come from the loudness/MA
+  programme after it: the loudness analysis for sleep-playlist curation,
+  with its own version.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -884,10 +885,64 @@ MP3 is now 86% of the library and 62% of the multi-track works. Settled by
 playing one MP3 work and one FLAC work through MA's audio-pipeline view. If
 MA ignores MP3 ReplayGain the tags remain correct for Kodi, but the MA half
 of the design would cover only 1,004 files.
-### Tilde in `cron.m3u_output_dir` (fixed 2026-08-12)
 
-Not part of the tagger — it rode along on this branch with the
-multi-library webhook, which is what put the config value under scrutiny.
+## Riding along on `v3.7-dev` (2026-08-12)
+
+Neither of these is part of the tagger. They share the branch because
+they arrived while it was open, and the first is what put the second
+under scrutiny.
+
+### One webhook serves several libraries
+
+The webhook fixed its library and its m3u output directory at startup:
+both came from config when the service booted, and the request body
+carried only `command`, `quiet`, `profile` and `track`. One service
+therefore meant one library, which does not survive a second collection —
+the case that prompted this was an everyday `MainMusic` alongside a
+seasonal `XmasMusic` that has to be regenerated separately.
+
+A request may now name a `library`. The output directory is *not* a
+request field: `webhook.libraries` maps each library name to its own
+`m3u_output_dir`, and only names in that map are accepted.
+
+**Why the map rather than a path in the request.** The endpoint is
+unauthenticated unless a token is configured, so a free-form output
+directory would let anything that reaches port 5588 write files anywhere
+the service account can — the same exposure the profile-name
+sanitization in `webhook.py` already exists to prevent. Taking only the
+*name* and looking the path up in config keeps the filesystem out of the
+request entirely.
+
+**Why unlisted libraries are refused rather than defaulted.** Falling
+back to the default directory would turn a forgotten config entry into a
+`202`, an `exit_code: 0`, and Christmas playlists sitting among the
+everyday ones — discovered months later, with nothing recording which
+file came from which library. A `400` naming the library is the correct
+answer to "regenerate a library I have not been told where to write".
+
+**Rejected:** a second webhook instance on a second port (the pattern
+`classical-manager-cron.sh` documents for cron). It works there because
+each cron run is a fresh process; the webhook is a daemon, so it would
+mean a second systemd unit and a duplicated `database` block running all
+year for a library used six weeks of it. Also rejected: storing the
+directory on the `Library` row, which reads as the tidier model until you
+remember the database is shared MariaDB and the paths are host-specific —
+and it would still need a separate allowlist.
+
+Two config mistakes are caught at startup rather than per request, both
+being silent and seasonal: a library name that does not exist, and a
+`webhook.library` missing from its own map (which is what a request
+omitting `library` falls back to). The service refuses to start on
+either. Each job records its library and output directory in
+`webhook.log` and in `/api/jobs/last`.
+
+Omitting the map keeps the previous behaviour — one library, writing to
+`cron.m3u_output_dir` — so existing Home Assistant automations and the
+cron script are unaffected. In that mode naming a *different* library is
+now an error rather than being ignored. Covered by
+`tests/test_webhook.py`.
+
+### Tilde in `cron.m3u_output_dir` (fixed 2026-08-12)
 
 `cron.m3u_output_dir` has always defaulted to `~/Playlists`, and nothing
 expanded the tilde. The cron script and the webhook both pass the value

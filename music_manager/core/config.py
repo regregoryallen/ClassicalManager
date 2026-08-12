@@ -462,3 +462,19 @@ def _validate_webhook(webhook: dict, path: Path) -> None:
                     f"{path}: 'webhook.allowed_commands' contains invalid "
                     f"command {cmd!r}, valid: {valid_cmds}"
                 )
+
+    if "libraries" in webhook:
+        libs = webhook["libraries"]
+        if not isinstance(libs, dict):
+            raise ConfigError(
+                f"{path}: 'webhook.libraries' must be a JSON object mapping "
+                "library name to settings"
+            )
+        for name, entry in libs.items():
+            where = f"'webhook.libraries.{name}'"
+            if not isinstance(entry, dict):
+                raise ConfigError(f"{path}: {where} must be a JSON object")
+            if not isinstance(entry.get("m3u_output_dir"), str):
+                raise ConfigError(
+                    f"{path}: {where} requires a string 'm3u_output_dir'"
+                )

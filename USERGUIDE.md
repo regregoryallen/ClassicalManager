@@ -1112,7 +1112,7 @@ playlist updates it in place without creating a duplicate.
 | `cron.library` | Library name. Falls back to `active_library` if omitted. |
 | `cron.mode` | One of: `plex`, `m3u`, `scan`, `scan+plex`, `scan+m3u`. Default: `plex`. |
 | `cron.profile` | Single profile name. Empty = all profiles. |
-| `cron.m3u_output_dir` | Output directory for M3U mode. Default: `~/Playlists`. |
+| `cron.m3u_output_dir` | Output directory for M3U mode. Default: `~/Playlists`. A leading `~` is expanded to your home directory. |
 | `cron.verbosity` | `-q` (quiet, default), `` (normal), or `-v` (verbose). |
 | `webhook` | Optional. Settings for the webhook service. See [Webhook Service](#webhook-service). |
 | `webhook.host` | Bind address. Default: `0.0.0.0` (all interfaces). |

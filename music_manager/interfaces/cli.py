@@ -322,6 +322,10 @@ def generate(
 def _output_result(prof, result, *, format="m3u", output=None, target=None,
                    quiet=False):
     """Output a generated playlist to the specified format/target."""
+    # Quoted "~/..." reaches us unexpanded (cron and the webhook both quote),
+    # so expand here rather than creating a literal '~' directory.
+    if output:
+        output = str(Path(output).expanduser())
     if target == "plex":
         from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
         from music_manager.core.config import load_config
@@ -408,7 +412,7 @@ def generate_all(
 
     if not quiet:
         typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
-    out_path = Path(output_dir)
+    out_path = Path(output_dir).expanduser()
 
     for prof in profiles:
         if not quiet:
@@ -546,7 +550,8 @@ def webhook(
     resolved_port = port or wh.get("port", 5588)
     allowed = wh.get("allowed_commands",
                      ["plex", "scan", "scan+plex", "scan+m3u", "m3u"])
-    m3u_dir = config.get("cron", {}).get("m3u_output_dir", "~/Playlists")
+    m3u_dir = os.path.expanduser(
+        config.get("cron", {}).get("m3u_output_dir", "~/Playlists"))
 
     # webhook.libraries maps a library name to its own m3u output directory,
     # letting one service serve several libraries without the request ever

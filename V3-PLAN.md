@@ -11,9 +11,11 @@
   tweaks; see that section). Branches deleted after merging, as is the
   convention.
 - **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
-  `v3.7-dev`, started 2026-08-11; see that section). Still to come from the
-  loudness/MA programme after it: the loudness analysis for sleep-playlist
-  curation, with its own version.
+  `v3.7-dev`, started 2026-08-11; see that section). Riding along on the
+  same branch: the multi-library webhook and the `cron.m3u_output_dir`
+  tilde fix (2026-08-12), which carries a behaviour change — see that
+  section. Still to come from the loudness/MA programme after it: the
+  loudness analysis for sleep-playlist curation, with its own version.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -882,6 +884,32 @@ MP3 is now 86% of the library and 62% of the multi-track works. Settled by
 playing one MP3 work and one FLAC work through MA's audio-pipeline view. If
 MA ignores MP3 ReplayGain the tags remain correct for Kodi, but the MA half
 of the design would cover only 1,004 files.
+### Tilde in `cron.m3u_output_dir` (fixed 2026-08-12)
+
+Not part of the tagger — it rode along on this branch with the
+multi-library webhook, which is what put the config value under scrutiny.
+
+`cron.m3u_output_dir` has always defaulted to `~/Playlists`, and nothing
+expanded the tilde. The cron script and the webhook both pass the value
+quoted (`--output-dir "$OUTPUT_DIR"`), so the shell leaves it alone, and
+`Path("~/Playlists")` is a relative path — playlists went to a literal
+directory named `~` under whatever the working directory happened to be
+(the install directory for cron, the webhook's cwd otherwise). The cron
+script's own `os.path.expanduser` covered only the *default*, so it fired
+exactly when the key was absent and never when it was set.
+
+**Behaviour change:** an install whose config says `~/Playlists` now
+writes to `$HOME/Playlists` instead of `./~/Playlists`. Anything reading
+the old literal directory — a Music Assistant folder mapping, a sync
+script — needs repointing, and the stale `~` directory can be deleted
+once its contents are accounted for. Absolute paths are unaffected.
+
+Expansion happens at both ends: `_output_result` and `generate-all`'s
+`--output-dir` expand whatever they are handed (`cli.py`), and the two
+places that read the config value — the `webhook` command and the cron
+script's config snippet — expand it as they read. `webhook.libraries`
+already expanded its per-library directories, so the two now agree.
+Covered by `tests/test_output_paths.py`.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

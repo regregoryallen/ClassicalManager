@@ -399,7 +399,7 @@ class SimilarityUIMixin:
         ctk.CTkCheckBox(param_frame, text="", variable=startle_enabled,
                         width=20).pack(side="left", padx=(0, 12))
 
-        ctk.CTkLabel(param_frame, text="Max level:").pack(
+        ctk.CTkLabel(param_frame, text="Max level vs work:").pack(
             side="left", padx=(0, 4))
         level_var = tk.DoubleVar(value=MAX_LEVEL_OFFSET_DB)
         level_enabled = tk.BooleanVar(value=False)
@@ -507,7 +507,7 @@ class SimilarityUIMixin:
         # numbers should be visible and orderable — it is also how the
         # metrics get sanity-checked against the music in practice.
         result_tree.heading("startle", text="Startle")
-        result_tree.heading("level", text="Level")
+        result_tree.heading("level", text="vs Work")
         result_tree.column("#0", width=200)
         result_tree.column("composer", width=130)
         result_tree.column("album", width=150)
@@ -556,6 +556,16 @@ class SimilarityUIMixin:
                 result_tree, sim_state, limit_var, vol_var,
                 vol_enabled, blend_var, weight_vars)
         ).pack(side="left", padx=(0, 4))
+        measure_btn = ctk.CTkButton(
+            bot_frame, text="Measure quietness", width=150,
+            command=lambda: self._measure_visible_quietness(
+                result_tree, sim_state, limit_var))
+        measure_btn.pack(side="left", padx=(0, 4))
+        # A2.1: ffmpeg is not on a default Windows PATH, and the
+        # tag-derived Level column works without it. Disable with a
+        # reason rather than letting the button raise.
+        self._disable_without_ffmpeg(measure_btn)
+
         ctk.CTkButton(
             bot_frame, text="Close", width=70,
             command=popup.destroy).pack(side="left", padx=(0, 4))
@@ -724,6 +734,173 @@ class SimilarityUIMixin:
             parts.append(f"{unmeasured} unmeasured")
         return " — ".join(parts)
 
+    @staticmethod
+    def _disable_without_ffmpeg(button):
+        """Grey a control out when ffmpeg is missing, and say why (A2.1).
+
+        The quietness metrics need an external binary; the tag-derived
+        playback level does not. ffmpeg is absent from a default Windows
+        PATH, and nothing about a Find Similar button warns a user that a
+        system binary is involved — so the control has to explain itself
+        rather than raise from a thread.
+        """
+        from music_manager.core.quietness import MeasurementError, find_ffmpeg
+        try:
+            find_ffmpeg()
+        except MeasurementError:
+            button.configure(state="disabled")
+            try:
+                # CTk has no tooltip; the label carries the reason.
+                button.configure(text="Measure (needs ffmpeg)")
+            except Exception:       # pragma: no cover - cosmetic only
+                pass
+            return False
+        return True
+
+    def _measure_visible_quietness(self, result_tree, sim_state, limit_var):
+        """Measure the top candidates that have no quietness data yet (C4).
+
+        Scoped to the candidates the user is actually looking at, in score
+        order, ignoring the quietness sliders. Ignoring them is the point:
+        with a filter on, unmeasured tracks are excluded from the view, so
+        measuring only what is displayed could never measure anything.
+
+        There is no library-wide pass in this design. The library fills in
+        as curation proceeds.
+        """
+        import threading
+
+        from music_manager.core.quietness import MeasurementError
+        from music_manager.core.similarity import (
+            AnalysisCancelled, measure_quietness, tracks_needing_quietness,
+        )
+
+        try:
+            limit = int(limit_var.get())
+        except ValueError:
+            limit = 50
+
+        candidates = (sim_state.get("all_results") or [])[:limit]
+        if not candidates:
+            messagebox.showinfo("Measure", "Run a search first.")
+            return
+
+        try:
+            todo = tracks_needing_quietness([r["track_id"] for r in candidates])
+        except Exception as exc:                    # noqa: BLE001 - reported
+            messagebox.showerror("Measure", str(exc))
+            return
+        if not todo:
+            messagebox.showinfo(
+                "Measure",
+                f"All {len(candidates)} candidates on screen are already "
+                f"measured.")
+            return
+
+        # ~24 tracks a minute measured over the library share (A3).
+        minutes = max(1, round(len(todo) / 24))
+        if not messagebox.askyesno(
+                "Measure quietness",
+                f"Measure {len(todo)} of the top {len(candidates)} "
+                f"candidates?\n\nRoughly {minutes} minute(s). Results are "
+                f"saved as they finish, so this can be run again to "
+                f"continue."):
+            return
+
+        self._sim_cancel_flag = False
+        ctk = self.ctk
+        popup = tk.Toplevel(self.root)
+        popup.title("Measuring quietness")
+        popup.transient(self.root)
+        popup.resizable(False, False)
+        self._center_on_main(popup, 400, 120)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        status = ctk.CTkLabel(popup, text="Measuring...")
+        status.pack(padx=20, pady=(15, 5))
+        progress = ctk.CTkProgressBar(popup, width=300)
+        progress.pack(padx=20, pady=5)
+        progress.set(0)
+        ctk.CTkButton(
+            popup, text="Cancel", width=80,
+            command=lambda: setattr(self, "_sim_cancel_flag", True)
+        ).pack(pady=(5, 10))
+
+        def _update(current, total):
+            if total:
+                progress.set(current / total)
+            status.configure(text=f"Measuring {current}/{total}")
+
+        def _done(stats):
+            popup.destroy()
+            # Re-render so the new numbers appear in the columns without
+            # re-running the search — but the cached results predate the
+            # measurement, so they have to be refreshed from the database.
+            self._refresh_cached_quietness(sim_state)
+            self._apply_quietness_filter(result_tree, sim_state, limit_var)
+            parts = [f"Measured {stats['measured']}"]
+            if stats["silent"]:
+                parts.append(f"{stats['silent']} silent or too short")
+            if stats["failed"]:
+                parts.append(f"{stats['failed']} failed")
+            if stats["missing"]:
+                parts.append(f"{stats['missing']} file missing")
+            messagebox.showinfo("Measure", "; ".join(parts) + ".")
+
+        def worker():
+            try:
+                throttle = UIThrottle()
+
+                def prog(current, total, _msg):
+                    if not throttle.ready(force=(current >= total)):
+                        return
+                    self.root.after(0, lambda c=current, t=total:
+                                    _update(c, t))
+
+                stats = measure_quietness(
+                    todo, progress_callback=prog,
+                    cancel_check=lambda: self._sim_cancel_flag)
+                self.root.after(0, lambda: _done(stats))
+            except AnalysisCancelled:
+                # Whatever finished before the cancel is already written.
+                self.root.after(0, popup.destroy)
+            except MeasurementError as exc:
+                self.root.after(0, lambda e=exc: (
+                    popup.destroy(), messagebox.showerror("Measure", str(e))))
+            except Exception as exc:                # noqa: BLE001 - reported
+                self.root.after(0, lambda e=exc: (
+                    popup.destroy(), messagebox.showerror("Measure", str(e))))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _refresh_cached_quietness(sim_state):
+        """Re-read the metrics for the cached results after measuring.
+
+        `all_results` is a snapshot taken at search time, so it still
+        holds the nulls the measurement has just replaced. Only the
+        quietness columns are re-read — the scores and rankings are
+        unaffected by measurement and re-running the search would be a
+        needless several seconds.
+        """
+        from music_manager.core.similarity import LOUDNESS_FIELDS, TrackAnalysis
+
+        results = sim_state.get("all_results") or []
+        if not results:
+            return
+        by_id = {r["track_id"]: r for r in results}
+        rows = (TrackAnalysis
+                .select(TrackAnalysis.track, *[
+                    getattr(TrackAnalysis, n) for n in LOUDNESS_FIELDS])
+                .where(TrackAnalysis.track.in_(list(by_id))))
+        for row in rows:
+            result = by_id.get(row.track_id)
+            if result is None:
+                continue
+            for name in LOUDNESS_FIELDS:
+                result[name] = getattr(row, name)
+
     def _accept_sim_tracks(self, result_tree, sim_state, selected_only=True):
         """Add result tracks as track-level selections in the profile."""
         if selected_only:
@@ -782,6 +959,14 @@ class SimilarityUIMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Play",
                          command=lambda: self._play_track(track.id))
+        # C5. Only offered when there is a moment to jump to — a track
+        # that has not been measured, or measured as silent, has none.
+        if r.get("loud_at_ms") is not None:
+            at_s = r["loud_at_ms"] / 1000.0
+            menu.add_command(
+                label=f"Audition loudest moment ({int(at_s // 60)}:"
+                      f"{int(at_s % 60):02d})",
+                command=lambda: self._audition_loud_moment(track.id, r))
         if track.work_id:
             menu.add_command(label="Details...",
                              command=lambda: self._show_work_details(track.work_id))
@@ -791,6 +976,49 @@ class SimilarityUIMixin:
         menu.add_command(label="Show in Folder",
                          command=lambda: self._show_track_in_folder(track.id))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _audition_loud_moment(self, track_id, result):
+        """Play the passage the startle score came from (C5).
+
+        Eight seconds of listening in place of trusting a number. The
+        extraction is quick but not instant over the share, so it runs
+        off the UI thread; the player is then handed the excerpt on the
+        UI thread like any other file.
+        """
+        import threading
+
+        from music_manager.core.database import Track
+        from music_manager.core.quietness import (
+            MeasurementError, extract_excerpt, prune_auditions,
+        )
+
+        track = Track.get_by_id(track_id)
+        source = Path(track.folder.root_path) / track.relative_path
+        if not source.exists():
+            messagebox.showerror("File Not Found", f"File not found:\n{source}")
+            return
+
+        at_ms = result.get("loud_at_ms")
+        if at_ms is None:
+            messagebox.showinfo(
+                "Audition",
+                "This track has no measured loud moment. Run Measure "
+                "quietness first.")
+            return
+
+        def worker():
+            try:
+                prune_auditions()
+                excerpt = extract_excerpt(source, at_ms)
+                self.root.after(0, lambda: self._open_in_player(excerpt))
+            except MeasurementError as exc:
+                self.root.after(
+                    0, lambda e=exc: messagebox.showerror("Audition", str(e)))
+            except Exception as exc:                # noqa: BLE001 - reported
+                self.root.after(
+                    0, lambda e=exc: messagebox.showerror("Audition", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _sim_re_search(self, result_tree, sim_state, limit_var, vol_var,
                        vol_enabled, blend_var, weight_vars=None):

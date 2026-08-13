@@ -48,7 +48,12 @@ logger = logging.getLogger(__name__)
 
 # Bumped when a metric's definition changes, forcing re-measurement.
 # Deliberately NOT FEATURE_VERSION: see the module docstring.
-LOUDNESS_VERSION = 1
+#
+#   2 — head_level and tail_level are measured over audible material
+#       rather than over the first and last ten seconds of the file.
+#       Ungated, they were reporting how much digital silence a rip
+#       carried; see the comment where they are computed.
+LOUDNESS_VERSION = 2
 
 # Slider endpoints, taken from the library rather than chosen: a
 # 300-track sample measured in A3 (CM-quietness-A4-report.md §5).
@@ -430,11 +435,28 @@ def metrics_from_series(series):
             for i in range(rise_frames, len(s_values)))
 
     # --- head and tail, from M so the first seconds are visible --------
+    #
+    # These two windows are EDGE_WINDOW_S each, so on a track shorter
+    # than twice that they overlap and are no longer independent
+    # measurements — on a 12 s excerpt they are very nearly the same
+    # window and report near-identical values. Real movements are far
+    # longer, but anything reasoning about a seam between two tracks
+    # should not assume the head and the tail of a very short one are
+    # separate facts.
+    # Measured over the first and last ten seconds of AUDIBLE material,
+    # not of the file. A3 found this matters: over a 300-track sample,
+    # tail_level ran to -62 LU with 69 of 299 tracks below -20, while
+    # head_level bottomed out at -27 with only 7 below -20. That
+    # asymmetry is not musical — it is trailing silence in the rips, and
+    # ungated it made the pool report's worst reachable seam 65.7 LU, a
+    # statement about ripping rather than about music and not something
+    # curation could fix by dropping tracks.
     m_times, m_values = series.valid_momentary()
-    if m_values:
+    audible_edges = [v for v in m_values if v > ABSOLUTE_GATE_LUFS]
+    if audible_edges:
         edge_frames = max(1, int(round(EDGE_WINDOW_S / FRAME_PERIOD)))
-        head = _energy_mean(m_values[:edge_frames])
-        tail = _energy_mean(m_values[-edge_frames:])
+        head = _energy_mean(audible_edges[:edge_frames])
+        tail = _energy_mean(audible_edges[-edge_frames:])
         if head is not None:
             metrics.head_level = head - integrated
         if tail is not None:
@@ -446,6 +468,104 @@ def metrics_from_series(series):
         metrics.lra = max(0.0, _percentile(gated, 95) - _percentile(gated, 10))
 
     return metrics
+
+
+# How much of the run-up to include before the loud moment, and how long
+# the excerpt runs. Two seconds of lead is enough to hear what the jump
+# is *from*, which is the whole point — the same fortissimo is startling
+# or unremarkable depending on what preceded it.
+AUDITION_LEAD_S = 2.0
+AUDITION_LENGTH_S = 12.0
+
+# Excerpts are written here rather than beside the music: this is the
+# only part of v3.8 that creates a file, and it must not be anywhere a
+# scan could later mistake it for library content.
+AUDITION_DIR_NAME = "classical-manager-audition"
+AUDITION_KEEP_S = 3600
+
+
+def audition_dir():
+    """The scratch directory for excerpts, created on demand."""
+    import tempfile
+    from pathlib import Path
+
+    path = Path(tempfile.gettempdir()) / AUDITION_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def prune_auditions(older_than_s=AUDITION_KEEP_S):
+    """Delete excerpts left over from previous sessions.
+
+    Not deleted immediately after playing: the external player still has
+    the file open, and pulling it out from under it is how an audition
+    turns into silence. They are small and they are in the system temp
+    directory, so an age sweep on the next use is enough.
+    """
+    import time
+
+    removed = 0
+    cutoff = time.time() - older_than_s
+    try:
+        entries = list(audition_dir().iterdir())
+    except OSError:                                 # pragma: no cover
+        return 0
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                entry.unlink()
+                removed += 1
+        except OSError:                             # pragma: no cover
+            continue                # in use, or gone already; either is fine
+    return removed
+
+
+def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
+                    length_s=AUDITION_LENGTH_S, out_dir=None):
+    """Cut the passage around `at_ms` out to a temporary file (C5).
+
+    `loud_at_ms` exists so a startle score can be checked by ear in eight
+    seconds rather than trusted. This turns reviewing a shortlist from a
+    week into an evening, which makes it the best value-per-line in the
+    whole feature.
+
+    Written as WAV deliberately. It needs no encoder, so it cannot fail
+    on an ffmpeg build without libmp3lame, and every platform's default
+    player opens it. Twelve seconds is about 2 MB, which is not worth
+    compressing.
+
+    Returns the path to the excerpt.
+    """
+    import subprocess
+    from pathlib import Path
+
+    source = Path(source)
+    # Clamped, because the loud moment can be inside the first two
+    # seconds and ffmpeg would take a negative -ss as an error.
+    start = max(0.0, (at_ms / 1000.0) - lead_s)
+    out_dir = Path(out_dir) if out_dir else audition_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Named for the source and the offset, so re-auditioning the same
+    # moment reuses one file instead of littering.
+    stem = "".join(c if c.isalnum() else "_" for c in source.stem)[:60]
+    target = out_dir / f"{stem}_{int(start)}s.wav"
+
+    command = [
+        binary or find_ffmpeg(), "-hide_banner", "-nostats", "-y",
+        # Before -i: ffmpeg seeks rather than decoding from the start,
+        # which matters on a ten-minute movement read over a share.
+        "-ss", f"{start:.3f}", "-i", str(source),
+        "-t", f"{length_s:.3f}", "-ac", "2", str(target),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as exc:
+        raise MeasurementError(f"cannot run ffmpeg: {exc}") from exc
+    if result.returncode != 0 or not target.exists():
+        tail = (result.stderr or "").strip().splitlines()[-3:]
+        raise MeasurementError(
+            f"could not extract the excerpt: " + " / ".join(tail))
+    return target
 
 
 def measure(path, binary=None):

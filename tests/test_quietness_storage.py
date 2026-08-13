@@ -566,3 +566,140 @@ def test_schema_version_tracks_the_model_shape():
         f"add the migration to _create_and_migrate, and record "
         f"{fingerprint!r} in MODEL_SHAPE."
     )
+
+
+# ---------------------------------------------------------------------------
+# C4 — demand-driven measurement
+# ---------------------------------------------------------------------------
+
+def test_tracks_needing_quietness_keys_on_the_version_not_the_metric(lib):
+    """A silent track measures fine and has no startle value.
+
+    Keying the queue on `startle_local` being null would put it back in
+    the queue on every pass, forever. `loudness_version` is the column
+    whose job this is.
+    """
+    from music_manager.core.quietness import LOUDNESS_VERSION
+    from music_manager.core.similarity import tracks_needing_quietness
+
+    make_album(lib, "A/Alb1", [("Work One", 3)])
+    tracks = list(Track.select().where(Track.library == lib))
+    for track in tracks:
+        TrackAnalysis.create(track=track, features="[0.0]",
+                             analyzed_at="2026-08-13 00:00:00")
+    ids = [t.id for t in tracks]
+
+    assert tracks_needing_quietness(ids) == ids
+
+    # Measured with a value.
+    (TrackAnalysis.update(loudness_version=LOUDNESS_VERSION, startle_local=8.0)
+     .where(TrackAnalysis.track == ids[0]).execute())
+    # Measured, but silent: stamped, metrics still null.
+    (TrackAnalysis.update(loudness_version=LOUDNESS_VERSION)
+     .where(TrackAnalysis.track == ids[1]).execute())
+
+    assert tracks_needing_quietness(ids) == [ids[2]]
+
+
+def test_a_stale_loudness_version_is_re_queued(lib):
+    from music_manager.core.quietness import LOUDNESS_VERSION
+    from music_manager.core.similarity import tracks_needing_quietness
+
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    track = Track.select().where(Track.library == lib).first()
+    TrackAnalysis.create(track=track, features="[0.0]",
+                         analyzed_at="2026-08-13 00:00:00",
+                         loudness_version=LOUDNESS_VERSION - 1,
+                         startle_local=8.0)
+
+    assert tracks_needing_quietness([track.id]) == [track.id]
+
+
+@needs_ffmpeg
+def test_measure_quietness_writes_every_metric(lib, tmp_path):
+    """End to end: real audio in, populated columns out."""
+    from music_manager.core.database import Album, SourceFolder, Work
+    from music_manager.core.quietness import LOUDNESS_VERSION
+    from music_manager.core.similarity import measure_quietness
+    from tests.rg_audio import make_envelope
+
+    folder = SourceFolder.create(library=lib, root_path=str(tmp_path))
+    album = Album.create(library=lib, folder=folder, album_key="Q", title="Q")
+    work = Work.create(album=album, work_name="W", work_sequence=1,
+                       work_source="work_tag")
+    make_envelope(tmp_path / "step.wav", [(40, -30, -30), (40, -10, -10)])
+    track = Track.create(library=lib, folder=folder, album=album, work=work,
+                         title="step", relative_path="step.wav",
+                         disc_number=1, track_number=1, duration_ms=80_000)
+    TrackAnalysis.create(track=track, features="[0.0]",
+                         analyzed_at="2026-08-13 00:00:00")
+
+    stats = measure_quietness([track.id])
+    assert stats == {"measured": 1, "silent": 0, "failed": 0, "missing": 0}
+
+    row = TrackAnalysis.get(TrackAnalysis.track == track)
+    assert row.loudness_version == LOUDNESS_VERSION
+    assert row.startle_local == pytest.approx(20.0, abs=3.0)
+    assert row.loud_at_ms == pytest.approx(40_000, abs=5_000)
+    assert row.integrated_lufs is not None
+    assert row.head_level is not None
+    assert row.tail_level is not None
+
+
+@needs_ffmpeg
+def test_a_silent_track_is_stamped_but_not_scored(lib, tmp_path):
+    """Stamped so it is not re-queued; null so it is not called quiet."""
+    from music_manager.core.database import Album, SourceFolder, Work
+    from music_manager.core.quietness import LOUDNESS_VERSION
+    from music_manager.core.similarity import (
+        measure_quietness, tracks_needing_quietness,
+    )
+
+    folder = SourceFolder.create(library=lib, root_path=str(tmp_path))
+    album = Album.create(library=lib, folder=folder, album_key="Q", title="Q")
+    work = Work.create(album=album, work_name="W", work_sequence=1,
+                       work_source="work_tag")
+    make_audio(tmp_path / "silent.flac", seconds=20.0, silent=True)
+    track = Track.create(library=lib, folder=folder, album=album, work=work,
+                         title="silent", relative_path="silent.flac",
+                         disc_number=1, track_number=1, duration_ms=20_000)
+    TrackAnalysis.create(track=track, features="[0.0]",
+                         analyzed_at="2026-08-13 00:00:00")
+
+    stats = measure_quietness([track.id])
+    assert stats["silent"] == 1
+    assert stats["measured"] == 0
+
+    row = TrackAnalysis.get(TrackAnalysis.track == track)
+    assert row.loudness_version == LOUDNESS_VERSION
+    assert row.startle_local is None
+    # Stamped, so it does not come back round on the next pass.
+    assert tracks_needing_quietness([track.id]) == []
+
+
+@needs_ffmpeg
+def test_a_missing_file_is_counted_not_raised(lib, tmp_path):
+    from music_manager.core.database import Album, SourceFolder, Work
+    from music_manager.core.similarity import measure_quietness
+
+    folder = SourceFolder.create(library=lib, root_path=str(tmp_path))
+    album = Album.create(library=lib, folder=folder, album_key="Q", title="Q")
+    work = Work.create(album=album, work_name="W", work_sequence=1,
+                       work_source="work_tag")
+    track = Track.create(library=lib, folder=folder, album=album, work=work,
+                         title="gone", relative_path="gone.wav",
+                         disc_number=1, track_number=1, duration_ms=1000)
+    TrackAnalysis.create(track=track, features="[0.0]",
+                         analyzed_at="2026-08-13 00:00:00")
+
+    stats = measure_quietness([track.id])
+    assert stats["missing"] == 1
+    # Not stamped: the file may come back, and it has not been measured.
+    assert TrackAnalysis.get(
+        TrackAnalysis.track == track).loudness_version is None
+
+
+def test_measuring_nothing_is_not_an_error():
+    from music_manager.core.similarity import measure_quietness
+    assert measure_quietness([]) == {
+        "measured": 0, "silent": 0, "failed": 0, "missing": 0}

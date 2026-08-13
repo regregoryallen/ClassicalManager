@@ -310,12 +310,70 @@ def build_help_content(text: tk.Text) -> None:
            "every candidate considered (e.g. 3 of 2481)")
     bullet("Dyn Range column \u2014 the track's own dynamic range, in dB \u2014 the "
            "measure the Max dyn range filter applies")
+    bullet("Max startle \u2014 optional filter on how sharply a track gets "
+           "louder than the last half-minute of listening. This is the "
+           "\u201cwill it wake me\u201d control. Tick the checkbox to enable it")
+    bullet("Max level vs work \u2014 optional filter on how loud a track plays "
+           "compared to the rest of its own work. See \u201cQuietness "
+           "measures\u201d below for why this is not the same as how loud "
+           "the file is")
+    bullet("Startle and vs Work columns \u2014 the two numbers those filters "
+           "apply. A dash means the track has not been measured yet, "
+           "which is not the same as a low score")
+    bullet("Measure quietness \u2014 measures the candidates on screen that "
+           "have no quietness numbers yet, a couple of minutes for a "
+           "screenful. There is no library-wide pass: the library fills "
+           "in as you curate. Needs ffmpeg, and the button says so if it "
+           "is missing")
     bullet("Double-click any column header to sort results by it \u2014 "
-           "Match, Rank, and Dyn Range sort by value, not as text")
+           "Match, Rank, Dyn Range, Startle and vs Work sort by value, "
+           "not as text")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
     bullet("Right-click a result for Play, Details, Show Album, or "
            "Show in Folder")
+
+    subheading("Quietness measures")
+    body(
+        "Built for making a playlist you can fall asleep to, but useful "
+        "anywhere you care about a track's dynamics rather than its style. "
+        "The similarity search answers “does this sound like that”; these "
+        "answer “is this going to startle me”, which turns out to be a "
+        "different question.\n"
+    )
+    body(
+        "The one to understand first is “vs work”. Music Assistant "
+        "loudness-matches your library, but it matches each *work* as a "
+        "whole rather than each track, so a symphony keeps its own internal "
+        "light and shade. That means a movement's playing volume is set by "
+        "how loud it is relative to its siblings — a hushed slow movement "
+        "really does come out of the speakers quieter than the finale of "
+        "the same symphony. That difference is what “vs work” measures, and "
+        "it is invisible to the ordinary similarity search.\n"
+    )
+    bullet("vs work — how loud a track plays next to the rest of its own "
+           "work, in dB. Negative is quieter than its siblings, positive "
+           "is louder. A standalone piece is 0.0 by definition: on its own "
+           "it *is* the work. Read from the ReplayGain tags in the file, "
+           "so a file with no tags shows a dash rather than 0.0 — unknown "
+           "is not the same as average")
+    bullet("Startle — the worst jump in volume against the previous half "
+           "minute, in LU (a loudness unit, near enough a dB). Around 2–5 "
+           "is calm, over 20 is a piece that erupts. This catches the slow "
+           "introduction that turns into a fortissimo, which a whole-track "
+           "average cannot see")
+    bullet("Loudest moment — where in the track that jump happens, so it "
+           "can be checked by ear rather than trusted")
+    bullet("Head level / tail level — how loud a track's first and last ten "
+           "seconds are compared with its middle. These decide how rough "
+           "the join is when one track follows another")
+    bullet("Loudness range — the gap between a track's quiet and loud "
+           "passages. Close cousin of the Dyn Range column, measured the "
+           "way broadcasters do it")
+    bullet("Integrated loudness — the track's overall average level in "
+           "LUFS, the broadcast standard. Recorded for reference; Music "
+           "Assistant normalizes this away before you hear it, which is "
+           "exactly why “vs work” is the number that matters")
 
     subheading("Pin to Position")
     body(

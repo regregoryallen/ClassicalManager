@@ -877,6 +877,110 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
     return results[:limit]
 
 
+# How many parallel ffmpeg processes a demand-driven measurement uses.
+# Not `default_worker_count()`, which is sized for librosa: that costs
+# 219 MB + 93 MB per audio-minute per worker and swaps at 18, while
+# ebur128 streams in a few MB. The limit here is read bandwidth off the
+# library share, and 8 is where the measured gain flattened.
+QUIETNESS_WORKERS = 8
+
+
+def tracks_needing_quietness(track_ids):
+    """Which of these tracks have no current quietness measurement.
+
+    Keyed on `loudness_version`, not on whether `startle_local` is null.
+    A digitally silent track measures successfully and legitimately has
+    no startle value; keying on the metric would put it back in the queue
+    on every pass, forever.
+    """
+    from music_manager.core.quietness import LOUDNESS_VERSION
+
+    rows = (TrackAnalysis
+            .select(TrackAnalysis.track, TrackAnalysis.loudness_version)
+            .where(TrackAnalysis.track.in_(list(track_ids))))
+    current = {r.track_id for r in rows
+               if r.loudness_version == LOUDNESS_VERSION}
+    return [tid for tid in track_ids if tid not in current]
+
+
+def measure_quietness(track_ids, progress_callback=None,
+                      workers=QUIETNESS_WORKERS, cancel_check=None):
+    """Measure these tracks and store the result. Demand-driven (C4).
+
+    There is no library-wide quietness pass anywhere in v3.8, and none is
+    needed: curation happens over 50-100 candidates at a time, so the
+    library fills in as it is used.
+
+    Measurement runs on a thread pool because it is subprocess work
+    waiting on I/O; the writes are done afterwards on one thread, because
+    a peewee connection is not something to share across threads.
+
+    Returns a stats dict. `silent` counts tracks that measured correctly
+    and have nothing to report — digital silence, or shorter than the 3 s
+    short-term window. Those are stamped with the version so they are not
+    re-queued, but their metrics stay null: unmeasurable is not quiet.
+    """
+    import concurrent.futures
+
+    from music_manager.core.quietness import (
+        LOUDNESS_VERSION, MeasurementError, find_ffmpeg, measure,
+    )
+
+    stats = {"measured": 0, "silent": 0, "failed": 0, "missing": 0}
+    if not track_ids:
+        return stats
+
+    binary = find_ffmpeg()          # raises MeasurementError if absent
+
+    rows = list(Track.select(Track.id, Track.relative_path,
+                             SourceFolder.root_path)
+                .join(SourceFolder, on=(Track.folder == SourceFolder.id))
+                .where(Track.id.in_(list(track_ids)))
+                .objects())
+    total = len(rows)
+
+    def measure_one(row):
+        from pathlib import Path
+        path = Path(row.root_path) / row.relative_path
+        if not path.exists():
+            return row.id, None, "missing"
+        try:
+            return row.id, measure(path, binary=binary), None
+        except MeasurementError as exc:
+            logger.warning("Quietness measurement failed for %s: %s",
+                           path, exc)
+            return row.id, None, "failed"
+
+    updates = []
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for track_id, metrics, problem in pool.map(measure_one, rows):
+            done += 1
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelled()
+            if problem:
+                stats[problem] += 1
+            elif metrics.silent:
+                stats["silent"] += 1
+                updates.append((track_id, None))
+            else:
+                stats["measured"] += 1
+                updates.append((track_id, metrics))
+            if progress_callback:
+                progress_callback(done, total, "")
+
+    with database.atomic():
+        for track_id, metrics in updates:
+            values = {"loudness_version": LOUDNESS_VERSION}
+            if metrics is not None:
+                for name in LOUDNESS_FIELDS:
+                    if name != "loudness_version":
+                        values[name] = getattr(metrics, name)
+            (TrackAnalysis.update(**values)
+             .where(TrackAnalysis.track == track_id).execute())
+    return stats
+
+
 def filter_by_quietness(results: list[dict], startle_max: float | None = None,
                         level_max: float | None = None) -> tuple[list, dict]:
     """Narrow results on the v3.8 axes, and say what was dropped and why.

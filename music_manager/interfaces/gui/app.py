@@ -397,9 +397,27 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         y = my - height // 2
         window.geometry(f"{width}x{height}+{x}+{y}")
 
+    @staticmethod
+    def _open_in_player(file_path):
+        """Hand a path to the system default player.
+
+        Split out of _play_track for v3.8's audition, which plays a
+        temporary excerpt rather than a library track. Nothing here cares
+        which it is, so nothing here needed to change — only to be
+        callable with a path instead of a track id.
+        """
+        import subprocess
+        _sys = platform.system()
+        if _sys == "Windows":
+            import os
+            os.startfile(str(file_path))
+        elif _sys == "Darwin":
+            subprocess.Popen(["open", str(file_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(file_path)])
+
     def _play_track(self, track_id):
         """Open a track's audio file in the system default player."""
-        import subprocess
         from music_manager.core.database import Track
         try:
             track = Track.get_by_id(track_id)
@@ -407,14 +425,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             if not file_path.exists():
                 messagebox.showerror("File Not Found", f"File not found:\n{file_path}")
                 return
-            _sys = platform.system()
-            if _sys == "Windows":
-                import os
-                os.startfile(str(file_path))
-            elif _sys == "Darwin":
-                subprocess.Popen(["open", str(file_path)])
-            else:
-                subprocess.Popen(["xdg-open", str(file_path)])
+            self._open_in_player(file_path)
         except Exception as exc:
             messagebox.showerror("Playback Error", str(exc))
 

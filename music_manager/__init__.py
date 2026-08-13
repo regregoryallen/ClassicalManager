@@ -5,4 +5,4 @@
 # .git directory and the git executable, and the Windows setup path assumes
 # only Python is installed — a frozen build would have neither and would
 # report "unknown" for the same commit that reads 3.6.3 here.
-__version__ = "3.6.3"
+__version__ = "3.7"

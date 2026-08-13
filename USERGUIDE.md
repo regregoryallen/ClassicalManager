@@ -995,8 +995,10 @@ python main.py --cli generate-all --library "My Collection" \
     --format m3u --output-dir /path/to/that/systems/playlist/folder
 ```
 
-Every profile becomes `<Profile_Name>.m3u`, with spaces and slashes replaced by
-underscores. Rerunning overwrites the same files in place, so regenerating
+Every profile becomes `<Profile Name>.m3u`. The name is used as-is apart from
+`/`, which becomes an underscore — spaces are preserved, because importers such
+as Music Assistant name the playlist after the file. Rerunning overwrites the
+same files in place, so regenerating
 updates the playlists rather than accumulating copies. Profiles whose names begin
 with `__` are internal and are skipped.
 
@@ -1112,12 +1114,13 @@ playlist updates it in place without creating a duplicate.
 | `cron.library` | Library name. Falls back to `active_library` if omitted. |
 | `cron.mode` | One of: `plex`, `m3u`, `scan`, `scan+plex`, `scan+m3u`. Default: `plex`. |
 | `cron.profile` | Single profile name. Empty = all profiles. |
-| `cron.m3u_output_dir` | Output directory for M3U mode. Default: `~/Playlists`. |
+| `cron.m3u_output_dir` | Output directory for M3U mode. Default: `~/Playlists`. A leading `~` is expanded to your home directory. |
 | `cron.verbosity` | `-q` (quiet, default), `` (normal), or `-v` (verbose). |
 | `webhook` | Optional. Settings for the webhook service. See [Webhook Service](#webhook-service). |
 | `webhook.host` | Bind address. Default: `0.0.0.0` (all interfaces). |
 | `webhook.port` | Listen port. Default: `5588`. |
-| `webhook.library` | Library name. Falls back to `active_library` if omitted. |
+| `webhook.library` | Default library, used when a request does not name one. Falls back to `active_library` if omitted. |
+| `webhook.libraries` | Optional. Maps a library name to its own `m3u_output_dir`, letting one service serve several libraries. A leading `~` is expanded to your home directory. A request may name only libraries listed here. See [Serving several libraries](#serving-several-libraries). |
 | `webhook.allowed_commands` | List of allowed commands. Default: all five modes. |
 
 ### gui_prefs.json (auto-managed)
@@ -1253,9 +1256,14 @@ curl http://localhost:5588/api/health
 {
   "status": "ok",
   "library": "My Collection",
+  "libraries": ["My Collection"],
   "allowed_commands": ["m3u", "plex", "scan", "scan+m3u", "scan+plex"]
 }
 ```
+
+`library` is the default used when a request does not name one; `libraries`
+lists every library this service will accept (see
+[Serving several libraries](#serving-several-libraries)).
 
 #### POST /api/jobs
 
@@ -1275,6 +1283,14 @@ curl -X POST http://localhost:5588/api/jobs \
   -d '{"command": "plex", "profile": "Morning Mix"}'
 ```
 
+To target a library other than the default:
+
+```bash
+curl -X POST http://localhost:5588/api/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "m3u", "library": "XmasMusic"}'
+```
+
 **Commands:** `plex`, `scan`, `scan+plex`, `scan+m3u`, `m3u` (same as cron modes),
 plus `exclude-track` (see below). Each must be listed in
 `webhook.allowed_commands` to be accepted.
@@ -1282,9 +1298,48 @@ plus `exclude-track` (see below). Each must be listed in
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `command` | string | yes | One of the commands listed above. |
+| `library` | string | no | Library to run against. Must be listed in `webhook.libraries`. Defaults to `webhook.library`. Ignored by `exclude-track`, which acts on a profile. |
 | `profile` | string | no | Run for a single profile instead of all profiles. Required for `exclude-track`. |
 | `quiet` | boolean | no | Suppress progress output (default: `false`). |
 | `track` | object | no | Track identifiers for `exclude-track` (see below). |
+
+#### Serving several libraries
+
+One service can serve several libraries, each writing m3u files to its own
+directory. Map them in `webhook.libraries`:
+
+```json
+"webhook": {
+  "library": "MainMusic",
+  "libraries": {
+    "MainMusic": { "m3u_output_dir": "/mnt/MediaLib/Albums/Playlists" },
+    "XmasMusic": { "m3u_output_dir": "/mnt/MediaLib/Albums/XmasPlaylists" }
+  }
+}
+```
+
+A request may then name any library in that map, and no other — asking for one
+that is not listed is refused with `400` rather than served from the default
+library's directory. That is deliberate: a seasonal library whose playlists
+quietly land among the everyday ones produces a job that reports success, and
+nothing afterwards records which files came from which library.
+
+The output directory is never taken from the request. It comes only from this
+map, so a caller cannot choose where files are written.
+
+Notes:
+
+- `webhook.library` must itself appear in the map, since it is what a request
+  without a `library` field falls back to. The service refuses to start
+  otherwise.
+- Every name in the map must be an existing library; the service checks at
+  startup and lists the available names if one is wrong.
+- The map is read once at startup — after editing it, restart the service.
+- Omit `libraries` entirely to keep the previous behaviour: one library,
+  writing to `cron.m3u_output_dir`. In that mode a request naming any other
+  library is refused.
+- Each job records its library and output directory in `webhook.log` and in
+  the `/api/jobs/last` response.
 
 #### Thumbs Down: `exclude-track`
 
@@ -1312,6 +1367,13 @@ The `track` object accepts:
 
 Matching is case-insensitive. If more than one track matches, the job fails
 rather than guessing — add `album` or `artist` to narrow it.
+
+`album` and `artist` are hints, not filters: they are consulted only while
+more than one track still matches the title, and one that matches none of
+them is ignored rather than failing the job. So a caller that supplies
+best-effort metadata — Music Assistant reports a library-level artist name,
+which need not equal your file tags — cannot turn a track that exists into a
+"no such track". Only the title can do that.
 
 **Home Assistant example.** Because playback goes through Music Assistant, the
 button reads the MA media player's attributes:

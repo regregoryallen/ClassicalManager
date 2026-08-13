@@ -102,6 +102,17 @@ rest_command:
     payload: '{"command": "plex"}'
 ```
 
+One service can serve several libraries — map each to its own m3u output
+directory in `webhook.libraries`, then name one in the request:
+
+```yaml
+  classical_manager_xmas_m3u:
+    url: "http://CM_HOST:5588/api/jobs"
+    method: POST
+    content_type: "application/json"
+    payload: '{"command": "m3u", "library": "XmasMusic"}'
+```
+
 See the [User Guide](USERGUIDE.md#webhook-service) for full API documentation.
 
 <details>
@@ -173,11 +184,60 @@ Works are detected using a five-step precedence chain:
 4. **Title-prefix heuristic** — contiguous tracks whose titles share a common prefix with movement markers
 5. **Standalone** — remaining tracks become single-track works
 
+## Work-scoped ReplayGain (Linux, optional)
+
+`rgtag.py` writes ReplayGain tags scoped to the **work** rather than the album
+folder, so a symphony is normalized as one unit and its movements keep their
+relative levels. It is a separate tool, not part of the application: it is the
+only thing here that writes to your audio files.
+
+It needs [rsgain](https://github.com/complexlogic/rsgain), which the application
+itself does not:
+
+```bash
+sudo apt install rsgain
+```
+
+**Dry-run is the default — nothing is written without `--write`.**
+
+```bash
+# See what would happen across the whole library, including which
+# groupings were excluded as untrustworthy and which works are
+# predicted to clip on playback:
+./rgtag.py --library "My Collection"
+
+# Find a particular work (the GUI does not show work ids):
+./rgtag.py --library "My Collection" --list --album "Mahler 5"
+
+# Tag copies in a scratch directory first, leaving the library untouched:
+./rgtag.py --library "My Collection" --limit 5 --sandbox /tmp/rgtest
+
+# Then, for real:
+./rgtag.py --library "My Collection" --limit 5 --write
+
+# Afterwards, let the database catch up with the changed files:
+python main.py --cli scan-changes --library "My Collection"
+```
+
+That last step matters. Tagging updates file mtimes — it has to, because
+Music Assistant decides whether to re-read a file from its mtime, and
+preserving it would make the tags invisible to the player they were written
+for. `scan-changes` updates the affected tracks in place and keeps their
+similarity analyses; a **full** rescan straight after a tagging run would
+discard those analyses and make you re-run the audio analysis.
+
+`REPLAYGAIN_TRACK_GAIN` keeps its ordinary per-track meaning, so Kodi and other
+players are unaffected; the work gain rides in `REPLAYGAIN_ALBUM_GAIN`. Works
+whose grouping was guessed by the title-prefix heuristic are excluded unless you
+pass `--include-heuristic` — review them in the dry-run report first, because a
+wrong grouping writes a wrong gain into files.
+
 ## Requirements
 
 - Python 3.12+
 - Tkinter (included on Windows/macOS; `sudo apt install python3-tk` on Debian/Ubuntu)
 - Optional on Linux: `zenity` or `kdialog` for native file dialogs
+- Optional on Linux: `rsgain`, needed only by `rgtag.py` (see above)
 
 ## Documentation
 

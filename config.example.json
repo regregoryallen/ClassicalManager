@@ -57,6 +57,12 @@
     "host": "0.0.0.0",
     "port": 5588,
     "library": "My Collection",
+    "_libraries": "Optional. Serve more than one library from one service: each entry maps a library name to its own m3u output directory. A request may name any library listed here and no other. Omit the whole section to serve 'library' alone, writing to cron.m3u_output_dir.",
+    "libraries": {
+      "My Collection": {
+        "m3u_output_dir": "~/Playlists"
+      }
+    },
     "allowed_commands": [
       "plex",
       "scan",

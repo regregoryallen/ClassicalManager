@@ -7,6 +7,7 @@ GUI imports are lazy so the CLI runs without a display server.
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -321,6 +322,10 @@ def generate(
 def _output_result(prof, result, *, format="m3u", output=None, target=None,
                    quiet=False):
     """Output a generated playlist to the specified format/target."""
+    # Quoted "~/..." reaches us unexpanded (cron and the webhook both quote),
+    # so expand here rather than creating a literal '~' directory.
+    if output:
+        output = str(Path(output).expanduser())
     if target == "plex":
         from music_manager.core.serializers.plex import PlexSerializer, PlexConnectionError, PlexPushError
         from music_manager.core.config import load_config
@@ -407,7 +412,7 @@ def generate_all(
 
     if not quiet:
         typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
-    out_path = Path(output_dir)
+    out_path = Path(output_dir).expanduser()
 
     for prof in profiles:
         if not quiet:
@@ -545,7 +550,32 @@ def webhook(
     resolved_port = port or wh.get("port", 5588)
     allowed = wh.get("allowed_commands",
                      ["plex", "scan", "scan+plex", "scan+m3u", "m3u"])
-    m3u_dir = config.get("cron", {}).get("m3u_output_dir", "~/Playlists")
+    m3u_dir = os.path.expanduser(
+        config.get("cron", {}).get("m3u_output_dir", "~/Playlists"))
+
+    # webhook.libraries maps a library name to its own m3u output directory,
+    # letting one service serve several libraries without the request ever
+    # naming a filesystem path.  Absent, the service serves lib_name alone
+    # and writes to the cron directory, as it always has.
+    library_dirs = {}
+    for name, entry in (wh.get("libraries") or {}).items():
+        if not isinstance(entry, dict) or not entry.get("m3u_output_dir"):
+            typer.echo(
+                f"Error: webhook.libraries['{name}'] needs an "
+                "'m3u_output_dir'.", err=True)
+            raise typer.Exit(1)
+        _get_library(name)  # validate exists; exits with the available names
+        library_dirs[name] = os.path.expanduser(entry["m3u_output_dir"])
+
+    # A call that omits 'library' falls back to lib_name, so it has to be
+    # servable.  Catch that here rather than letting every such call 400.
+    if library_dirs and lib_name not in library_dirs:
+        typer.echo(
+            f"Error: default library '{lib_name}' is missing from "
+            f"webhook.libraries ({', '.join(sorted(library_dirs))}). "
+            "Add it, or point webhook.library at one that is listed.",
+            err=True)
+        raise typer.Exit(1)
 
     config_arg = []
     if _config_path_override:
@@ -558,14 +588,13 @@ def webhook(
 
     # Optional shared secret; env var wins so the token need not sit in
     # config.json. Required for exclude-track, which modifies profiles.
-    import os
     auth_token = os.environ.get(wh.get("token_env", "CM_WEBHOOK_TOKEN")) \
         or wh.get("token")
 
     from music_manager.interfaces.webhook import start_server
     start_server(resolved_host, resolved_port, lib_name, allowed,
                  config_arg, m3u_dir, log_file=str(log_file),
-                 auth_token=auth_token)
+                 auth_token=auth_token, library_dirs=library_dirs)
 
 
 @app.command("analyze-similarity")
@@ -605,8 +634,8 @@ def analyze_similarity(
 def exclude_track(
     profile: str = typer.Option(..., help="Profile to exclude the track from"),
     title: str = typer.Option(None, help="Track title (as tagged)"),
-    album: str = typer.Option(None, help="Album title, to disambiguate"),
-    artist: str = typer.Option(None, help="Performer/conductor/ensemble, to disambiguate"),
+    album: str = typer.Option(None, help="Album title, to disambiguate (ignored if it matches nothing)"),
+    artist: str = typer.Option(None, help="Performer/conductor/ensemble, to disambiguate (ignored if it matches nothing)"),
     path: str = typer.Option(None, help="Relative path (exact, skips matching)"),
     scope: str = typer.Option("track", help="'track' or 'work' (exclude the whole work)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),

@@ -778,7 +778,12 @@ def find_track(library, title=None, album=None, artist=None,
 
     Used by the thumbs-down path, where the caller (Home Assistant via
     Music Assistant) knows what is playing but not our internal IDs.
-    Matching is case-insensitive and narrows by album/artist when given.
+
+    Matching is case-insensitive. Title is required and decides what
+    exists; album and artist are disambiguators, applied only while
+    more than one candidate remains and discarded when they match none
+    of them. A hint can therefore never turn a found track into a
+    missing one.
 
     Raises TrackNotFound or AmbiguousTrack — never guesses.
     """
@@ -793,30 +798,54 @@ def find_track(library, title=None, album=None, artist=None,
     if not title:
         raise TrackNotFound("Provide either a title or a relative path")
 
-    query = (Track.select(Track, Album)
-             .join(Album)
-             .where((Track.library == library)
-                    & (fn.LOWER(Track.title) == title.strip().lower())))
-    if album:
-        query = query.where(fn.LOWER(Album.title) == album.strip().lower())
-    if artist:
-        needle = artist.strip().lower()
-        query = query.where(
-            (fn.LOWER(Track.performer) == needle)
-            | (fn.LOWER(Track.conductor) == needle)
-            | (fn.LOWER(Track.ensemble) == needle)
-            | (fn.LOWER(Album.album_artist) == needle))
+    # Title is the query, not a hint: it alone decides what exists.
+    # fn.LOWER matters here — the DB collation is utf8mb4_bin, so an
+    # untouched == would be case-sensitive.
+    candidates = list(Track.select(Track, Album)
+                      .join(Album)
+                      .where((Track.library == library)
+                             & (fn.LOWER(Track.title)
+                                == title.strip().lower())))
+    if not candidates:
+        # Only the title can produce this: album/artist are narrowing
+        # hints below and are discarded when they match nothing, so
+        # naming them here would blame a filter that never applied.
+        raise TrackNotFound(f"No track titled {title!r}")
 
-    matches = list(query)
-    if not matches:
-        raise TrackNotFound(
-            f"No track titled {title!r}"
-            + (f" on album {album!r}" if album else ""))
-    if len(matches) > 1:
+    if album and len(candidates) > 1:
+        candidates = _narrow(candidates, album, _album_names)
+    if artist and len(candidates) > 1:
+        candidates = _narrow(candidates, artist, _artist_names)
+
+    if len(candidates) > 1:
         # Same recording duplicated across albums is still ambiguous for
         # exclusion purposes: the caller must disambiguate.
-        raise AmbiguousTrack(matches)
-    return matches[0]
+        raise AmbiguousTrack(candidates)
+    return candidates[0]
+
+
+def _narrow(candidates, hint, names_of):
+    """Keep the candidates a hint matches — unless it matches none.
+
+    A hint that empties the set is a bad hint, not a verdict: callers
+    like Music Assistant supply best-effort metadata from a different
+    vocabulary than our per-file tags (library-level "William Ackerman"
+    against a file tagged "Will Ackerman"). Dropping it leaves the
+    caller with an honest ambiguity instead of a false "no such track".
+    """
+    needle = hint.strip().lower()
+    narrowed = [c for c in candidates if needle in names_of(c)]
+    return narrowed or candidates
+
+
+def _album_names(track):
+    return {track.album.title.lower()} if track.album.title else set()
+
+
+def _artist_names(track):
+    return {name.lower() for name in (track.performer, track.conductor,
+                                      track.ensemble, track.album.album_artist)
+            if name}
 
 
 def exclude_track_from_profile(profile, track, scope="track"):

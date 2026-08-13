@@ -10,9 +10,13 @@
   section), v3.6.3 (2026-08-11, 361 tests green on SQLite — four small
   tweaks; see that section). Branches deleted after merging, as is the
   convention.
-- **Nothing in progress.** Still to come from the loudness/MA programme:
-  the loudness analysis and the work-scoped ReplayGain tagger, each with
-  its own version.
+- **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
+  `v3.7-dev`, started 2026-08-11; see that section). Riding along on the
+  same branch: the multi-library webhook and the `cron.m3u_output_dir`
+  tilde fix (2026-08-12), the latter carrying a behaviour change — see
+  *Riding along on `v3.7-dev`*. Still to come from the loudness/MA
+  programme after it: the loudness analysis for sleep-playlist curation,
+  with its own version.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -709,6 +713,258 @@ Four items off the user's list, one commit.
 the v3.6 rewrite replaced with Rank; the sorting and context-menu bullets
 were updated here, that one was left for whoever re-reads the Find Similar
 help as a whole.
+
+## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
+
+Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;
+measured MA behaviour, which is binding: `no_git/CM-MA-findings.md`.
+
+MA applies `REPLAYGAIN_ALBUM_GAIN` in playlist context, and every existing
+scanner scopes album gain to the *folder*. For classical repertoire the
+loudness unit is the **Work**, not the disc. This tool writes work-scoped
+gain into `ALBUM_GAIN` so a symphony sits on MA's target as a whole while
+its movements keep their relative levels.
+
+It is a **separate entry point** (`rgtag.py`), not a CM feature: it is the
+only component needing an external scanner binary, it runs per acquisition
+rather than continuously, and keeping it outside the app answers the parent
+document's "does this open the V2 tag-writeback door?" by construction.
+
+### Task 0 — the checks the handoff demanded before any design
+
+Following the v3.6.1 lesson: check what already satisfies the requirement
+before building to it. All three checks were run against the live library.
+
+**Can an existing scanner be told what a work is? Yes.** `rsgain custom`
+takes an explicit file list and treats *that list* as the album unit —
+directory scoping belongs to `easy` mode alone. Verified by measurement,
+not just by the man page: across the 20-work sample, rsgain's album
+loudness matched an independent `ffmpeg ebur128` measurement of the
+concatenated audio to within **0.04 dB**, which is entirely ffmpeg's 0.1 dB
+print resolution. `-s s` changed 0 of 75 mtimes. So this project is an
+orchestrator, and the `ffmpeg` + hand-rolled-R128 design in the handoff
+does not get built.
+
+**Provenance distribution** (MainMusic: 5,519 works / 7,279 tracks):
+
+| work_source | works | tracks | multi-track works |
+|---|---:|---:|---:|
+| standalone | 3,804 | 3,804 | 0 |
+| mb_workid | 1,430 | 2,201 | ~235 |
+| heuristic | 165 | 815 | 165 |
+| override | 85 | 278 | 85 |
+| work_tag | 35 | 181 | 33 |
+
+No `import` works exist. Two facts reframe the job: **only ~519 works are
+multi-track**, so for everyone else `W == G_m` and this writes plain
+ReplayGain; and **`heuristic` is 165 works, every one multi-track** — a
+third of the works the feature actually exists for. Excluding it is not the
+free choice the handoff assumed, so it sits behind `--include-heuristic`,
+default off, and the dry-run report is how those groupings get reviewed.
+
+**Speed, measured not estimated.** rsgain computes track and album gain in
+one pass, so the handoff's N+1 passes are N: **0.16 s per audio-minute**
+against the 20-work sample. The library is 31,111 audio-minutes → **1.37 h
+serial, ~10 min at 8 workers**. (The `ffmpeg` design measured 0.46 s per
+audio-minute, 3.96 h serial — recorded because it is the number the
+handoff's own design would have cost.)
+
+**Memory is a non-issue, unlike the librosa analysis** — measured, because
+the comparison is the obvious worry. rsgain streams: peak RSS is 37 MB for
+a *60-minute single track* and 57 MB for a 40-track, 106-minute Passion,
+so it scales with track count (~0.5 MB each, one gating state per file
+held for the album combination) and is flat in duration. The whole process
+tree at `-j 20` peaked at **795 MB**, of which 92 MB was the Python parent
+(which already holds every track row in the library). Compare the "Analysis
+memory" section below: librosa costs 219 MB + 93 MB *per audio-minute* per
+worker, so that same 60-minute track is ~5.8 GB there against 37 MB here.
+The ceiling on `--workers` is CPU threads, not RAM.
+
+### Three things the handoff did not anticipate
+
+- **The library is 86% MP3** — 6,335 mp3, 1,004 flac, 31 m4a, 7 ape. §4 of
+  the handoff assumed "FLAC is probably the only case" and would skip any
+  work containing a non-FLAC file, which is 322 of the 519 multi-track
+  works. Scope is FLAC **and** MP3. No work mixes formats, which is what
+  makes a per-format writer tractable. m4a and ape are skipped and reported.
+- **673 files already carry ReplayGain tags** (405 FLAC, 268 MP3), written
+  with **lowercase** keys. Vorbis comment keys are case-insensitive so FLAC
+  is safe; **ID3v2 `TXXX` descriptions are not**, so writing uppercase onto
+  those 268 MP3s would leave two conflicting frames per tag. The writer
+  deletes by case-insensitive match before writing, and there is a test
+  pinning exactly that.
+- **The clipping report fires almost everywhere, and handoff §7's
+  correction is confirmed.** At MA's -17 LUFS target, 17 of the 20 sample
+  works exceed the -1.5 dBFS limiter — but the *untagged status quo* is
+  worse on 14 of them, because MA measures per track today (work 5508:
+  +1.8 dBFS work-scoped against **+7.0** per-track). The limiter is already
+  engaging on this library; work gain reduces exposure rather than adding
+  it. The report prints both figures side by side so that stays visible.
+
+### Design decisions
+
+- **rsgain measures, CM writes.** rsgain runs scan-only (`-s s -O`) for the
+  numbers; every tag is written by one `mutagen` pass of ours. Two writers
+  per file would have split idempotency, mtime handling and the
+  lowercase-collision fix across a binary we do not control — and rsgain
+  cannot write the `CM_GAIN_*` state tags at all.
+- **`-c n`** — rsgain's clipping protection stays off. It would silently
+  adjust the gains; clipping is *reported*, not applied.
+- **`-l -18`**, the ReplayGain 2.0 reference. Decoupled from MA's target
+  because MA re-targets rather than applying the tag verbatim, so MA's
+  target can change later without retagging.
+- **Dry-run is the default**; `--write` is required to touch a file. The
+  inverse of CM's usual convention, deliberately: ~7,000 irreplaceable files.
+- **The tool reads CM's database and never writes it.** No new tables, no
+  columns, no migration; state lives in the files as `CM_GAIN_WORK_KEY`
+  (a digest of ordered member paths) and `CM_GAIN_VERSION`. It connects
+  without running DDL — a second process creating tables against the live
+  server is exactly the metadata-lock contention v3.6 fixed.
+- **No new Python dependencies.** `mutagen`, `typer` and `peewee` are
+  already in `requirements.txt`; `rsgain` is a documented runtime
+  prerequisite of this tool alone, and the packaged Windows app never sees
+  it.
+
+### Preserving mtimes made the whole thing invisible (found 2026-08-11)
+
+Handoff §5 said "preserve mtimes where practical — other tooling keys on
+them", and that was implemented as the default. It is exactly backwards.
+**MA decides whether to re-read a file from its mtime**, so preserving it
+means MA never notices the tags these files were written for. Verified
+the hard way: Mahler retagged at a -23 reference, confirmed as
+`-4.70 dB` on disk in Picard, and still playing at the -18 value after a
+forced resync in MA.
+
+FLAC makes it worse than it sounds. The new tags fit inside the existing
+padding, so **the file size does not change either** — measured at zero
+bytes' difference across all 48 WTC files. A preserved mtime therefore
+leaves a file of identical length with an identical timestamp, and
+nothing downstream can tell it was touched at all.
+
+Isolated to a single variable before the fix went in: `touch` on the
+first Mahler movement alone, then a resync. That one track moved to
+**-3.70 dB** applied — which is its on-disk `-4.70 dB` plus MA's +1.0
+re-target — while its four untouched siblings kept serving the cached
++1.3. Same directory, same resync, one changed timestamp. Confirmed
+after the fix by a `--force` retag: timestamps moved, and MA picked up
+every work.
+
+The mtime now moves by default; `--preserve-mtime` opts back in.
+
+This collides with one thing inside CM, so the sequence matters.
+`_restore_analyses` ([scanner.py:1091](music_manager/core/scanner.py:1091))
+re-links a similarity analysis only when mtime **and** size both match,
+so a *full* rescan after a tagging run would discard every analysis and
+require the multi-hour librosa job again. Incremental `scan-changes` does
+not: it updates the track row in place
+([scanner.py:1546](music_manager/core/scanner.py:1546)) and the analysis
+survives. **So follow a tagging run with `scan-changes`** — CM's stored
+mtimes then match the files, and any later full rescan restores normally.
+
+### Selecting a work when the GUI does not show ids
+
+`--work-id` was the only way to name a work, and nothing in the GUI
+displays a work id, so in practice there was no way to use it. Added
+`--list` (the selected works with their ids, measuring nothing) plus
+`--album TEXT` and `--work TEXT` substring filters. These *select* rather
+than refuse: a work outside the filter is not reported as skipped, since
+listing several thousand of them would bury the works genuinely refused.
+
+### Open risk
+
+**~~Whether MA reads ID3v2 `TXXX:REPLAYGAIN_*` on MP3 is untested.~~
+Settled 2026-08-11: it does.** Verified against real MP3 works (Mahler 5,
+Brahms symphonies, Bach sonatas) and FLAC (WTC Book II) through MA's
+quality display: applied gain matched `ALBUM_GAIN + 1.0 dB` throughout,
+which is the -17 re-target of a -18-referenced tag, and was constant
+across each work's movements. Works sharing one physical album each kept
+their own gain, confirming §2.3 at real-world scale rather than with
+probes. Original text follows, for the record:
+`CM-MA-findings.md` §7 lists formats other than FLAC as not covered, and
+MP3 is now 86% of the library and 62% of the multi-track works. Settled by
+playing one MP3 work and one FLAC work through MA's audio-pipeline view. If
+MA ignores MP3 ReplayGain the tags remain correct for Kodi, but the MA half
+of the design would cover only 1,004 files.
+
+## Riding along on `v3.7-dev` (2026-08-12)
+
+Neither of these is part of the tagger. They share the branch because
+they arrived while it was open, and the first is what put the second
+under scrutiny.
+
+### One webhook serves several libraries
+
+The webhook fixed its library and its m3u output directory at startup:
+both came from config when the service booted, and the request body
+carried only `command`, `quiet`, `profile` and `track`. One service
+therefore meant one library, which does not survive a second collection —
+the case that prompted this was an everyday `MainMusic` alongside a
+seasonal `XmasMusic` that has to be regenerated separately.
+
+A request may now name a `library`. The output directory is *not* a
+request field: `webhook.libraries` maps each library name to its own
+`m3u_output_dir`, and only names in that map are accepted.
+
+**Why the map rather than a path in the request.** The endpoint is
+unauthenticated unless a token is configured, so a free-form output
+directory would let anything that reaches port 5588 write files anywhere
+the service account can — the same exposure the profile-name
+sanitization in `webhook.py` already exists to prevent. Taking only the
+*name* and looking the path up in config keeps the filesystem out of the
+request entirely.
+
+**Why unlisted libraries are refused rather than defaulted.** Falling
+back to the default directory would turn a forgotten config entry into a
+`202`, an `exit_code: 0`, and Christmas playlists sitting among the
+everyday ones — discovered months later, with nothing recording which
+file came from which library. A `400` naming the library is the correct
+answer to "regenerate a library I have not been told where to write".
+
+**Rejected:** a second webhook instance on a second port (the pattern
+`classical-manager-cron.sh` documents for cron). It works there because
+each cron run is a fresh process; the webhook is a daemon, so it would
+mean a second systemd unit and a duplicated `database` block running all
+year for a library used six weeks of it. Also rejected: storing the
+directory on the `Library` row, which reads as the tidier model until you
+remember the database is shared MariaDB and the paths are host-specific —
+and it would still need a separate allowlist.
+
+Two config mistakes are caught at startup rather than per request, both
+being silent and seasonal: a library name that does not exist, and a
+`webhook.library` missing from its own map (which is what a request
+omitting `library` falls back to). The service refuses to start on
+either. Each job records its library and output directory in
+`webhook.log` and in `/api/jobs/last`.
+
+Omitting the map keeps the previous behaviour — one library, writing to
+`cron.m3u_output_dir` — so existing Home Assistant automations and the
+cron script are unaffected. In that mode naming a *different* library is
+now an error rather than being ignored. Covered by
+`tests/test_webhook.py`.
+
+### Tilde in `cron.m3u_output_dir` (fixed 2026-08-12)
+
+`cron.m3u_output_dir` has always defaulted to `~/Playlists`, and nothing
+expanded the tilde. The cron script and the webhook both pass the value
+quoted (`--output-dir "$OUTPUT_DIR"`), so the shell leaves it alone, and
+`Path("~/Playlists")` is a relative path — playlists went to a literal
+directory named `~` under whatever the working directory happened to be
+(the install directory for cron, the webhook's cwd otherwise). The cron
+script's own `os.path.expanduser` covered only the *default*, so it fired
+exactly when the key was absent and never when it was set.
+
+**Behaviour change:** an install whose config says `~/Playlists` now
+writes to `$HOME/Playlists` instead of `./~/Playlists`. Anything reading
+the old literal directory — a Music Assistant folder mapping, a sync
+script — needs repointing, and the stale `~` directory can be deleted
+once its contents are accounted for. Absolute paths are unaffected.
+
+Expansion happens at both ends: `_output_result` and `generate-all`'s
+`--output-dir` expand whatever they are handed (`cli.py`), and the two
+places that read the config value — the `webhook` command and the cron
+script's config snippet — expand it as they read. `webhook.libraries`
+already expanded its per-library directories, so the two now agree.
+Covered by `tests/test_output_paths.py`.
 
 ## Analysis memory: swap saturation (investigated 2026-08-04, NOT yet fixed)
 

@@ -972,6 +972,10 @@ setup_webhook_service() {
     local config_file="$INSTALL_DIR/config.json"
     local venv_python="$INSTALL_DIR/venv/bin/python"
 
+    # Set either by the interview below or read back from the kept config;
+    # the systemd summary and the Home Assistant snippet both need them.
+    local wh_port="5588" wh_thumbs="false" wh_token=""
+
     # This step writes to config.json, so it has to honour the choice made
     # back in the Configuration step.  With an existing webhook section to
     # keep, install and restart the unit but leave the file alone.
@@ -984,18 +988,32 @@ with open('$config_file') as f:
         keep_webhook_config=1
         echo ""
         success "Keeping the existing webhook settings in config.json"
+
+        # Describe what is actually configured, not what a fresh install
+        # would have chosen.  Three space-free fields, so read splits them.
+        local wh_summary
+        wh_summary="$("$venv_python" -c "
+import json
+
+with open('$config_file') as f:
+    wh = json.load(f).get('webhook') or {}
+print(int(wh.get('port', 5588)),
+      'true' if 'exclude-track' in (wh.get('allowed_commands') or []) else 'false',
+      'yes' if (wh.get('token') or wh.get('token_env')) else '')
+" 2>/dev/null)" || wh_summary=""
+        if [ -n "$wh_summary" ]; then
+            read -r wh_port wh_thumbs wh_token <<< "$wh_summary" || true
+        fi
     fi
 
     if [ -z "$keep_webhook_config" ]; then
         echo ""
-        local wh_port
         ask "Webhook port" wh_port "5588"
 
         echo ""
         echo "  Allow \"thumbs down\" (exclude-track)? This lets a remote button"
         echo "  remove the playing track from a playlist profile — the only"
         echo "  webhook command that modifies saved data."
-        local wh_thumbs="false" wh_token=""
         if ask_yn "Allow exclude-track?" "y"; then
             wh_thumbs="true"
             echo ""

@@ -24,6 +24,14 @@ from music_manager.interfaces.gui.common import (
 
 logger = logging.getLogger(__name__)
 
+
+def pw_fn_avg():
+    """AVG(duration_ms), for converting a duration cap into a track count."""
+    import peewee as pw
+
+    from music_manager.core.database import Track
+    return pw.fn.AVG(Track.duration_ms)
+
 # Above this many unanalyzed tracks, Find Similar warns loudly rather
 # than quietly launching hours of librosa work.
 _LARGE_ANALYSIS_GAP = 100
@@ -534,6 +542,21 @@ class SimilarityUIMixin:
         result_tree.bind("<Button-3>", lambda e: self._sim_result_context_menu(
             e, result_tree, sim_state))
 
+        # -- Pool report (C6) ------------------------------------------------
+        # Describes the profile's accepted tracks, not the search results.
+        # Every profile shuffles, so there is no sequence to describe —
+        # but the pool's properties hold for every ordering the shuffle
+        # can reach, which makes them exact rather than indicative.
+        pool_frame = ctk.CTkFrame(popup)
+        pool_frame.pack(fill="x", padx=12, pady=(4, 0))
+        ctk.CTkLabel(pool_frame, text="This profile's pool",
+                     font=ctk.CTkFont(size=11, weight="bold")).pack(
+            anchor="w", padx=8, pady=(6, 0))
+        pool_label = ctk.CTkLabel(
+            pool_frame, text="", justify="left", anchor="w",
+            font=ctk.CTkFont(size=10), text_color="gray70")
+        pool_label.pack(anchor="w", padx=8, pady=(0, 6), fill="x")
+
         # -- Bottom: action buttons + status --
         bot_frame = ctk.CTkFrame(popup, fg_color="transparent")
         bot_frame.pack(fill="x", padx=12, pady=(4, 10))
@@ -584,7 +607,9 @@ class SimilarityUIMixin:
             "startle_enabled": startle_enabled,
             "level_var": level_var,
             "level_enabled": level_enabled,
+            "pool_label": pool_label,
         }
+        self._refresh_pool_report(sim_state)
 
         # The quietness sliders re-render from the cached scores; they do
         # not re-run the search. Wired after sim_state exists because the
@@ -940,6 +965,86 @@ class SimilarityUIMixin:
         remaining = len(result_tree.get_children())
         sim_state["status_label"].configure(
             text=f"{added} accepted, {remaining} remaining")
+
+        # C6: the pool report describes the profile's selections, so it
+        # moves every time something is accepted.
+        self._refresh_pool_report(sim_state)
+
+    def _refresh_pool_report(self, sim_state):
+        """Recompute the pool panel from the profile's current selections.
+
+        Describes what the *profile* will produce, not what the search
+        returned — under shuffle the search order means nothing and the
+        pool is the only thing with stable properties.
+        """
+        panel = sim_state.get("pool_label")
+        if panel is None:
+            return
+        try:
+            report = self._build_pool_report()
+        except Exception as exc:                    # noqa: BLE001 - shown
+            logger.debug("Pool report failed: %s", exc)
+            panel.configure(text="Pool report unavailable.")
+            return
+        from music_manager.core.pool_report import describe
+        panel.configure(text="\n".join(describe(report)))
+
+    def _build_pool_report(self):
+        """Gather the profile's accepted tracks and reduce them to a report."""
+        from music_manager.core.database import Track
+        from music_manager.core.pool_report import PoolTrack, build_report
+        from music_manager.core.quietness import playback_offset
+        from music_manager.core.similarity import TrackAnalysis
+
+        track_ids = self._resolve_current_to_track_ids()
+        if not track_ids:
+            return build_report([], playlist_length=0)
+
+        rows = (TrackAnalysis
+                .select(TrackAnalysis, Track)
+                .join(Track)
+                .where(TrackAnalysis.track.in_(list(track_ids))))
+        by_id = {r.track_id: r for r in rows}
+
+        pool = []
+        for track in Track.select().where(Track.id.in_(list(track_ids))):
+            analysis = by_id.get(track.id)
+            pool.append(PoolTrack(
+                track_id=track.id,
+                title=track.title,
+                startle_local=getattr(analysis, "startle_local", None),
+                head_level=getattr(analysis, "head_level", None),
+                tail_level=getattr(analysis, "tail_level", None),
+                playback_offset=playback_offset(track.rg_track_gain,
+                                                track.rg_album_gain),
+            ))
+        return build_report(pool,
+                            playlist_length=self._profile_playlist_length(
+                                len(pool)))
+
+    def _profile_playlist_length(self, pool_size):
+        """How many tracks a night actually draws from the pool.
+
+        The cap is what makes the ceiling probabilistic rather than
+        certain, so getting it roughly right matters more than getting it
+        exactly right. A duration cap is converted at the library's mean
+        track length; anything else means the whole pool plays.
+        """
+        profile = getattr(self, "current_profile", None)
+        mode = getattr(profile, "length_mode", None)
+        value = getattr(profile, "length_value", None)
+        if mode == "count" and value:
+            return min(int(value), pool_size)
+        if mode == "duration" and value:
+            from music_manager.core.database import Track
+            average = (Track
+                       .select(pw_fn_avg())
+                       .where(Track.library == self.active_library)
+                       .scalar())
+            if average:
+                return max(1, min(pool_size,
+                                  int(round(value * 1000 / average))))
+        return pool_size
 
     def _sim_result_context_menu(self, event, result_tree, sim_state):
         """Right-click context menu on the Find Similar results tree."""

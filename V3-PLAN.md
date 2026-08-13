@@ -805,6 +805,61 @@ tell "already exists" from "was not added"; presence is now checked with
 because a non-null `add_column` makes peewee rebuild the table and
 `track_analysis` is CASCADE-linked to `Track`.
 
+### Stage C — Find Similar becomes the curation tool
+
+Two sliders, not five: `startle_local` (0..25 LU) and the derived playback
+level (−10..+5 dB), with both metrics shown as sortable columns. Endpoints
+come from A3's sample. Both default to their maximum, so a search nobody
+has touched returns exactly what v3.7 returned.
+
+**The filters run in the tree, not in the query**, so a drag is instant.
+`find_similar` is called once with `limit=None` and carries the metrics on
+every result; the sliders re-render from that cache.
+
+**Match % had a subtler problem than the plan described.** The plan says
+fetch ~500 deep and recompute the percentile over the survivors — but a
+percentile recomputed over a *truncated* fetch is on a different scale
+entirely, so the 500th candidate would read 0% rather than its real
+position. What made it clean is that `find_similar` already builds a dict
+for every candidate and truncates only at the end, so `limit=None` costs
+nothing and recomputing over the survivors is then exact. It matches what
+`volatility_max` has always done; that just filters before scoring.
+
+**An unmeasured track is excluded when a filter is on, never admitted.**
+It cannot be shown to be quiet, and admitting unknowns is the one thing a
+sleep pool exists to prevent. The status line counts those apart from
+tracks that genuinely failed, because "run Measure" and "this is loud"
+call for different actions. The surviving-candidate count is load-bearing,
+not decoration: the level slider has a cliff at zero where 68.8% of the
+library sits, so one step below it drops two thirds of the candidates.
+
+C4 measures on demand, 8 parallel ffmpeg processes over the candidates on
+screen. It ignores the sliders when choosing what to measure — with a
+filter on, unmeasured tracks are excluded from the view, so measuring what
+is displayed could never measure anything. The queue keys on
+`loudness_version`, not on a null metric: a silent track measures fine and
+legitimately has no startle value, and keying on the metric would re-queue
+it forever.
+
+C5 cuts twelve seconds around `loud_at_ms`, with two seconds of lead
+because the same fortissimo is alarming or unremarkable depending on what
+preceded it. WAV, so no encoder dependency. Excerpts are swept by age, not
+deleted after playing — deleting on completion pulls the file out from
+under the player.
+
+C6 reports on the *pool*, since under shuffle there is no sequence to
+describe and the pool's properties hold for every reachable ordering. The
+ceiling is stated as a frequency ("6 exceed 15 LU; expect 1.2 per
+playlist; 74% of nights contain at least one"), because a length-capped
+draw makes a flat worst case an overstatement.
+
+**LOUDNESS_VERSION went to 2 during Stage C.** `head_level` and
+`tail_level` now cover the first and last ten seconds of *audible*
+material rather than of the file — ungated they were reporting how much
+digital silence a rip carried, which put the worst reachable seam at
+65.7 LU. Related: those two windows are 10 s each, so on anything shorter
+than 20 s they overlap and are not independent measurements.
+
 ## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
 
 Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;

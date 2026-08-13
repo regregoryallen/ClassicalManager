@@ -53,6 +53,7 @@ import peewee as pw
 from music_manager.core.database import (
     MAX_PATH_LENGTH, Album, BaseModel, Composer, Library, Track, SourceFolder,
     database)
+from music_manager.core.quietness import playback_offset
 
 logger = logging.getLogger(__name__)
 
@@ -743,7 +744,14 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
 
     Args:
         seed_track_ids: List of Track IDs to use as seeds.
-        limit: Maximum number of results.
+        limit: Maximum number of results. **None returns every scored
+            candidate**, which costs nothing extra: the loop below already
+            builds a dict for each one and only truncates at the end.
+            The v3.8 UI asks for all of them so its sliders can filter in
+            the tree and still restate Match % over a candidate set that
+            is genuinely complete — a percentile recomputed over a
+            truncated fetch would be on a different scale and quietly
+            wrong.
         volatility_max: If set, exclude tracks with volatility above this.
         blend: 0.0 = pure nearest-seed distance, 1.0 = pure consensus
                (how many seeds agree the candidate is close).
@@ -846,7 +854,91 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
             "volatility": round(a.volatility, 3) if a.volatility is not None else None,
             "seed_count": len(seed_vectors),
             "score": round(float(scores[i]), 3),
+            # v3.8. Carried on every result rather than fetched when a
+            # filter is switched on: the sliders filter in the tree, and
+            # a slider that has to hit the database to move is not a
+            # slider. These come from the join that is already happening,
+            # so they cost nothing.
+            #
+            # None throughout means "not measured", never "safe" — see
+            # quietness.playback_offset.
+            "startle_local": a.startle_local,
+            "lra": a.lra,
+            "head_level": a.head_level,
+            "tail_level": a.tail_level,
+            "loud_at_ms": a.loud_at_ms,
+            "integrated_lufs": a.integrated_lufs,
+            "loudness_version": a.loudness_version,
+            "playback_offset": playback_offset(
+                track.rg_track_gain, track.rg_album_gain),
         })
 
     results.sort(key=lambda r: r["score"])
     return results[:limit]
+
+
+def filter_by_quietness(results: list[dict], startle_max: float | None = None,
+                        level_max: float | None = None) -> tuple[list, dict]:
+    """Narrow results on the v3.8 axes, and say what was dropped and why.
+
+    Returns `(survivors, counts)`, where counts explains the losses:
+    `startle`, `level`, and — separately and importantly —
+    `startle_unmeasured` and `level_unmeasured`.
+
+    **An unmeasured track is excluded, not admitted.** It cannot be shown
+    to be quiet, and the whole point of the pool is that everything in it
+    has been checked; letting unknowns through would put precisely the
+    tracks nothing is known about into a sleep playlist. But the count is
+    reported separately from a genuine failure, because the two call for
+    different actions: one means "measure these" and the other means
+    "this track is loud".
+
+    The two axes are independent — measured at ρ = −0.05 over the library
+    — so a track can fail either without implying anything about the
+    other, and both are counted against the first test they fail.
+    """
+    counts = {"startle": 0, "level": 0,
+              "startle_unmeasured": 0, "level_unmeasured": 0}
+    survivors = []
+    for result in results:
+        if startle_max is not None:
+            value = result.get("startle_local")
+            if value is None:
+                counts["startle_unmeasured"] += 1
+                continue
+            if value > startle_max:
+                counts["startle"] += 1
+                continue
+        if level_max is not None:
+            value = result.get("playback_offset")
+            if value is None:
+                counts["level_unmeasured"] += 1
+                continue
+            if value > level_max:
+                counts["level"] += 1
+                continue
+        survivors.append(result)
+    return survivors, counts
+
+
+def recompute_match_percentiles(results: list[dict]) -> list[dict]:
+    """Restate Match %, rank and count over the results given.
+
+    `find_similar` computes Match % as a percentile over the candidate
+    set it scored. The v3.8 sliders filter *after* scoring, in the tree,
+    so that a drag is instant — and that silently changes what the
+    number means unless it is restated. "Closer than 92% of candidates"
+    has to keep referring to the candidates on screen, or it is quietly
+    answering a question the user is no longer asking.
+
+    Mutates and returns the same dicts, sorted by score, so the caller's
+    result_map stays valid.
+    """
+    ordered = sorted(results, key=lambda r: r["score"])
+    total = len(ordered)
+    for position, result in enumerate(ordered):
+        result["rank"] = position + 1
+        result["candidate_count"] = total
+        result["match_pct"] = round(
+            100.0 * (1.0 - position / max(total - 1, 1)), 1)
+    return ordered

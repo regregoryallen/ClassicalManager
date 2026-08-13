@@ -366,6 +366,57 @@ class SimilarityUIMixin:
                 text=f"{vol_var.get():.0f} dB" if vol_enabled.get() else "Off")
         ).pack(side="left", padx=(0, 12))
 
+        # -- v3.8 quietness filters -----------------------------------------
+        # Two controls, not five. A3 measured the alternatives over the
+        # library: startle_delta inverts on sustained loud passages,
+        # rise_rate reports how deep the trough was ten seconds ago rather
+        # than how loud the music is, and lra correlates at 0.78 with the
+        # dyn-range slider three widgets to the left. See
+        # no_git/CM-quietness-A4-report.md §6.
+        #
+        # Unlike the dyn-range slider, these filter in the tree rather
+        # than in the query, so a drag is instant. _apply_quietness_filter
+        # is bound to the slider command, not to Search.
+        from music_manager.core.quietness import (
+            MAX_LEVEL_OFFSET_DB, MAX_STARTLE_LU, MIN_LEVEL_OFFSET_DB,
+        )
+
+        ctk.CTkLabel(param_frame, text="Max startle:").pack(
+            side="left", padx=(0, 4))
+        startle_var = tk.DoubleVar(value=MAX_STARTLE_LU)
+        startle_enabled = tk.BooleanVar(value=False)
+        startle_label = ctk.CTkLabel(param_frame, text="Off", width=48)
+
+        def _startle_text():
+            return (f"{startle_var.get():.0f} LU" if startle_enabled.get()
+                    else "Off")
+
+        startle_slider = ctk.CTkSlider(
+            param_frame, from_=0.0, to=MAX_STARTLE_LU, variable=startle_var,
+            width=110)
+        startle_slider.pack(side="left", padx=(0, 2))
+        startle_label.pack(side="left", padx=(0, 2))
+        ctk.CTkCheckBox(param_frame, text="", variable=startle_enabled,
+                        width=20).pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(param_frame, text="Max level:").pack(
+            side="left", padx=(0, 4))
+        level_var = tk.DoubleVar(value=MAX_LEVEL_OFFSET_DB)
+        level_enabled = tk.BooleanVar(value=False)
+        level_label = ctk.CTkLabel(param_frame, text="Off", width=48)
+
+        def _level_text():
+            return (f"{level_var.get():+.1f} dB" if level_enabled.get()
+                    else "Off")
+
+        level_slider = ctk.CTkSlider(
+            param_frame, from_=MIN_LEVEL_OFFSET_DB, to=MAX_LEVEL_OFFSET_DB,
+            variable=level_var, width=110)
+        level_slider.pack(side="left", padx=(0, 2))
+        level_label.pack(side="left", padx=(0, 2))
+        ctk.CTkCheckBox(param_frame, text="", variable=level_enabled,
+                        width=20).pack(side="left", padx=(0, 12))
+
         ctk.CTkLabel(param_frame, text="Blend:").pack(
             side="left", padx=(0, 4))
         blend_var = tk.DoubleVar(value=0.5)
@@ -443,7 +494,8 @@ class SimilarityUIMixin:
 
         result_tree = ttk.Treeview(
             tree_frame,
-            columns=("composer", "album", "match", "rank", "volatility"),
+            columns=("composer", "album", "match", "rank", "volatility",
+                     "startle", "level"),
             show="tree headings", selectmode="extended")
         result_tree.heading("#0", text="Title")
         result_tree.heading("composer", text="Composer")
@@ -451,12 +503,19 @@ class SimilarityUIMixin:
         result_tree.heading("match", text="Match")
         result_tree.heading("rank", text="Rank")
         result_tree.heading("volatility", text="Dyn Range")
-        result_tree.column("#0", width=220)
-        result_tree.column("composer", width=140)
-        result_tree.column("album", width=160)
+        # Shown, not just filtered on (C3). With 50-100 rows on screen the
+        # numbers should be visible and orderable — it is also how the
+        # metrics get sanity-checked against the music in practice.
+        result_tree.heading("startle", text="Startle")
+        result_tree.heading("level", text="Level")
+        result_tree.column("#0", width=200)
+        result_tree.column("composer", width=130)
+        result_tree.column("album", width=150)
         result_tree.column("match", width=60)
         result_tree.column("rank", width=90, anchor="e")
         result_tree.column("volatility", width=80, anchor="e")
+        result_tree.column("startle", width=70, anchor="e")
+        result_tree.column("level", width=70, anchor="e")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")
@@ -507,10 +566,29 @@ class SimilarityUIMixin:
         # Shared state dict for the results window
         sim_state = {
             "seed_ids": seed_ids,
-            "result_map": {},       # iid → result dict
+            "result_map": {},       # iid → result dict, visible rows only
+            "all_results": [],      # every scored candidate (v3.8)
             "status_label": status_label,
             "popup": popup,
+            "startle_var": startle_var,
+            "startle_enabled": startle_enabled,
+            "level_var": level_var,
+            "level_enabled": level_enabled,
         }
+
+        # The quietness sliders re-render from the cached scores; they do
+        # not re-run the search. Wired after sim_state exists because the
+        # callbacks close over it.
+        def _on_quietness_change(*_args):
+            startle_label.configure(text=_startle_text())
+            level_label.configure(text=_level_text())
+            if sim_state["all_results"]:
+                self._apply_quietness_filter(result_tree, sim_state, limit_var)
+
+        startle_slider.configure(command=lambda _v: _on_quietness_change())
+        level_slider.configure(command=lambda _v: _on_quietness_change())
+        startle_enabled.trace_add("write", _on_quietness_change)
+        level_enabled.trace_add("write", _on_quietness_change)
 
         # Wire up search button
         search_btn.configure(command=lambda: self._do_sim_search(
@@ -523,30 +601,71 @@ class SimilarityUIMixin:
 
     def _do_sim_search(self, result_tree, sim_state, limit_var, vol_var,
                        vol_enabled, blend_var, weight_vars=None):
-        """Execute similarity search and populate the results Treeview."""
+        """Score the library against the seeds, then render (v3.8).
+
+        Split in two. This half is the expensive part — the query, the
+        z-scoring, the distance matrix — and runs only on Search. The
+        quietness sliders re-render from `all_results` without touching
+        the database, which is what makes dragging one feel like a
+        filter rather than a search.
+
+        `limit=None` deliberately: every scored candidate is kept, so
+        `_apply_quietness_filter` can restate Match % over a complete
+        candidate set. The loop in `find_similar` builds those dicts
+        regardless, so asking for all of them costs nothing.
+        """
         from music_manager.core.similarity import find_similar
 
-        try:
-            limit = int(limit_var.get())
-        except ValueError:
-            limit = 50
         vol_max = vol_var.get() if vol_enabled.get() else None
         blend = blend_var.get()
         seed_ids = sim_state["seed_ids"]
 
         results = find_similar(
-            list(seed_ids), limit=limit,
+            list(seed_ids), limit=None,
             volatility_max=vol_max, blend=blend,
             weights={g: v.get() for g, v in (weight_vars or {}).items()})
 
         # Filter out tracks already in the profile
         selected_track_ids = self._resolve_current_to_track_ids()
-        results = [r for r in results if r["track_id"] not in selected_track_ids]
+        sim_state["all_results"] = [
+            r for r in results if r["track_id"] not in selected_track_ids]
 
-        # Populate tree
+        self._apply_quietness_filter(result_tree, sim_state, limit_var)
+
+    def _apply_quietness_filter(self, result_tree, sim_state, limit_var):
+        """Re-render from the cached scores. No query, no re-scoring.
+
+        Bound to the sliders, so it runs on every drag.
+        """
+        from music_manager.core.similarity import (
+            filter_by_quietness, recompute_match_percentiles,
+        )
+        from music_manager.interfaces.gui.treeutil import UNMEASURED
+
+        try:
+            limit = int(limit_var.get())
+        except ValueError:
+            limit = 50
+
+        results = sim_state.get("all_results") or []
+        startle_max = (sim_state["startle_var"].get()
+                       if sim_state["startle_enabled"].get() else None)
+        level_max = (sim_state["level_var"].get()
+                     if sim_state["level_enabled"].get() else None)
+
+        survivors, dropped = filter_by_quietness(
+            results, startle_max=startle_max, level_max=level_max)
+
+        # Restated over the survivors, so "closer than 92% of candidates"
+        # keeps referring to the candidates that got through the filter —
+        # which is how volatility_max has always behaved, it just does its
+        # filtering before scoring rather than after.
+        survivors = recompute_match_percentiles(survivors)
+        visible = survivors[:limit]
+
         result_tree.delete(*result_tree.get_children())
         sim_state["result_map"].clear()
-        for r in results:
+        for r in visible:
             match_pct = r.get("match_pct")
             if match_pct is None:
                 tag = "match_loose"
@@ -556,6 +675,8 @@ class SimilarityUIMixin:
                 tag = "match_loose"
             else:
                 tag = "match_weak"
+            startle = r.get("startle_local")
+            offset = r.get("playback_offset")
             iid = result_tree.insert(
                 "", "end", text=r["title"],
                 tags=(tag,),
@@ -565,11 +686,43 @@ class SimilarityUIMixin:
                     f"{match_pct:.0f}%" if match_pct is not None else "",
                     f"{r['rank']} of {r['candidate_count']}",
                     f"{r['volatility']:.1f} dB" if r["volatility"] is not None else "",
+                    # An em dash, not a blank and not a zero: unmeasured
+                    # has to be visibly different from "measured, and it
+                    # is fine".
+                    f"{startle:.1f}" if startle is not None else UNMEASURED,
+                    f"{offset:+.1f}" if offset is not None else UNMEASURED,
                 ))
             sim_state["result_map"][iid] = r
 
         sim_state["status_label"].configure(
-            text=f"{len(results)} similar tracks found")
+            text=self._quietness_status(len(visible), len(survivors),
+                                        len(results), dropped))
+
+    @staticmethod
+    def _quietness_status(visible, surviving, total, dropped):
+        """The surviving-candidate count, and what the filters removed.
+
+        Not decoration. The level slider has a cliff at zero — 68.8% of
+        the library is a standalone work and scores exactly 0.0 — so
+        nudging it below zero drops two thirds of the candidates in one
+        step. Without a live count that reads as a broken control rather
+        than as the filter doing exactly what was asked.
+
+        Unmeasured tracks are counted apart from tracks that genuinely
+        failed, because the two ask for different things: one is "run
+        Measure", the other is "this track is loud".
+        """
+        if surviving == total:
+            return f"{visible} of {total} shown"
+
+        parts = [f"{visible} shown, {surviving} of {total} pass"]
+        failed = dropped["startle"] + dropped["level"]
+        if failed:
+            parts.append(f"{failed} too loud")
+        unmeasured = dropped["startle_unmeasured"] + dropped["level_unmeasured"]
+        if unmeasured:
+            parts.append(f"{unmeasured} unmeasured")
+        return " — ".join(parts)
 
     def _accept_sim_tracks(self, result_tree, sim_state, selected_only=True):
         """Add result tracks as track-level selections in the profile."""

@@ -24,6 +24,19 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 
+# What a cell shows when there is no value to show. An em dash rather
+# than a blank so an unmeasured track is visibly unmeasured — the
+# distinction v3.8 depends on everywhere else, and it should not vanish
+# in the one place a user is comparing tracks side by side.
+UNMEASURED = "—"
+
+
+def _is_unsortable(val):
+    """True for cells carrying no number: blank, or a stated absence."""
+    stripped = val.strip()
+    return not stripped or stripped == UNMEASURED
+
+
 def numeric_sort_key(val):
     """Parse a display cell into a float for numeric column sorting.
 
@@ -152,9 +165,15 @@ class TreeUtilMixin:
         # row used to drag the whole column back to a string sort. They
         # are reattached at the end, so they stay out of the way in
         # either direction.
+        #
+        # v3.8's Startle and Level columns render "not measured" as an em
+        # dash rather than a blank, so that it reads as a stated absence
+        # instead of an empty cell. It has to be held out on the same
+        # terms, or a single unmeasured row costs the column its numeric
+        # sort — the exact fault the paragraph above describes.
         parsed = [(numeric_sort_key(v), v, iid) for v, iid in items]
-        blank_iids = [iid for _, v, iid in parsed if not v.strip()]
-        numbered = [(n, iid) for n, v, iid in parsed if v.strip()]
+        blank_iids = [iid for _, v, iid in parsed if _is_unsortable(v)]
+        numbered = [(n, iid) for n, v, iid in parsed if not _is_unsortable(v)]
         if numbered and all(n is not None for n, _ in numbered):
             numbered.sort(reverse=reverse)
             sorted_iids = [iid for _, iid in numbered] + blank_iids

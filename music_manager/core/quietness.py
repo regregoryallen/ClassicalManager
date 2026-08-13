@@ -50,6 +50,26 @@ logger = logging.getLogger(__name__)
 # Deliberately NOT FEATURE_VERSION: see the module docstring.
 LOUDNESS_VERSION = 1
 
+# Slider endpoints, taken from the library rather than chosen: a
+# 300-track sample measured in A3 (CM-quietness-A4-report.md §5).
+#
+# startle_local ran p5..p95 of +2.3..+18.3 LU, p99 +23.7, max +30.8. A
+# slider wants to end where the material does, so 25 covers the decision
+# space without spending most of its travel on three outliers.
+MAX_STARTLE_LU = 25.0
+
+# The playback level offset ran p5..p95 of -9.3..+2.9 dB over the tracks
+# that have one, max +7.3. Note the asymmetry: this is a *max* level
+# filter, so the useful travel is mostly below zero.
+#
+# It has a cliff at 0.0. 68.8% of the library is a standalone work, which
+# plays at exactly the reference level and so scores exactly zero, so
+# moving from 0.0 to -0.1 drops two thirds of the candidates in one step.
+# That is correct — they genuinely do not play below reference — but it
+# needs the surviving count visible beside it or it reads as broken.
+MIN_LEVEL_OFFSET_DB = -10.0
+MAX_LEVEL_OFFSET_DB = 5.0
+
 FFMPEG_MISSING = (
     "ffmpeg is not installed.\n"
     "  The quietness metrics need it; the tag-derived playback level does\n"

@@ -714,6 +714,97 @@ the v3.6 rewrite replaced with Rank; the sorting and context-menu bullets
 were updated here, that one was left for whoever re-reads the Find Similar
 help as a whole.
 
+## v3.8 — Quietness metrics and sleep-playlist curation (branch `v3.8-dev`, started 2026-08-13)
+
+Filter Find Similar on how likely a track is to wake you, and control level
+seams in a shuffled pool. Plan: `no_git/CM-quietness-plan.md`. Stage A's
+report, which gates the rest: `no_git/CM-quietness-A4-report.md`.
+
+Four stages. **Stage A gated everything and ended in a report, not code.**
+A1 the tag-derived playback level and its coverage; A2 an `ffmpeg ebur128`
+metrics harness; A3 the distribution from a 300-track sample; A4 the report.
+Then B storage, C Find Similar, D banded shuffle.
+
+### Stage A — what the measurements changed
+
+**Audio measurement is required, and the reason is not the one expected.**
+The plan allowed that high ReplayGain coverage might make the audio pass
+unnecessary. Coverage came back at **99.5%** — the entire 38-track residue
+is the 31 m4a and 7 ape files no tagger can write — and the answer was
+still no. **68.8% of the library scores exactly zero** on the tag-derived
+axis, by construction: a standalone work is its own work, so it plays at
+precisely the reference level, and the library is ~3,800 standalone works
+out of ~5,500. Coverage and discriminating power turned out to be different
+questions, and only the first was being asked.
+
+The algebra itself is exact: `ALBUM_GAIN − TRACK_GAIN` recovered
+`L_m − L_work` with a **worst disagreement of 0.000 dB** over seven
+re-measured members, and **3,772 of 3,772** standalone works gave exactly
+zero.
+
+**`startle_delta` inverts, and was dropped.** It is `p99(S) − integrated`,
+and R128 integrated loudness is *gated*: for a track with 30 s at −1 dBFS
+and 50 s at −20, every quiet block falls outside the relative gate and
+integrated converges on the loud passage itself. A 200 ms crack scores 7.17
+and a 30 s blast scores 0.04 — the harmless signal ranked ahead of the
+dangerous one. Pinned as a test so the arithmetic is not "fixed" without
+meeting the reason.
+
+**Two sliders ship, not five.** `startle_local` (0..25 LU) and the derived
+playback level (−10..+5 dB). The two are **orthogonal** — the offset
+correlates at −0.05 to −0.11 against every envelope metric — which is the
+argument for keeping both. `rise_rate` measures how deep the trough was ten
+seconds earlier, so it scores 64 LU on a piece with 11.6 LU of range; `lra`
+duplicates the `volatility` already in the UI at r=0.78.
+
+**Three assumptions in the plan did not survive contact.** ffmpeg's
+per-frame `framelog` prints nothing at the default log level, so the series
+comes from `ametadata=print` on stdout instead. Short-term loudness is
+invalid until t=2.9 s and momentary until t=0.3 s, so head and tail levels
+come from momentary — an entry 1.5 s in is exactly the seam risk, and S
+cannot see it. And percentiles do not reject brief transients: a 3 s window
+smears 200 ms across thirty frames, so what damps a crack is the window's
+own averaging, 19 dB down to 7.9 LU.
+
+**One finding changed a specification rather than a parameter.**
+`tail_level` runs to −62 LU with 69 of 299 tracks below −20, while
+`head_level` bottoms out at −27 with only 7 below −20. That asymmetry is
+trailing silence in the rips, not music. The pool report's worst-seam
+formula computes to 65.7 LU on real data — a statement about ripping. The
+tail must be measured over the last 10 s of *audible* material.
+
+### Stage B — storage
+
+Quietness columns on **both** `TrackAnalysis` and `AnalysisSnapshot`, named
+once in `similarity.LOUDNESS_FIELDS` because four places copy them and the
+failure mode when they drift is a column that blanks on the next full
+rescan with the feature vector intact, so nothing looks broken.
+
+`loudness_version` moves independently of `FEATURE_VERSION`. That is the
+whole reason the quietness metrics are a separate pass: librosa analysis
+costs 219 MB + 93 MB per audio-minute per worker and ffmpeg costs a few MB,
+and forcing either to rerun for the other's sake is the coupling avoided.
+
+ReplayGain goes on `Track` as `rg_track_gain` / `rg_album_gain`, read by
+the ordinary scan alongside genre and performer, so it survives rescans by
+the ordinary path. **The offset is derived, never stored** — storing it
+would let the tags and their difference disagree. Read by one
+`_extract_replaygain` rather than a branch in each of the five per-format
+extractors: the tag names are identical everywhere and only the container
+differs, so five copies would be five chances to write it differently. Opus
+is checked first and separately, being an Ogg container that would
+otherwise match the Vorbis branch, find nothing, and be recorded as
+untagged when it is in fact tagged as Q7.8 fixed point against −23 LUFS.
+
+**Two hazards fixed while here.** `similarity.ensure_table()` hardcoded
+`SqliteMigrator` against a MariaDB production database — it happened to
+work for the one column it added, and would not have kept working. It also
+wrapped the add in a bare `except OperationalError: pass`, which cannot
+tell "already exists" from "was not added"; presence is now checked with
+`get_columns()` and a real failure raises. Every new column is `null=True`,
+because a non-null `add_column` makes peewee rebuild the table and
+`track_analysis` is CASCADE-linked to `Track`.
+
 ## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
 
 Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;

@@ -93,6 +93,41 @@ class MeasurementError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# The tag-derived playback level
+# ---------------------------------------------------------------------------
+
+def playback_offset(rg_track_gain, rg_album_gain):
+    """Where a track plays relative to its work, in dB. None if untagged.
+
+    Music Assistant normalises with *work*-scoped ReplayGain, so member
+    *m* of a work plays at `ref + (L_m - L_work)`. Since
+    `TRACK_GAIN = ref - L_m` and `ALBUM_GAIN = ref - L_work`, that offset
+    is `ALBUM_GAIN - TRACK_GAIN`, and the reference cancels — which is
+    also why it works for Opus, whose tags are referenced to -23 LUFS
+    rather than -18.
+
+    This is the axis the feature vector cannot reach: the vector's
+    loudness dimension is the *file's* level, which MA normalises away
+    before it reaches a speaker.
+
+    It is a level in dB relative to its own work. **It is not LUFS** and
+    must not be labelled as though it were.
+
+    Returns None, never 0.0, when either tag is missing. The distinction
+    matters: 0.0 means "plays at exactly its work's level", which is both
+    a real measurement and the safest possible value, and it is what
+    every standalone work legitimately scores. An untagged file receives
+    no gain from MA at all, so it plays at its own integrated loudness
+    and does not belong on this axis. Measured over the library, 68.8% of
+    tracks are a true zero here and 0.5% are untagged — collapsing the
+    two would put the least-known tracks in the safest bucket.
+    """
+    if rg_track_gain is None or rg_album_gain is None:
+        return None
+    return rg_album_gain - rg_track_gain
+
+
+# ---------------------------------------------------------------------------
 # The binary
 # ---------------------------------------------------------------------------
 

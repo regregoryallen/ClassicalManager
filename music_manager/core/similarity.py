@@ -106,14 +106,82 @@ GROUP_DESCRIPTIONS = {
 }
 
 
+# v3.8 quietness metrics. Named once, because they live on two tables and
+# are copied by hand in scanner._snapshot_analyses / _restore_analyses —
+# four places that must agree, and the failure mode when they do not is a
+# column that silently blanks on the next full rescan, hours later.
+# test_quietness_storage.py asserts this list against both models.
+#
+# Which of these reach a slider is decided in CM-quietness-A4-report.md
+# §6, not here: `startle_local` and the derived playback level. The rest
+# are stored because re-measuring the library costs ~3 hours and a
+# nullable double costs nothing — `startle_delta` in particular MUST NOT
+# be exposed as a filter, since it inverts on sustained loud passages
+# (A4 §3.2).
+LOUDNESS_FIELDS = (
+    "startle_local",     # LU, worst rise above the preceding 30 s — SHIPS
+    "startle_delta",     # LU, diagnostic only; inverts, see A4 §3.2
+    "rise_rate",         # LU, diagnostic only; tracks silence, A4 §5.4
+    "lra",               # LU, diagnostic; r=0.78 with volatility
+    "head_level",        # LU, first 10 s relative to the body
+    "tail_level",        # LU, last 10 s relative to the body
+    "loud_at_ms",        # where startle_local happens, for C5's audition
+    "integrated_lufs",
+    "loudness_version",
+)
+
+
+def _loudness_columns():
+    """The v3.8 columns, as fresh field instances.
+
+    A factory rather than a dict of shared instances: peewee fields bind
+    to the model that declares them, so handing the same object to two
+    tables — or to a migration and a model — corrupts both.
+
+    Every one is `null=True`, and not merely because the data is
+    optional. A non-null `add_column` makes peewee drop and recreate the
+    table, and `track_analysis` is CASCADE-linked to `Track`.
+    """
+    return {
+        "startle_local": pw.DoubleField(null=True),
+        "startle_delta": pw.DoubleField(null=True),
+        "rise_rate": pw.DoubleField(null=True),
+        "lra": pw.DoubleField(null=True),
+        "head_level": pw.DoubleField(null=True),
+        "tail_level": pw.DoubleField(null=True),
+        "loud_at_ms": pw.IntegerField(null=True),
+        "integrated_lufs": pw.DoubleField(null=True),
+        "loudness_version": pw.IntegerField(null=True),
+    }
+
+
 class TrackAnalysis(BaseModel):
-    """Per-track audio feature vector and volatility score."""
+    """Per-track audio feature vector, volatility, and quietness metrics.
+
+    The quietness columns (v3.8) are versioned by `loudness_version`,
+    which moves independently of `feature_version`. Bumping one must not
+    invalidate the other: the feature vector costs a librosa pass at
+    219 MB + 93 MB per audio-minute, the quietness metrics cost an ffmpeg
+    pass at a few MB, and forcing either to be redone for the other's
+    sake is the coupling the separate pass exists to avoid.
+    """
 
     track = pw.ForeignKeyField(Track, unique=True, on_delete="CASCADE")
     features = pw.TextField()  # JSON list of floats
     volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
+
+    # --- v3.8 quietness metrics; see LOUDNESS_FIELDS ---
+    startle_local = pw.DoubleField(null=True)
+    startle_delta = pw.DoubleField(null=True)
+    rise_rate = pw.DoubleField(null=True)
+    lra = pw.DoubleField(null=True)
+    head_level = pw.DoubleField(null=True)
+    tail_level = pw.DoubleField(null=True)
+    loud_at_ms = pw.IntegerField(null=True)
+    integrated_lufs = pw.DoubleField(null=True)
+    loudness_version = pw.IntegerField(null=True)
 
     class Meta:
         table_name = "track_analysis"
@@ -143,6 +211,21 @@ class AnalysisSnapshot(BaseModel):
     file_mtime = pw.DoubleField(null=True)
     file_size = pw.IntegerField(null=True)
 
+    # --- v3.8 quietness metrics; see LOUDNESS_FIELDS ---
+    # These must exist here as well as on TrackAnalysis. Omitting them
+    # would not fail: the feature vector would survive a full rescan and
+    # every quietness column would come back blank, discovered hours
+    # later as empty cells in Find Similar.
+    startle_local = pw.DoubleField(null=True)
+    startle_delta = pw.DoubleField(null=True)
+    rise_rate = pw.DoubleField(null=True)
+    lra = pw.DoubleField(null=True)
+    head_level = pw.DoubleField(null=True)
+    tail_level = pw.DoubleField(null=True)
+    loud_at_ms = pw.IntegerField(null=True)
+    integrated_lufs = pw.DoubleField(null=True)
+    loudness_version = pw.IntegerField(null=True)
+
     class Meta:
         table_name = "track_analysis_snapshot"
         indexes = (
@@ -151,18 +234,71 @@ class AnalysisSnapshot(BaseModel):
 
 
 def ensure_table():
-    """Create the similarity tables if they don't exist."""
+    """Create the similarity tables, and add any columns they are missing.
+
+    v3.8 replaced two things here that were waiting to bite.
+
+    `SqliteMigrator` was hardcoded, and production is MariaDB. It
+    happened to work for the one column it was asked to add, because the
+    generated SQL was the same either way; it would not have kept
+    working. `database.py` has had the backend-aware form since v3.5, and
+    this now uses it.
+
+    The add was also wrapped in a bare `except OperationalError: pass`,
+    which cannot tell "column already exists" from "the column was not
+    added". A migration that silently fails leaves a model whose fields
+    do not match its table, and the report of that arrives much later as
+    a query error from somewhere unrelated. Presence is now checked with
+    `get_columns()` and a genuine failure is allowed to raise.
+    """
     from music_manager.core.database import database
+
     database.create_tables([TrackAnalysis, AnalysisSnapshot])
-    # Add feature_version column if missing (existing databases)
-    from playhouse.migrate import SqliteMigrator, migrate as run_migrate
-    migrator = SqliteMigrator(database)
-    try:
+
+    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
+                                   migrate as run_migrate)
+
+    # Ask the *connected* database what it is, rather than asking the
+    # config what it should be. `initialize_database` accepts an explicit
+    # target, so the two can legitimately disagree — the test suite opens
+    # a temporary SQLite file on a machine whose config.json says mysql —
+    # and picking the migrator from config would then choose it for a
+    # database that is not there.
+    target = getattr(database, "obj", database)
+    migrator = (MySQLMigrator(database)
+                if isinstance(target, pw.MySQLDatabase)
+                else SqliteMigrator(database))
+
+    def add_missing(table, columns):
+        """Add whichever of `columns` the table does not have.
+
+        IMPORTANT: every field must be null=True. Peewee implements a
+        non-null add as a table rebuild, and `track_analysis` is
+        CASCADE-linked to `Track` — the rebuild would take the analyses
+        with it.
+        """
+        existing = {col.name for col in database.get_columns(table)}
+        operations = [migrator.add_column(table, name, field)
+                      for name, field in columns.items()
+                      if name not in existing]
+        if operations:
+            run_migrate(*operations)
+            logger.info("Migrated: added %s to %s",
+                        ", ".join(sorted(
+                            set(columns) - existing)), table)
+
+    # feature_version predates v3.8 and is not null=True, so it keeps its
+    # own call: it is long since present everywhere, and widening the
+    # rule for one legacy column would weaken the rule.
+    existing = {col.name for col in database.get_columns("track_analysis")}
+    if "feature_version" not in existing:
         run_migrate(migrator.add_column(
             "track_analysis", "feature_version",
             pw.IntegerField(default=1)))
-    except pw.OperationalError:
-        pass  # column already exists
+        logger.info("Migrated: added feature_version to track_analysis")
+
+    add_missing("track_analysis", _loudness_columns())
+    add_missing("track_analysis_snapshot", _loudness_columns())
 
 
 @contextmanager

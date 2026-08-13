@@ -319,6 +319,20 @@ class Track(BaseModel):
     # scan, and analysis preservation compares on this value.
     file_mtime = pw.DoubleField(null=True)      # file modification time (os.stat)
     file_size = pw.IntegerField(null=True)       # file size in bytes
+    # ReplayGain, as written in the file, in dB (v3.8). Stored here and
+    # not on track_analysis because they are file tags: read by the
+    # ordinary scan alongside genre and performer, and so preserved
+    # across rescans by the ordinary path, needing no snapshot.
+    #
+    # The number the playlist cares about is ALBUM_GAIN - TRACK_GAIN, the
+    # level at which Music Assistant plays this track relative to its
+    # work. That is *derived* and never stored: storing it would let the
+    # two tags and their difference disagree. Zero is meaningful (a
+    # standalone work plays at the reference level) and NULL is not the
+    # same thing (untagged, so MA applies no gain at all) — which is why
+    # these are nullable and must never be defaulted to 0.0.
+    rg_track_gain = pw.DoubleField(null=True)
+    rg_album_gain = pw.DoubleField(null=True)
     # When this track first entered the library. Set on INSERT only and
     # preserved across full rescans — file_mtime is the FILE's time and
     # cannot answer "what did the last scan add" (v3.3).
@@ -494,6 +508,14 @@ def _create_and_migrate(settings) -> None:
             migrator.add_column("tracks", "ensemble", pw.TextField(null=True)),
         )
         logger.info("Migrated: added genre, performer, conductor, ensemble to tracks")
+    if "rg_track_gain" not in track_cols:
+        run_migrate(
+            migrator.add_column("tracks", "rg_track_gain",
+                                pw.DoubleField(null=True)),
+            migrator.add_column("tracks", "rg_album_gain",
+                                pw.DoubleField(null=True)),
+        )
+        logger.info("Migrated: added rg_track_gain, rg_album_gain to tracks")
 
     profile_cols = {col.name for col in database.get_columns("playlist_profiles")}
     if "separate_composers" not in profile_cols:

@@ -432,7 +432,17 @@ class Override(BaseModel):
 # Bump when the DDL in _create_and_migrate changes. Recorded in the
 # schema_state table so a startup that finds a matching version can skip
 # the schema work entirely.
-SCHEMA_VERSION = 1
+#
+# Forgetting this bump does not fail loudly at the migration. It fails at
+# the first query, because the models then have fields their tables lack:
+# v3.8 added tracks.rg_track_gain, left this at 1, and the application
+# died on startup with "Unknown column 't1.rg_track_gain' in 'SELECT'"
+# from a SELECT three call layers away. test_schema_matches_models covers
+# it now.
+#
+#   2 — v3.8: tracks.rg_track_gain / rg_album_gain, and the quietness
+#       columns on track_analysis and track_analysis_snapshot.
+SCHEMA_VERSION = 2
 
 
 def _schema_is_current() -> bool:

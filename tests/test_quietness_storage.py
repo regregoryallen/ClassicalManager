@@ -435,3 +435,134 @@ def test_replaygain_is_written_to_the_track_row(lib, tmp_path):
     reread = Track.get_by_id(track.id)
     assert reread.rg_track_gain == pytest.approx(-3.0)
     assert playback_offset(reread.rg_track_gain, reread.rg_album_gain) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# The guard for the mistake that shipped
+# ---------------------------------------------------------------------------
+
+def test_schema_matches_models(db):
+    """Every model field must exist as a column, on every model.
+
+    v3.8 added `tracks.rg_track_gain` and its migration, but left
+    SCHEMA_VERSION at 1. `_schema_is_current()` therefore returned True
+    on an already-initialised database, `_create_and_migrate` never ran,
+    and the application died on startup with
+
+        Unknown column 't1.rg_track_gain' in 'SELECT'
+
+    — from a SELECT three call layers away in the GUI, with nothing in
+    the traceback pointing at the missing bump.
+
+    Deliberately generic rather than a list of v3.8's columns: the defect
+    is not specific to these columns, and a test naming them would have
+    to be remembered in exactly the same way SCHEMA_VERSION was not.
+    """
+    from music_manager.core.database import (
+        Album, Composer, Library, Override, PlaylistProfile,
+        ProfileSelection, SourceFolder, Work,
+    )
+
+    models = [Library, SourceFolder, Composer, Album, Work, Track,
+              PlaylistProfile, ProfileSelection, Override,
+              TrackAnalysis, AnalysisSnapshot]
+
+    problems = []
+    for model in models:
+        table = model._meta.table_name
+        columns = {c.name for c in database.get_columns(table)}
+        for field in model._meta.sorted_fields:
+            if field.column_name not in columns:
+                problems.append(f"{table}.{field.column_name}")
+    assert not problems, (
+        "model fields with no column: " + ", ".join(problems)
+        + " — did SCHEMA_VERSION get bumped?")
+
+
+def test_schema_version_is_recorded_after_migrating(tmp_path):
+    """A migrated database records the new version, so the next start skips.
+
+    The other half of the same mechanism: if the bump happened but the
+    version were not recorded, every startup would redo the DDL — which
+    is the metadata-lock contention v3.6 removed.
+    """
+    from music_manager.core.database import (
+        SCHEMA_VERSION, _schema_is_current, initialize_database,
+    )
+
+    initialize_database(tmp_path / "fresh.db")
+    try:
+        assert _schema_is_current()
+        row = database.execute_sql(
+            "SELECT version FROM schema_state").fetchone()
+        assert row[0] == SCHEMA_VERSION
+    finally:
+        if not database.is_closed():
+            database.close()
+
+
+# The fingerprint of every table's columns, as the models declare them,
+# pinned to the SCHEMA_VERSION that describes them.
+#
+# test_schema_matches_models cannot catch a missing version bump on its
+# own: the suite builds a fresh database per test, `create_tables` makes
+# every column straight from the models, and the columns therefore always
+# agree. The bug only exists for a database that already exists — which
+# is every real one, and none of the test ones.
+#
+# So the shape is pinned instead. Add a column and this fails, and it
+# keeps failing until SCHEMA_VERSION is bumped and the new fingerprint
+# recorded. That is precisely the reminder that was missing.
+#
+# Column names only, not types: peewee's internal type names are not a
+# stable thing to hash across library upgrades, and a type change needs a
+# hand-written migration anyway, which is not something a fingerprint
+# would help with.
+MODEL_SHAPE = {
+    2: "ef30476cec06b0b5",   # v3.8: rg gains on tracks, quietness columns
+}
+
+
+def _model_shape_fingerprint():
+    import hashlib
+
+    from music_manager.core.database import (
+        Album, Composer, Library, Override, PlaylistProfile,
+        ProfileSelection, SourceFolder, Work,
+    )
+
+    models = [Library, SourceFolder, Composer, Album, Work, Track,
+              PlaylistProfile, ProfileSelection, Override,
+              TrackAnalysis, AnalysisSnapshot]
+    parts = []
+    for model in sorted(models, key=lambda m: m._meta.table_name):
+        columns = sorted(f.column_name for f in model._meta.sorted_fields)
+        parts.append(f"{model._meta.table_name}:{','.join(columns)}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def test_schema_version_tracks_the_model_shape():
+    """Changing the models without bumping SCHEMA_VERSION must fail here.
+
+    An existing database records its version, `_schema_is_current()`
+    short-circuits on a match, and `_create_and_migrate` never runs. The
+    new column is then missing from a table whose model has it, and the
+    application dies at the first SELECT — as v3.8 did, on startup,
+    against the production MariaDB.
+    """
+    from music_manager.core.database import SCHEMA_VERSION
+
+    fingerprint = _model_shape_fingerprint()
+    assert SCHEMA_VERSION in MODEL_SHAPE, (
+        f"SCHEMA_VERSION is {SCHEMA_VERSION} but MODEL_SHAPE only knows "
+        f"{sorted(MODEL_SHAPE)}. If the models gained or lost a column, "
+        f"record the new shape as {fingerprint!r}; if they did not, this "
+        f"bump has no DDL behind it."
+    )
+    assert fingerprint == MODEL_SHAPE[SCHEMA_VERSION], (
+        f"The models' columns changed but SCHEMA_VERSION is still "
+        f"{SCHEMA_VERSION}. Existing databases will NOT get the new "
+        f"column and will fail at the first query. Bump SCHEMA_VERSION, "
+        f"add the migration to _create_and_migrate, and record "
+        f"{fingerprint!r} in MODEL_SHAPE."
+    )

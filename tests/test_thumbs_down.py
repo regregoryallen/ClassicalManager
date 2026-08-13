@@ -73,6 +73,57 @@ def test_artist_disambiguates(lib):
     assert found.id == tracks[1].id
 
 
+def test_bad_hint_does_not_eliminate_the_only_match(lib):
+    """A disambiguator that matches nothing is a bad hint, not a verdict."""
+    make_album(lib, "A/Alb1", [("Sym", 1)])
+    track = Track.get()
+    track.title = "Same Title"
+    track.performer = "Will Ackerman"
+    track.save()
+
+    found = find_track(lib, title="Same Title", artist="William Ackerman")
+    assert found.id == track.id
+
+
+def test_bad_hint_does_not_rescue_genuine_ambiguity(lib):
+    """Ignoring an unhelpful hint must not degrade into guessing."""
+    make_album(lib, "A/Alb1", [("Sym", 1)])
+    make_album(lib, "A/Alb2", [("Sym", 1)])
+    for t in Track.select():
+        t.title = "Same Title"
+        t.save()
+
+    with pytest.raises(AmbiguousTrack) as exc:
+        find_track(lib, title="Same Title", artist="Nobody At All")
+    assert len(exc.value.matches) == 2
+
+
+def test_album_narrows_before_artist(lib):
+    """The Hawk Circle case: album identifies it, artist tag disagrees."""
+    make_album(lib, "A/Alb1", [("Sym", 1)], title="An Evening With Windham Hill")
+    make_album(lib, "A/Alb2", [("Sym", 1)], title="Passage")
+    for t in Track.select():
+        t.title = "Hawk Circle"
+        t.performer = "Will Ackerman"
+        t.save()
+
+    found = find_track(lib, title="Hawk Circle",
+                       album="An Evening With Windham Hill",
+                       artist="William Ackerman")
+    assert found.album.title == "An Evening With Windham Hill"
+
+
+def test_not_found_message_does_not_blame_the_hints(lib):
+    """Hints are never the reason for a miss, so must not appear as one."""
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    with pytest.raises(TrackNotFound) as exc:
+        find_track(lib, title="Nonexistent", album="Some Album",
+                   artist="Some Artist")
+    assert "Nonexistent" in str(exc.value)
+    assert "Some Album" not in str(exc.value)
+    assert "Some Artist" not in str(exc.value)
+
+
 def test_missing_title_and_path_errors(lib):
     with pytest.raises(TrackNotFound):
         find_track(lib)

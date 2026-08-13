@@ -634,8 +634,8 @@ def analyze_similarity(
 def exclude_track(
     profile: str = typer.Option(..., help="Profile to exclude the track from"),
     title: str = typer.Option(None, help="Track title (as tagged)"),
-    album: str = typer.Option(None, help="Album title, to disambiguate"),
-    artist: str = typer.Option(None, help="Performer/conductor/ensemble, to disambiguate"),
+    album: str = typer.Option(None, help="Album title, to disambiguate (ignored if it matches nothing)"),
+    artist: str = typer.Option(None, help="Performer/conductor/ensemble, to disambiguate (ignored if it matches nothing)"),
     path: str = typer.Option(None, help="Relative path (exact, skips matching)"),
     scope: str = typer.Option("track", help="'track' or 'work' (exclude the whole work)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),

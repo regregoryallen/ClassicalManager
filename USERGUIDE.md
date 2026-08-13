@@ -1368,6 +1368,13 @@ The `track` object accepts:
 Matching is case-insensitive. If more than one track matches, the job fails
 rather than guessing — add `album` or `artist` to narrow it.
 
+`album` and `artist` are hints, not filters: they are consulted only while
+more than one track still matches the title, and one that matches none of
+them is ignored rather than failing the job. So a caller that supplies
+best-effort metadata — Music Assistant reports a library-level artist name,
+which need not equal your file tags — cannot turn a track that exists into a
+"no such track". Only the title can do that.
+
 **Home Assistant example.** Because playback goes through Music Assistant, the
 button reads the MA media player's attributes:
 

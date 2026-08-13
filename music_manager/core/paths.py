@@ -26,15 +26,17 @@ def canonical_path(rt: ResolvedTrack) -> str:
 def safe_profile_filename(name: str) -> str:
     """Sanitize a profile name for use as a playlist filename stem.
 
-    The rule is the one `generate-all` has always used: spaces and slashes
-    become underscores.  It is shared so the batch write and the orphan
-    report (which compares directory contents against profile names) can
-    never disagree about what a profile's file is called.
+    Only the path separator is replaced; spaces are kept, because the
+    systems consuming these files (Music Assistant among them) take the
+    filename as the playlist's name and 'My_Sleep' reads wrong there.
+    It is shared so the batch write and the orphan report (which compares
+    directory contents against profile names) can never disagree about
+    what a profile's file is called.
 
-    Note this collapses distinct names — 'My Sleep' and 'My/Sleep' both
-    become 'My_Sleep'.  See find_filename_collisions.
+    Note this still collapses distinct names — 'My Sleep' and 'My/Sleep'
+    both become 'My Sleep'.  See find_filename_collisions.
     """
-    return name.replace(" ", "_").replace("/", "_")
+    return name.replace("/", "_")
 
 
 def find_filename_collisions(names: list[str]) -> dict[str, list[str]]:

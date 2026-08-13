@@ -57,19 +57,25 @@ def base_config(**targets):
 
 @pytest.mark.parametrize("name,expected", [
     ("Sleep", "Sleep"),
-    ("My Sleep", "My_Sleep"),
+    # Spaces are kept: importers name the playlist after the file.
+    ("My Sleep", "My Sleep"),
     ("Baroque/Strings", "Baroque_Strings"),
-    ("Dvořák Favourites", "Dvořák_Favourites"),
-    ("Late Night / Quiet", "Late_Night___Quiet"),
+    ("Dvořák Favourites", "Dvořák Favourites"),
+    ("Late Night / Quiet", "Late Night _ Quiet"),
 ])
-def test_sanitizer_replaces_spaces_and_slashes(name, expected):
+def test_sanitizer_replaces_slashes_and_keeps_spaces(name, expected):
     assert safe_profile_filename(name) == expected
 
 
 def test_collisions_are_detected_not_silently_merged():
     # generate-all would otherwise write one profile over another.
-    collisions = find_filename_collisions(["My Sleep", "My/Sleep", "Other"])
-    assert collisions == {"My_Sleep": ["My Sleep", "My/Sleep"]}
+    collisions = find_filename_collisions(["My_Sleep", "My/Sleep", "Other"])
+    assert collisions == {"My_Sleep": ["My/Sleep", "My_Sleep"]}
+
+
+def test_a_space_no_longer_collides_with_an_underscore():
+    # It did while spaces were rewritten; keeping them separates the two.
+    assert find_filename_collisions(["My Sleep", "My_Sleep"]) == {}
 
 
 def test_no_collision_when_names_are_distinct():

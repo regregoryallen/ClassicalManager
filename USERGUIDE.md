@@ -995,8 +995,10 @@ python main.py --cli generate-all --library "My Collection" \
     --format m3u --output-dir /path/to/that/systems/playlist/folder
 ```
 
-Every profile becomes `<Profile_Name>.m3u`, with spaces and slashes replaced by
-underscores. Rerunning overwrites the same files in place, so regenerating
+Every profile becomes `<Profile Name>.m3u`. The name is used as-is apart from
+`/`, which becomes an underscore — spaces are preserved, because importers such
+as Music Assistant name the playlist after the file. Rerunning overwrites the
+same files in place, so regenerating
 updates the playlists rather than accumulating copies. Profiles whose names begin
 with `__` are internal and are skipped.
 

@@ -33,9 +33,14 @@ def _m3u_path(profile):
     return argv[argv.index("--output") + 1]
 
 
-def test_normal_profile_name():
+def test_normal_profile_name_keeps_its_spaces():
+    # Downstream importers name the playlist after the file.
     assert _m3u_path("Sunday Classical") == os.path.join(
-        "/out", "Sunday_Classical.m3u")
+        "/out", "Sunday Classical.m3u")
+
+
+def test_whitespace_only_profile_falls_back():
+    assert _m3u_path("   ") == os.path.join("/out", "playlist.m3u")
 
 
 def test_path_traversal_attempts_are_neutralized():

@@ -196,7 +196,7 @@ run_m3u_all() {
 
 run_m3u_single() {
     local safe_name
-    safe_name=$(echo "$PROFILE_NAME" | tr ' /' '__')
+    safe_name=$(echo "$PROFILE_NAME" | tr '/' '_')
     echo "$(timestamp) Generating M3U for profile '$PROFILE_NAME' → '$OUTPUT_DIR/${safe_name}.m3u'..."
     "$PYTHON" "$MAIN" $CONFIG_ARG --cli generate --profile "$PROFILE_NAME" --format m3u \
         --output "$OUTPUT_DIR/${safe_name}.m3u" $VERBOSITY

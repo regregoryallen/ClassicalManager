@@ -214,8 +214,10 @@ class JobManager:
                                 "--target", "plex"] + q
             # Allowlist sanitization: profile names come from the HTTP
             # request; strip anything path-capable (\\, .., leading dots).
+            # Spaces survive — downstream importers show the filename as
+            # the playlist name.
             safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_", profile)
-            safe_name = safe_name.replace(" ", "_").lstrip(".") or "playlist"
+            safe_name = safe_name.strip(" .") or "playlist"
             m3u_args = base + ["generate", "--profile", profile,
                                "--format", "m3u", "--output",
                                os.path.join(m3u_dir,

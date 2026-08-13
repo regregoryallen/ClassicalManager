@@ -23,6 +23,52 @@ needs_rsgain = pytest.mark.skipif(
     reason="rsgain and ffmpeg are needed for measurement tests")
 
 
+def make_envelope(path, segments, *, freq=440, sample_rate=44100):
+    """Write a WAV whose level follows a list of `(seconds, from_db, to_db)`.
+
+    v3.8. The quietness metrics are defined over the loudness *envelope*,
+    so their fixtures have to state an envelope — a step, a crescendo, a
+    transient — and `make_audio` only makes flat tones.
+
+    Written with the stdlib rather than lavfi: an `aevalsrc` expression
+    for a ramp needs its commas escaped past two levels of ffmpeg
+    parsing, and the result states the shape far less clearly than the
+    segment list does. These are read by tests that assert on the shape,
+    so the shape should be legible in the call.
+
+    Each segment interpolates linearly in dB, which is what "crescendo"
+    means to a listener. dBFS refers to the peak of the tone.
+    """
+    import wave
+
+    import numpy as np
+
+    channels = []
+    elapsed = 0.0
+    for seconds, from_db, to_db in segments:
+        count = int(round(seconds * sample_rate))
+        if count <= 0:
+            continue
+        t = elapsed + np.arange(count) / sample_rate
+        db = np.linspace(from_db, to_db, count, endpoint=False)
+        channels.append(10.0 ** (db / 20.0) * np.sin(2 * np.pi * freq * t))
+        elapsed += count / sample_rate
+
+    signal = (np.concatenate(channels) if channels
+              else np.zeros(0, dtype=float))
+    # int16 with a whisker of headroom, so a 0 dBFS segment does not clip
+    # to a square wave and change the very level it is there to state.
+    pcm = np.clip(signal, -1.0, 1.0) * 32767.0
+    stereo = np.repeat(pcm.astype("<i2")[:, None], 2, axis=1)
+
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(sample_rate)
+        out.writeframes(stereo.tobytes())
+    return str(path)
+
+
 def make_audio(path, *, level_db=-6.0, seconds=2.0, freq=440, silent=False):
     """Write a stereo test file that peaks at `level_db` dBFS.
 

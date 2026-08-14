@@ -501,6 +501,94 @@ class CleanupTabMixin:
         work = Work.get_by_id(work_id)
         self._show_album_popup(work.album_id)
 
+    @staticmethod
+    def _add_advanced_track_details(text, _add, track, analysis):
+        """Append the stored metadata and metrics for one track (v3.9).
+
+        Everything here was already being recorded and had nowhere to be
+        read. Grouped by where it comes from — tags, the file, the
+        librosa pass, the ffmpeg pass — because that is what decides how
+        to change it: a wrong Performer is fixed by retagging, a missing
+        Startle by running Measure.
+        """
+        import datetime
+        import json
+
+        from music_manager.core.similarity import FEATURE_GROUPS
+
+        def _opt(label, value, suffix=""):
+            _add(label, f"{value}{suffix}" if value not in (None, "") else "—")
+
+        text.insert("end", "    · tags\n", "note")
+        _opt("      Genre", track.genre)
+        _opt("      Performer", track.performer)
+        _opt("      Conductor", track.conductor)
+        _opt("      Ensemble", track.ensemble)
+        _opt("      Work tag", track.work_tag)
+        _opt("      MB work id (tag)", track.mb_work_id)
+        _opt("      Disc total", track.disc_total)
+
+        text.insert("end", "    · file\n", "note")
+        size = track.file_size
+        _opt("      Size", f"{size / 1048576:.1f} MB" if size else None)
+        for label, value in (("      Modified", track.file_mtime),
+                             ("      First seen", track.first_seen)):
+            if isinstance(value, (int, float)):
+                value = datetime.datetime.fromtimestamp(value)
+            _opt(label, value if value else None)
+
+        # Written by rgtag.py, and the reason a work plays at an even
+        # level; blank means the files were never tagged.
+        text.insert("end", "    · replaygain\n", "note")
+        _opt("      Track gain", track.rg_track_gain, " dB")
+        _opt("      Album gain", track.rg_album_gain, " dB")
+
+        if analysis is None:
+            text.insert("end", "    · not analyzed\n", "note")
+            return
+
+        text.insert("end", "    · analysis\n", "note")
+        _opt("      Analyzed at", analysis.analyzed_at)
+        _opt("      Feature version", analysis.feature_version)
+        try:
+            features = json.loads(analysis.features)
+        except (TypeError, ValueError):
+            features = []
+        for group, span in FEATURE_GROUPS.items():
+            values = features[span]
+            if values:
+                _add(f"      {group.capitalize():<9}",
+                     " ".join(f"{v:.2f}" for v in values))
+
+        # Quietness is a separate pass with its own version, so a track
+        # can be analyzed and unmeasured at the same time; saying which
+        # is missing is the difference between running Measure and
+        # running Analyze.
+        if analysis.loudness_version is None:
+            text.insert("end", "    · quietness not measured\n", "note")
+            return
+
+        text.insert("end", "    · quietness\n", "note")
+        _opt("      Startle", analysis.startle_local, " LU")
+        _opt("      Head level", analysis.head_level, " LU")
+        _opt("      Tail level", analysis.tail_level, " LU")
+        _opt("      Integrated", analysis.integrated_lufs, " LUFS")
+        loud_at = analysis.loud_at_ms
+        _opt("      Loudest at",
+             f"{loud_at // 60000}:{loud_at % 60000 // 1000:02d}"
+             if loud_at is not None else None)
+        _opt("      Measure version", analysis.loudness_version)
+        # Stored because re-measuring the library costs hours, but not
+        # offered as filters: startle_delta inverts on sustained loud
+        # passages and rise_rate reports how deep the trough was rather
+        # than how loud the music is (A4 §3.2, §5.4). Labelled so nobody
+        # reads them as a second opinion on Startle.
+        text.insert("end", "    · diagnostics — not comparable, see help\n",
+                    "note")
+        _opt("      Startle delta", analysis.startle_delta, " LU")
+        _opt("      Rise rate", analysis.rise_rate, " LU")
+        _opt("      LRA", analysis.lra, " LU")
+
     def _show_work_details(self, work_id):
         """Show a details popup for a work and its tracks."""
         from music_manager.core.database import Work, Track, Album
@@ -513,10 +601,12 @@ class CleanupTabMixin:
         composer_name = work.composer.name if work.composer_id else ""
 
         from music_manager.core.similarity import TrackAnalysis
-        volatility_by_track = {
-            ta.track_id: ta.volatility for ta in
-            TrackAnalysis.select(TrackAnalysis.track, TrackAnalysis.volatility)
-            .where(TrackAnalysis.track.in_([t.id for t in tracks]))
+        # Whole rows, not just volatility: the advanced view needs every
+        # column, and one query for a work's handful of tracks is not
+        # worth splitting into a lazy second one.
+        analysis_by_track = {
+            ta.track_id: ta for ta in TrackAnalysis.select().where(
+                TrackAnalysis.track.in_([t.id for t in tracks]))
         }
 
         popup = tk.Toplevel(self.root)
@@ -542,40 +632,59 @@ class CleanupTabMixin:
         text.tag_configure("label", foreground="#88aacc", font=("monospace", 10, "bold"))
         text.tag_configure("heading", foreground="#ccddaa", font=("monospace", 11, "bold"))
         text.tag_configure("sep", foreground="#555555")
+        text.tag_configure("note", foreground="#999999")
 
-        text.insert("end", "WORK\n", "heading")
-        _add("  Name", work.work_name)
-        _add("  Source", work.work_source)
-        _add("  Composer", composer_name)
-        _add("  Sequence", work.work_sequence)
-        _add("  MB Work ID", work.musicbrainz_work_id or "")
-        _add("  Album", album.title)
-        _add("  Album Artist", album.album_artist or "")
-        _add("  Album Key", album.album_key)
+        def _render():
+            advanced = advanced_var.get()
+            text.configure(state="normal")
+            text.delete("1.0", "end")
 
-        text.insert("end", f"\nTRACKS ({len(tracks)})\n", "heading")
-        for t in tracks:
-            dur_s = (t.duration_ms or 0) // 1000
-            dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
-            t_composer = t.composer.name if t.composer_id else ""
-            text.insert("end", "-" * 60 + "\n", "sep")
-            _add(f"  {t.disc_number}-{t.track_number:02d}", t.title)
-            _add("    Composer", t_composer)
-            _add("    Duration", dur_str)
-            _add("    Path", t.relative_path)
-            _add("    MB Recording", t.musicbrainz_recording_id or "")
-            if t.movement_number is not None:
-                _add("    Movement #", t.movement_number)
-            volatility = volatility_by_track.get(t.id)
-            _add("    Dynamic range", f"{volatility:.1f} dB"
-                 if volatility is not None
-                 else "not analyzed")
+            text.insert("end", "WORK\n", "heading")
+            _add("  Name", work.work_name)
+            _add("  Source", work.work_source)
+            _add("  Composer", composer_name)
+            _add("  Sequence", work.work_sequence)
+            _add("  MB Work ID", work.musicbrainz_work_id or "")
+            _add("  Album", album.title)
+            _add("  Album Artist", album.album_artist or "")
+            _add("  Album Key", album.album_key)
 
-        text.configure(state="disabled")
+            text.insert("end", f"\nTRACKS ({len(tracks)})\n", "heading")
+            for t in tracks:
+                dur_s = (t.duration_ms or 0) // 1000
+                dur_str = f"{dur_s // 60}:{dur_s % 60:02d}"
+                t_composer = t.composer.name if t.composer_id else ""
+                text.insert("end", "-" * 60 + "\n", "sep")
+                _add(f"  {t.disc_number}-{t.track_number:02d}", t.title)
+                _add("    Composer", t_composer)
+                _add("    Duration", dur_str)
+                _add("    Path", t.relative_path)
+                _add("    MB Recording", t.musicbrainz_recording_id or "")
+                if t.movement_number is not None:
+                    _add("    Movement #", t.movement_number)
+                analysis = analysis_by_track.get(t.id)
+                volatility = analysis.volatility if analysis else None
+                _add("    Dynamic range", f"{volatility:.1f} dB"
+                     if volatility is not None
+                     else "not analyzed")
+                if advanced:
+                    self._add_advanced_track_details(text, _add, t, analysis)
+
+            text.configure(state="disabled")
+
+        # Everything the analysis and the tags recorded, which otherwise
+        # exists only in the database. Off by default: the ordinary reason
+        # to open this window is to check a work's grouping, and forty
+        # lines of numbers per track buries that.
+        advanced_var = tk.BooleanVar(value=False)
+        _render()
 
         # Bottom buttons
         btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
         btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkCheckBox(btn_frame, text="Show advanced metrics",
+                        variable=advanced_var,
+                        command=_render).pack(side="left", padx=(5, 15))
         ctk.CTkButton(btn_frame, text="Copy Work Name", width=130,
                       command=lambda: (self.root.clipboard_clear(),
                                        self.root.clipboard_append(work.work_name))

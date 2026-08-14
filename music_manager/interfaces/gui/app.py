@@ -129,6 +129,9 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._pl_search_meta = {}    # iid → searchable text for builder pl tree
         self._tree_sort_state = {}     # tree id → (column, reverse)
         self._help_window = None       # singleton help window
+        # Set while help is open over a window that had to give up its
+        # input grab to let help be usable; called back on close.
+        self._help_restore_grab = None
         self._autosave_after_id = None # repeating timer for autosave
 
         self._setup_theme()

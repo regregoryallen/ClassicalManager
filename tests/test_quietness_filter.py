@@ -333,3 +333,71 @@ def test_restore_grab_tolerates_a_destroyed_window():
             raise AssertionError("must not grab a destroyed window")
 
     SimilarityUIMixin._restore_grab(Gone())
+
+
+def test_help_is_usable_when_opened_from_a_grabbing_window():
+    """The help window is non-modal, which fails under a grab.
+
+    Find Similar calls grab_set(). A non-modal window opened underneath a
+    grab receives no events at all — the help text appeared and then
+    would not scroll, and none of its navigation buttons responded.
+
+    Unlike the messagebox freeze, this one is reproducible headlessly
+    enough to assert directly: grab_current() tells us who owns input,
+    and that is exactly the thing that was wrong.
+    """
+    tk = pytest.importorskip("tkinter")
+    try:
+        root = tk.Tk()
+    except tk.TclError:                             # pragma: no cover
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        popup = tk.Toplevel(root)
+        popup.wait_visibility()
+        popup.grab_set()
+        assert root.grab_current() is popup
+
+        # What _show_help now does on the way in.
+        grabbed = root.grab_current()
+        if grabbed is not None:
+            grabbed.grab_release()
+
+        helpwin = tk.Toplevel(root)
+        helpwin.wait_visibility()
+        # Nothing holds the grab, so the help window can take input.
+        assert root.grab_current() in (None, "")
+
+        # And on the way out the owner gets it back.
+        helpwin.destroy()
+        if grabbed is not None and grabbed.winfo_exists() \
+                and grabbed.winfo_viewable():
+            grabbed.grab_set()
+        assert root.grab_current() is popup
+    finally:
+        root.destroy()
+
+
+def test_closing_help_does_not_grab_a_window_that_has_gone():
+    """The owner can be closed while help is still open."""
+    tk = pytest.importorskip("tkinter")
+    try:
+        root = tk.Tk()
+    except tk.TclError:                             # pragma: no cover
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        popup = tk.Toplevel(root)
+        popup.wait_visibility()
+        popup.grab_set()
+        grabbed = root.grab_current()
+        grabbed.grab_release()
+
+        popup.destroy()          # owner closes first
+        # The restore must notice and do nothing, not raise.
+        if grabbed is not None and grabbed.winfo_exists() \
+                and grabbed.winfo_viewable():       # pragma: no cover
+            grabbed.grab_set()
+        assert root.grab_current() in (None, "")
+    finally:
+        root.destroy()

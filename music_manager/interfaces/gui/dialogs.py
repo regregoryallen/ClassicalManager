@@ -136,12 +136,43 @@ def apply_settings_fields(config: dict, fields: dict) -> dict:
 
 class DialogsMixin:
     def _show_help(self, section=None):
-        """Open or focus the help window, optionally jumping to a section."""
+        """Open or focus the help window, optionally jumping to a section.
+
+        The help window is deliberately non-modal so the app stays usable
+        beside it. That works when help is opened from the main window,
+        which holds no grab \u2014 but v3.8 added help buttons to the Find
+        Similar popup, and that popup *does* grab. A non-modal window
+        opened underneath a grab receives no events at all: the help text
+        appeared and then refused to scroll, and none of its navigation
+        buttons responded.
+
+        So whatever holds the grab gives it up while help is open, and
+        takes it back when help closes. Same shape as filedialog releasing
+        the caller's grab around an external chooser.
+        """
+        grabbed = self.root.grab_current()
+        if grabbed is not None:
+            grabbed.grab_release()
+
+        def restore_grab():
+            """Hand the grab back to whoever had it, if it still wants it."""
+            try:
+                if (grabbed is not None and grabbed.winfo_exists()
+                        and grabbed.winfo_viewable()):
+                    grabbed.grab_set()
+            except tk.TclError:                     # pragma: no cover
+                pass
+
         if self._help_window and self._help_window.winfo_exists():
             self._help_window.lift()
             self._help_window.focus_force()
             if section:
                 self._help_jump(section)
+            # An already-open help window can still be unreachable: it may
+            # have been opened from the main window before the grabbing
+            # popup existed. The release above fixes that; hand the grab
+            # back when this help window eventually closes, not now.
+            self._help_restore_grab = restore_grab
             return
 
         win = tk.Toplevel(self.root)
@@ -151,10 +182,15 @@ class DialogsMixin:
         # Non-modal: no grab_set() so main app stays interactive
 
         self._help_window = win
+        self._help_restore_grab = restore_grab
 
         def on_close():
             self._help_window = None
+            restore = getattr(self, "_help_restore_grab", None)
+            self._help_restore_grab = None
             win.destroy()
+            if restore:
+                restore()
 
         win.protocol("WM_DELETE_WINDOW", on_close)
 

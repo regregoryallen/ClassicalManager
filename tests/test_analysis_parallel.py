@@ -5,7 +5,8 @@ measured as not worth parallelising. One reader already saturates the share
 (~100 MB/s against ~114 for sixteen), so extra workers buy CPU, not I/O.
 
 These tests use a stubbed analyze_file: the point is the batching, progress,
-cancellation and write path, not librosa. Real timings live in V3-PLAN.md.
+cancellation and write path, not librosa. Real timings live in
+internal/active/V3-PLAN.md.
 """
 
 import json

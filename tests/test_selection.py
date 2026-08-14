@@ -1,4 +1,5 @@
-"""Characterization tests for selection resolution (V3-PLAN Phase 0).
+"""Characterization tests for selection resolution
+(internal/active/V3-PLAN.md Phase 0).
 
 These pin CURRENT behavior, including known oddities flagged in the plan:
   - F2: track/work ADDs inside an album-level EXCEPT are included by the

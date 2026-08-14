@@ -6,8 +6,9 @@ the contrast events within it. The two are separate on purpose —
 
 - **Separate binary.** `ffmpeg ebur128` streams in a few MB where librosa
   analysis costs 219 MB + 93 MB per audio-minute per worker and already
-  swaps at 18 workers (V3-PLAN.md, "Analysis memory"). Measuring 100
-  candidates on demand is only tolerable at ffmpeg's memory cost.
+  swaps at 18 workers (internal/active/V3-PLAN.md, "Analysis memory").
+  Measuring 100 candidates on demand is only tolerable at ffmpeg's
+  memory cost.
 - **Separate version.** `LOUDNESS_VERSION` moves independently of
   `FEATURE_VERSION`, so bumping one never invalidates the other. That is
   the whole reason this is not another dimension on the vector.

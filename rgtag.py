@@ -13,8 +13,9 @@ environment, and this script re-executes itself there when run directly
 (`./rgtag.py`) rather than failing on an import the user cannot see the
 cause of.
 
-Design: no_git/CM-rg-tagger-handoff.md; measured MA behaviour, which is
-binding: no_git/CM-MA-findings.md; what shipped: V3-PLAN.md §v3.7.
+Design: internal/archive/CM-rg-tagger-handoff.md; measured MA behaviour,
+which is binding: internal/reference/CM-MA-findings.md; what shipped:
+internal/active/V3-PLAN.md §v3.7.
 """
 
 import os

@@ -8,7 +8,8 @@ implementation.
 
 Verified against an independent `ffmpeg ebur128` measurement of the
 concatenated audio over a 20-work sample: agreement within 0.04 dB, which
-is entirely ffmpeg's 0.1 dB print resolution. See V3-PLAN.md §v3.7.
+is entirely ffmpeg's 0.1 dB print resolution. See
+internal/active/V3-PLAN.md §v3.7.
 
 rsgain runs scan-only here. It never writes a tag: `tags.py` is the only
 writer, so idempotency, mtime handling and the lowercase-collision fix

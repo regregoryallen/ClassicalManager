@@ -12,7 +12,7 @@ dist/
 build/
 .idea/
 .vscode/
-no_git/
+internal/
 gui_prefs.json
 config.json
 *.m3u

@@ -389,7 +389,7 @@ class SimilarityUIMixin:
         # rise_rate reports how deep the trough was ten seconds ago rather
         # than how loud the music is, and lra correlates at 0.78 with the
         # dyn-range slider three widgets to the left. See
-        # no_git/CM-quietness-A4-report.md §6.
+        # internal/reference/CM-quietness-A4-report.md §6.
         #
         # Unlike the dyn-range slider, these filter in the tree rather
         # than in the query, so a drag is instant. _apply_quietness_filter

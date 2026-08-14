@@ -10,13 +10,18 @@
   section), v3.6.3 (2026-08-11, 361 tests green on SQLite — four small
   tweaks; see that section). Branches deleted after merging, as is the
   convention.
-- **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
-  `v3.7-dev`, started 2026-08-11; see that section). Riding along on the
-  same branch: the multi-library webhook and the `cron.m3u_output_dir`
-  tilde fix (2026-08-12), the latter carrying a behaviour change — see
-  *Riding along on `v3.7-dev`*. Still to come from the loudness/MA
-  programme after it: the loudness analysis for sleep-playlist curation,
-  with its own version.
+- **Released and tagged: v3.7**, the work-scoped ReplayGain tagger
+  (2026-08-13; see that section). Riding along on the same branch: the
+  multi-library webhook and the `cron.m3u_output_dir` tilde fix
+  (2026-08-12), the latter carrying a behaviour change — see *Riding
+  along on `v3.7-dev`*.
+- **Released and tagged: v3.8**, quietness metrics and curation
+  (2026-08-14, 612 tests on SQLite / 618 on MariaDB). Find Similar gained
+  two filters, on-demand measurement, an audition, and a pool report. The
+  banded shuffle originally planned as its Stage D was **deferred to
+  Future directions** rather than built — see below for why the pool
+  report has to answer that question first. This completes the
+  loudness/MA programme.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -860,6 +865,39 @@ digital silence a rip carried, which put the worst reachable seam at
 65.7 LU. Related: those two windows are 10 s each, so on anything shorter
 than 20 s they overlap and are not independent measurements.
 
+### Stage D — deferred, not built
+
+The banded shuffle moved to *Future directions* on 2026-08-14, with the
+mechanism designed and the two decisions it needs written down. The
+reason is the plan's own framing: under shuffle, seam control is variance
+control of the pool, so a homogeneous pool needs no ordering logic at
+all. C6 now reports exactly the figures that settle it, and a real
+curated pool should answer the question before any code is written.
+
+### What using it changed
+
+Six rounds of fixes came from the application being used, and none was
+reachable by the test suite — each was either two correct parts fitting
+together badly, or a number that meant the wrong thing to a listener.
+
+The freezes are worth remembering as a family. **A modal dialog with no
+`parent=` under a grabbing window** takes the input grab invisibly;
+**a non-modal window** opened under one receives no events at all; and
+**destroying a window that holds a grab** returns the grab to nobody. All
+three present as a hung application.
+
+**The worst one was not a hang.** ffmpeg reads stdin for interactive
+keys, `capture_output=True` leaves stdin inherited, and the GUI is
+launched as a background job — so ffmpeg took SIGTTIN and suspended the
+whole process group. Three plausible theories about threads, grabs and
+the database were investigated and disproved before `jobs` reported
+`Stopped` in one line. **Check the process state before theorising about
+the code.**
+
+And two numbers that were right but not useful: the audition played the
+raw file rather than the level the playlist would use, and the worst-seam
+figure named a track following itself.
+
 ## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
 
 Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;
@@ -1320,6 +1358,51 @@ avoiding profiles.
 
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
+
+- **Banded shuffle — planned as v3.8 Stage D, deferred 2026-08-14 with
+  the mechanism designed but unbuilt.** Split a pool into 3–4 bands on a
+  key, order the bands, shuffle freely within each: downward drift across
+  the playlist with full local randomness, so there is no recognisable
+  sequence and big jumps are confined to band boundaries. Generalised as
+  **(key, direction, band count)** from the start — a quiet-first playlist
+  is `(playback_level, descending)` and a morning mix is the same key
+  ascending, so tempo banding would cost nothing extra later.
+
+  **Deferred because the measurements may remove the need for it.** Under
+  shuffle, seam control is variance control *of the pool*: if the levels
+  are homogeneous then every reachable ordering is already safe and no
+  ordering logic buys anything. v3.8's pool report states exactly that —
+  worst reachable seam, and expected jumps per playlist — so a real
+  curated pool answers the question before any code is written. This is
+  the same shape as v3.8's `rise_rate` decision, where measuring first
+  meant not building something.
+
+  **Two things to settle before starting, both already established.**
+
+  *The pipeline order is the trap.* The pipeline is shuffle → pins → stop
+  conditions, and `_apply_stop_conditions` truncates with `tracks[:n]` —
+  it keeps the **head**, in both `count` and `duration` modes. A banded
+  shuffle inserted at the shuffle step and ordered loud→quiet would be
+  truncated to its loud bands: the playlist comes out as the loudest 50
+  tracks of the pool, in descending order, with the entire quiet end
+  discarded. That presents as "why is this mix all forte" rather than as
+  an obvious bug. **Sample the pool to the length target first, then band
+  and order the survivors** — a change to the step *sequence*, not to a
+  step, which is why it needs deciding before the work rather than
+  during. Bands computed over tonight's 50 rather than the full 250 are
+  also tighter, which improves the seams for free. Cover it with a test
+  asserting the quiet band is non-empty after truncation.
+
+  *Band boundaries.* Fixed count with quantile boundaries keeps every band
+  populated; fixed dB widths keep a band's meaning stable across pools.
+  Not decided.
+
+  Held in reserve alongside it: a **level-aware separation constraint**.
+  `_apply_separation` is already a constrained shuffle — greedy pick from
+  non-conflicting candidates, with a least-conflicting fallback — and a
+  level-jump predicate fits it naturally, being graded where the existing
+  conflicts are binary. If a tightened pool makes it unnecessary, it
+  should not be built.
 
 - **Disc-spanning works — investigated 2026-07-29, NOT automated.** The
   heuristic cannot group a work split across a disc boundary:

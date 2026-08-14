@@ -932,6 +932,29 @@ def measure_quietness(track_ids, progress_callback=None,
 
     binary = find_ffmpeg()          # raises MeasurementError if absent
 
+    # peewee keeps one connection per thread, so running this from the
+    # GUI's worker opens a new one — and nothing closed it, leaking a
+    # MariaDB connection on every Measure. Closed here, but only if this
+    # thread had none on entry: called from the main thread (or a test),
+    # the connection belongs to somebody else and closing it would be a
+    # rude surprise.
+    opened_here = database.is_closed()
+    try:
+        return _measure_quietness(track_ids, progress_callback, workers,
+                                  cancel_check, binary, stats)
+    finally:
+        if opened_here and not database.is_closed():
+            database.close()
+
+
+def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
+                       binary, stats):
+    """The body of measure_quietness, so the connection can be scoped."""
+    import concurrent.futures
+
+    from music_manager.core.quietness import LOUDNESS_VERSION, MeasurementError
+    from music_manager.core.quietness import measure
+
     rows = list(Track.select(Track.id, Track.relative_path,
                              SourceFolder.root_path)
                 .join(SourceFolder, on=(Track.folder == SourceFolder.id))

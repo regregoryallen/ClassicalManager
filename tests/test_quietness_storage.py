@@ -703,3 +703,42 @@ def test_measuring_nothing_is_not_an_error():
     from music_manager.core.similarity import measure_quietness
     assert measure_quietness([]) == {
         "measured": 0, "silent": 0, "failed": 0, "missing": 0}
+
+
+def test_measuring_does_not_leak_a_connection_from_a_worker_thread(lib, tmp_path):
+    """peewee keeps one connection per thread; nothing was closing it.
+
+    Measure runs on the GUI's worker thread, so each run opened a fresh
+    MariaDB connection and left it open. Slow, but real: a long curation
+    session would walk toward the server's connection limit.
+
+    The close is conditional on this thread having had no connection on
+    entry — called from the main thread the connection belongs to
+    somebody else, and closing it would break the caller.
+    """
+    import threading
+
+    from music_manager.core.database import database
+    from music_manager.core.similarity import measure_quietness
+
+    # Main thread: the caller's connection must survive.
+    assert not database.is_closed()
+    measure_quietness([])
+    assert not database.is_closed(), "closed a connection it did not open"
+
+    seen = {}
+
+    def worker():
+        from music_manager.core.database import Track as T
+        T.select().count()                  # opens this thread's connection
+        seen["open_during"] = not database.is_closed()
+        measure_quietness([])
+        seen["open_after"] = not database.is_closed()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert seen["open_during"] is True
+    # measure_quietness did not open this one, so it leaves it alone.
+    assert seen["open_after"] is True

@@ -340,8 +340,15 @@ def build_help_content(text: tk.Text) -> None:
            "not as text")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
     bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
-    bullet("Right-click a result for Play, Details, Show Album, or "
-           "Show in Folder")
+    bullet("Right-click a result for Play, Audition loudest moment, "
+           "Details, Show Album, or Show in Folder")
+    bullet("Audition loudest moment — plays twelve seconds around the "
+           "spot the Startle score came from, starting two seconds "
+           "before it so you hear what the jump is *from*. The menu entry "
+           "shows the timestamp, and only appears on tracks that have "
+           "been measured. Checking a track by ear takes about eight "
+           "seconds this way, which is the difference between reviewing "
+           "a shortlist in an evening and not reviewing it at all")
 
     subheading("Quietness measures", mark="quietness")
     body(
@@ -372,8 +379,9 @@ def build_help_content(text: tk.Text) -> None:
            "is calm, over 20 is a piece that erupts. This catches the slow "
            "introduction that turns into a fortissimo, which a whole-track "
            "average cannot see")
-    bullet("Loudest moment — where in the track that jump happens, so it "
-           "can be checked by ear rather than trusted")
+    bullet("Loudest moment — where in the track that jump happens. Right-"
+           "click a measured result and choose Audition loudest moment to "
+           "hear it, so the number can be checked rather than trusted")
     bullet("Head level / tail level — how loud a track's first and last ten "
            "seconds are compared with its middle. These decide how rough "
            "the join is when one track follows another")

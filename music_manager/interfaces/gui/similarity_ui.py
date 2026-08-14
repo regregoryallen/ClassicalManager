@@ -876,30 +876,51 @@ class SimilarityUIMixin:
         owner = sim_state.get("popup")
 
         candidates = (sim_state.get("all_results") or [])[:limit]
-        if not candidates:
+        candidate_ids = [r["track_id"] for r in candidates]
+
+        # The profile's own tracks as well, not only the candidates.
+        # _do_sim_search deliberately excludes anything already accepted
+        # from the results, so a pool track that was never measured could
+        # not be reached from this window at all: the pool report said
+        # "1 not measured" and Measure replied that everything on screen
+        # was done. Both were true, and between them there was no way to
+        # fix it.
+        pool_ids = [t for t in self._resolve_current_to_track_ids()
+                    if t not in set(candidate_ids)]
+
+        if not candidate_ids and not pool_ids:
             messagebox.showinfo("Measure", "Run a search first.", parent=owner)
             return
 
         try:
-            todo = tracks_needing_quietness([r["track_id"] for r in candidates])
+            todo = tracks_needing_quietness(candidate_ids + pool_ids)
         except Exception as exc:                    # noqa: BLE001 - reported
             messagebox.showerror("Measure", str(exc), parent=owner)
             return
         if not todo:
             messagebox.showinfo(
                 "Measure",
-                f"All {len(candidates)} candidates on screen are already "
-                f"measured.", parent=owner)
+                f"All {len(candidates)} candidates on screen and "
+                f"{len(pool_ids)} pool track(s) are already measured.",
+                parent=owner)
             return
+
+        from_pool = sum(1 for t in todo if t in set(pool_ids))
+        from_candidates = len(todo) - from_pool
+        what = []
+        if from_candidates:
+            what.append(f"{from_candidates} of the top {len(candidates)} "
+                        f"candidates")
+        if from_pool:
+            what.append(f"{from_pool} track(s) already in the profile")
 
         # ~24 tracks a minute measured over the library share (A3).
         minutes = max(1, round(len(todo) / 24))
         if not messagebox.askyesno(
                 "Measure quietness",
-                f"Measure {len(todo)} of the top {len(candidates)} "
-                f"candidates?\n\nRoughly {minutes} minute(s). Results are "
-                f"saved as they finish, so this can be run again to "
-                f"continue.", parent=owner):
+                f"Measure {' and '.join(what)}?\n\nRoughly {minutes} "
+                f"minute(s). Results are saved as they finish, so this can "
+                f"be run again to continue.", parent=owner):
             return
 
         self._sim_cancel_flag = False
@@ -935,6 +956,7 @@ class SimilarityUIMixin:
             # measurement, so they have to be refreshed from the database.
             self._refresh_cached_quietness(sim_state)
             self._apply_quietness_filter(result_tree, sim_state, limit_var)
+            self._refresh_pool_report(sim_state)
             parts = [f"Measured {stats['measured']}"]
             if stats["silent"]:
                 parts.append(f"{stats['silent']} silent or too short")

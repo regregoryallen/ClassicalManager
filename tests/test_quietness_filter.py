@@ -401,3 +401,28 @@ def test_closing_help_does_not_grab_a_window_that_has_gone():
         assert root.grab_current() in (None, "")
     finally:
         root.destroy()
+
+
+def test_measure_reaches_pool_tracks_the_search_excludes():
+    """An accepted track that was never measured had no way to be measured.
+
+    _do_sim_search removes anything already in the profile from the
+    results, so the candidate list can never contain a pool track. The
+    pool report would report "1 not measured" while Measure replied that
+    every candidate on screen was done — both true, and between them no
+    way to fix it.
+
+    Source-level: the alternative is standing up a profile, a search and
+    a GUI, and the fault is entirely about which ids get collected.
+    """
+    import pathlib
+
+    source = pathlib.Path(
+        "music_manager/interfaces/gui/similarity_ui.py").read_text()
+    start = source.index("def _measure_visible_quietness")
+    body = source[start:start + 3000]
+
+    assert "_resolve_current_to_track_ids()" in body, (
+        "Measure does not look at the profile's own tracks")
+    # The two sets are combined before asking what needs work.
+    assert "candidate_ids + pool_ids" in body

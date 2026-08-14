@@ -284,7 +284,19 @@ def describe(report: PoolReport) -> list[str]:
     if report.seam_excluded:
         lines.append(f"{report.seam_excluded} excluded from the seam figures "
                      f"(not measured, or no ReplayGain).")
-    if report.worst_seam is not None:
+
+    # Say why there are no seam numbers, rather than just omitting them.
+    # A seam is a property of a *pair*, so one eligible track produces
+    # nothing — and a pool of two with one unmeasured looked like the
+    # report had quietly failed.
+    if report.worst_seam is None:
+        if report.seam_eligible < 2:
+            need = 2 - report.seam_eligible
+            lines.append(
+                f"No seam figures yet: they compare one track's ending "
+                f"with the next one's opening, so at least two measured "
+                f"tracks are needed ({need} more).")
+    else:
         lines.append(
             f"Worst reachable seam: {report.worst_seam:.1f} dB — "
             f"“{report.worst_seam_from}” into “{report.worst_seam_to}”.")

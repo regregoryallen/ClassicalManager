@@ -267,3 +267,32 @@ def test_describe_reports_exclusions_so_they_are_not_silent():
 
     assert "not measured" in text
     assert "excluded from the seam figures" in text
+
+
+def test_absent_seam_figures_explain_themselves(tmp_path=None):
+    """One measured track produces no seam, and must say why.
+
+    A seam compares one track's ending with the next one's opening, so it
+    is a property of a pair. With a two-track pool and one of them
+    unmeasured the report simply omitted every seam line, which read as a
+    silent failure rather than as "not enough data yet".
+    """
+    tracks = [track(1, "measured", head=0.0, tail=0.0, offset=0.0,
+                    startle=3.0),
+              track(2, "unmeasured", startle=None)]
+    report = build_report(tracks, playlist_length=2)
+    text = " ".join(describe(report))
+
+    assert report.seam_eligible == 1
+    assert report.worst_seam is None
+    assert "No seam figures yet" in text
+    assert "1 more" in text
+
+
+def test_seam_figures_appear_as_soon_as_two_tracks_qualify():
+    tracks = [track(1, "a", head=0.0, tail=-4.0, offset=0.0),
+              track(2, "b", head=+2.0, tail=0.0, offset=0.0)]
+    text = " ".join(describe(build_report(tracks, playlist_length=2)))
+
+    assert "No seam figures yet" not in text
+    assert "Worst reachable seam" in text

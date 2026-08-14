@@ -40,7 +40,7 @@ class RulesWindowMixin:
         win = tk.Toplevel(self.root)
         win.title("Rules — current profile")
         win.transient(self.root)
-        self._center_on_main(win, 780, 420)
+        self._remember_geometry(win, "rules", 780, 420)
         win.configure(bg="#2b2b2b")
         # Non-modal: no grab_set(), so the Builder stays interactive
         self._rules_window = win
@@ -63,6 +63,9 @@ class RulesWindowMixin:
             tree.column(col, width=width, anchor=anchor)
         tree.tag_configure("orphaned", foreground="#e05a5a")
         tree.tag_configure("dead", foreground="#e6a332")
+        for col in ("action", "level", "tracks", "status", "pin"):
+            tree.column(col, stretch=False)   # Name takes the surplus
+        self._remember_columns(tree, "rules")
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical",
                                command=tree.yview)

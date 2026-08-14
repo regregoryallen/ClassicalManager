@@ -8,6 +8,7 @@ import json
 import io
 import logging
 import platform
+import re
 import sys
 import threading
 import tkinter as tk
@@ -309,7 +310,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """Silently save current builder state as an __autosave__ profile."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileSelection
+        from music_manager.core.database import PlaylistProfile
 
         # Capture current UI state
         length_val = self.length_value.get().strip()
@@ -340,15 +341,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 separate_forms=self.sep_form_var.get() == 1,
             )
 
-            for sel in self._current_selections:
-                ProfileSelection.create(
-                    profile=profile,
-                    level=sel["level"],
-                    key=sel["key"],
-                    excluded=sel["excluded"],
-                    pin_position=sel.get("pin_position"),
-                    track_paths=sel.get("track_paths"),
-                )
+            self._write_profile_selections(profile)
 
         # Remember the profile name entry text separately
         self._prefs["autosave_profile_name"] = profile_name
@@ -391,6 +384,24 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """Start the Tk event loop."""
         self.root.mainloop()
 
+    # Above this many items, an operation is slow enough that the window
+    # stops repainting and the app looks hung. The bulk selection paths
+    # are no longer quadratic, so this is about the tree rebuild and the
+    # per-track work that follows — seconds, not minutes, but still long
+    # enough that a user who did not mean to select the whole library
+    # deserves the chance to say so.
+    BULK_CONFIRM_THRESHOLD = 2000
+
+    def _confirm_bulk_selection(self, count, what="items", parent=None):
+        """Ask before an operation large enough to lock the UI. True to go."""
+        if count <= self.BULK_CONFIRM_THRESHOLD:
+            return True
+        return messagebox.askyesno(
+            "Large selection",
+            f"This affects {count:,} {what}.\n\nThe window will stop "
+            f"responding until it finishes. Continue?",
+            parent=parent or self.root)
+
     def _center_on_main(self, window, width=400, height=300):
         """Position a toplevel window centered on the main window."""
         self.root.update_idletasks()
@@ -399,6 +410,158 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         x = mx - width // 2
         y = my - height // 2
         window.geometry(f"{width}x{height}+{x}+{y}")
+
+    # ------------------------------------------------------------------
+    # Remembered window geometry and column widths (v3.9)
+    #
+    # The popups used to open at a fixed size every time, and the only
+    # way to enlarge one was the maximize button — which does nothing.
+    # Remembering the size a window is dragged to replaces the need for
+    # it; see _no_min_max for why the button itself cannot be removed
+    # everywhere, and why it is inert rather than dangerous.
+    #
+    # These windows stay transient deliberately. A transient popup cannot
+    # be iconified at all (Tk refuses: "can't iconify: it is a
+    # transient"), which is what keeps a grab-holding window from being
+    # hidden while it owns the input grab — the state that leaves the app
+    # unreachable with nothing on screen to explain it.
+    # ------------------------------------------------------------------
+
+    def _no_min_max(self, window):
+        """Ask the WM not to draw minimize/maximize on a popup.
+
+        A request, not a guarantee, and worth keeping even where it is
+        refused. X11 only — 'wm attributes -type' does not exist
+        elsewhere; on Windows a transient already has neither control,
+        so the failure is silent and correct on both.
+
+        **GNOME ignores it.** Measured on Mutter under X11: the property
+        is set correctly (_NET_WM_WINDOW_TYPE_DIALOG appears on the
+        managed window) and the buttons are drawn anyway, because
+        Mutter applies org.gnome.desktop.wm.preferences button-layout
+        uniformly. Setting the window type to 'utility', and setting
+        _MOTIF_WM_HINTS after mapping, are ignored for the same reason.
+        The only thing that removes maximize there is resizable(False,
+        False), which would defeat remembering a dragged size.
+
+        Left in because WMs that do honour window type — XFCE, KDE and
+        others — get what was asked for, and because the buttons it
+        fails to remove are inert: a transient cannot be iconified, and
+        Tk cannot maximize on X11 at all ('-zoomed' is a no-op,
+        state('zoomed') is unsupported). Nothing is at risk when the
+        request is refused; the user simply sees two dead controls.
+        """
+        try:
+            window.attributes("-type", "dialog")
+        except tk.TclError:
+            pass
+
+    # "900x560+120+80", and also "900x560-10-20": a minus is a separator
+    # meaning "offset from the right/bottom edge", not a negative x. The
+    # string is replayed verbatim rather than reassembled, so the two
+    # forms need telling apart only for the on-screen check.
+    _GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)([+-]-?\d+)([+-]-?\d+)$")
+
+    def _apply_saved_geometry(self, window, saved):
+        """Apply a remembered geometry string. False if it was unusable.
+
+        Unusable covers a monitor that has been unplugged since it was
+        saved: a window restored onto coordinates that no longer exist
+        is invisible, and the user has no way to guess why.
+        """
+        match = self._GEOMETRY_RE.match(saved or "")
+        if not match:
+            return False
+        w, h = int(match.group(1)), int(match.group(2))
+        if not (200 <= w <= 20000 and 150 <= h <= 20000):
+            return False
+        for group, limit in ((3, self.root.winfo_screenwidth()),
+                             (4, self.root.winfo_screenheight())):
+            # The leading character is the separator, not a sign: Tk
+            # writes a window dragged off the left edge as "+-300".
+            separator, value = match.group(group)[0], match.group(group)[1:]
+            # Edge-relative placement is on-screen by construction.
+            if separator == "-":
+                continue
+            if not -limit < int(value) < limit:
+                return False
+        try:
+            window.geometry(saved)
+        except tk.TclError:
+            return False
+        return True
+
+    def _remember_geometry(self, window, key, width, height):
+        """Restore *window*'s saved size and position; save them on close.
+
+        Falls back to centring at the given default size the first time,
+        and whenever the saved position would put the window off-screen
+        — a monitor that has been unplugged since must not strand it.
+        """
+        self._no_min_max(window)
+        saved = (self._prefs.get("windows") or {}).get(key)
+        if self._apply_saved_geometry(window, saved) is False:
+            self._center_on_main(window, width, height)
+
+        # Tracked as it changes rather than read at the end. By the time
+        # <Destroy> fires the window has already been unmapped and
+        # reports its size as 1x1 — position intact, size gone — which
+        # _apply_saved_geometry would then reject on the next open, so
+        # the whole feature would quietly do nothing.
+        last = {"geometry": None}
+
+        def _track(event):
+            if event.widget is window:
+                last["geometry"] = window.geometry()
+
+        def _save(event):
+            # <Destroy> fires for every descendant as the window tears
+            # down; only the toplevel's own closing is the signal.
+            if event.widget is not window or not last["geometry"]:
+                return
+            self._prefs.setdefault("windows", {})[key] = last["geometry"]
+            _save_prefs(self._prefs)
+
+        window.bind("<Configure>", _track, add="+")
+        window.bind("<Destroy>", _save, add="+")
+
+    def _remember_columns(self, tree, key):
+        """Restore *tree*'s saved column widths; save them when it closes.
+
+        Paired with _remember_geometry: a window that reopens at the size
+        it was left at, with columns back at their defaults, has only
+        half-remembered anything.
+        """
+        saved = (self._prefs.get("columns") or {}).get(key) or {}
+        show = str(tree.cget("show"))
+        cols = (["#0"] if "tree" in show else []) + list(tree["columns"])
+        for col in cols:
+            width = saved.get(col)
+            if isinstance(width, int) and 20 <= width <= 2000:
+                tree.column(col, width=width)
+
+        # Snapshotted as it changes, for the same reason the geometry is:
+        # by <Destroy> the Tcl command behind the tree is already gone and
+        # every column query raises. ButtonRelease catches the end of a
+        # separator drag, Configure the widths that stretch redistributes.
+        last = {"widths": None}
+
+        def _track(event=None):
+            try:
+                last["widths"] = {col: tree.column(col, "width")
+                                  for col in cols}
+            except tk.TclError:
+                pass
+
+        def _save(event):
+            if event.widget is not tree or not last["widths"]:
+                return
+            self._prefs.setdefault("columns", {})[key] = last["widths"]
+            _save_prefs(self._prefs)
+
+        tree.bind("<ButtonRelease-1>", _track, add="+")
+        tree.bind("<Configure>", _track, add="+")
+        tree.bind("<Destroy>", _save, add="+")
 
     @staticmethod
     def _open_in_player(file_path):

@@ -204,6 +204,22 @@ class SimilarityUIMixin:
                 "for the similarity search.")
             return
 
+        # Every seed is compared against every candidate, so a profile
+        # holding most of the library turns one click into minutes of
+        # scoring with the window unpainted.
+        #
+        # Counted from the in-memory library index, not by resolving the
+        # profile first. Resolving is itself part of what takes the time,
+        # so asking afterwards put the warning several minutes after the
+        # click it was meant to precede — the user had already waited for
+        # the thing they were being offered the chance to avoid.
+        index = self._get_library_index()
+        state = self._current_effective_state(index)
+        expected_seeds = (len(state.included_track_ids)
+                          + len(state.expanded_track_ids))
+        if not self._confirm_bulk_selection(expected_seeds, "seed tracks"):
+            return
+
         # Resolve current selections to track IDs
         seed_ids = self._resolve_current_to_track_ids()
         if not seed_ids:
@@ -335,15 +351,22 @@ class SimilarityUIMixin:
         popup = tk.Toplevel(self.root)
         popup.title("Find Similar Tracks")
         popup.transient(self.root)
-        self._center_on_main(popup, 900, 560)
+        self._remember_geometry(popup, "find_similar", 900, 560)
         popup.wait_visibility()
         popup.grab_set()
 
         ctk = self.ctk
 
         # -- Parameter controls --
+        # Two rows. One row held max-results, three slider-and-checkbox
+        # pairs, a help button, blend, Search and the weights toggle, and
+        # was full before the text filter needed somewhere to go. Split by
+        # what the controls do: row one narrows the candidates, row two
+        # decides how they are scored and which of them you are looking at.
         param_frame = ctk.CTkFrame(popup, fg_color="transparent")
-        param_frame.pack(fill="x", padx=12, pady=(10, 4))
+        param_frame.pack(fill="x", padx=12, pady=(10, 2))
+        param_row2 = ctk.CTkFrame(popup, fg_color="transparent")
+        param_row2.pack(fill="x", padx=12, pady=(0, 4))
 
         ctk.CTkLabel(param_frame, text="Max results:").pack(
             side="left", padx=(0, 4))
@@ -443,17 +466,29 @@ class SimilarityUIMixin:
             command=lambda: self._show_help("quietness")).pack(
             side="left", padx=(0, 12))
 
-        ctk.CTkLabel(param_frame, text="Blend:").pack(
+        ctk.CTkLabel(param_row2, text="Blend:").pack(
             side="left", padx=(0, 4))
         blend_var = tk.DoubleVar(value=0.5)
-        ctk.CTkSlider(param_frame, from_=0.0, to=1.0,
+        ctk.CTkSlider(param_row2, from_=0.0, to=1.0,
                       variable=blend_var, width=110).pack(
             side="left", padx=(0, 4))
-        ctk.CTkLabel(param_frame, text="nearest seed ↔ all seeds",
+        ctk.CTkLabel(param_row2, text="nearest seed ↔ all seeds",
                      font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 12))
 
-        search_btn = ctk.CTkButton(param_frame, text="Search", width=70)
+        search_btn = ctk.CTkButton(param_row2, text="Search", width=70)
         search_btn.pack(side="left")
+
+        # Filters the results already on screen — no query, no re-scoring,
+        # like the quietness sliders beside it. Applied after the match
+        # percentiles are restated, so narrowing to one composer does not
+        # change what "closer than 90% of candidates" refers to.
+        filter_var = tk.StringVar()
+        self._make_filter_entry(
+            param_row2, filter_var,
+            placeholder="title, composer, album").pack(side="right")
+        ctk.CTkLabel(param_row2, text="Filter:",
+                     text_color=("gray25", "gray70")).pack(
+            side="right", padx=(12, 3))
 
         # -- Feature weights ------------------------------------------------
         # Groups are normalised by size before these apply, so a weight is a
@@ -478,7 +513,7 @@ class SimilarityUIMixin:
                 weights_btn.configure(text="Feature weights \u25b4")
 
         weights_btn = ctk.CTkButton(
-            param_frame, text="Feature weights \u25be", width=140,
+            param_row2, text="Feature weights \u25be", width=140,
             fg_color="gray30", hover_color="gray40", command=toggle_weights)
         weights_btn.pack(side="left", padx=(8, 0))
 
@@ -537,11 +572,17 @@ class SimilarityUIMixin:
         result_tree.column("#0", width=200)
         result_tree.column("composer", width=130)
         result_tree.column("album", width=150)
-        result_tree.column("match", width=60)
-        result_tree.column("rank", width=90, anchor="e")
-        result_tree.column("volatility", width=80, anchor="e")
-        result_tree.column("startle", width=78, anchor="e")
-        result_tree.column("level", width=88, anchor="e")
+        result_tree.column("match", width=58, anchor="e")
+        result_tree.column("rank", width=74, anchor="e")
+        result_tree.column("volatility", width=76, anchor="e")
+        result_tree.column("startle", width=64, anchor="e")
+        result_tree.column("level", width=72, anchor="e")
+        # Numbers get what their headings need and no more; the surplus
+        # from a widened window goes to the three text columns, which are
+        # the ones that were being starved.
+        for col in ("match", "rank", "volatility", "startle", "level"):
+            result_tree.column(col, stretch=False)
+        self._remember_columns(result_tree, "find_similar")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")
@@ -641,8 +682,15 @@ class SimilarityUIMixin:
             "pool_label": pool_label,
             "vol_var": vol_var,
             "vol_enabled": vol_enabled,
+            "filter_var": filter_var,
         }
         self._refresh_pool_report(sim_state)
+
+        # Re-renders on every keystroke, from the cached scores.
+        filter_var.trace_add("write", lambda *_: (
+            sim_state["all_results"]
+            and self._apply_quietness_filter(result_tree, sim_state,
+                                             limit_var)))
 
         # The quietness sliders re-render from the cached scores; they do
         # not re-run the search. Wired after sim_state exists because the
@@ -737,7 +785,22 @@ class SimilarityUIMixin:
         # which is how volatility_max has always behaved, it just does its
         # filtering before scoring rather than after.
         survivors = recompute_match_percentiles(survivors)
-        visible = survivors[:limit]
+
+        # After the percentiles, deliberately: the text filter is a view
+        # over the results, not a narrowing of the candidate pool, so
+        # "closer than 90% of candidates" must keep meaning the same
+        # thing while you type. Before the limit, equally deliberately —
+        # a filter that searched only the visible 50 would answer about
+        # the wrong set.
+        query = (sim_state["filter_var"].get().strip().lower()
+                 if sim_state.get("filter_var") else "")
+        matched = survivors
+        if query:
+            matched = [r for r in survivors
+                       if query in (r.get("title") or "").lower()
+                       or query in (r.get("composer") or "").lower()
+                       or query in (r.get("album") or "").lower()]
+        visible = matched[:limit]
 
         result_tree.delete(*result_tree.get_children())
         sim_state["result_map"].clear()
@@ -775,11 +838,12 @@ class SimilarityUIMixin:
         sim_state["status_label"].configure(
             text=self._quietness_status(len(visible), len(survivors),
                                         len(results), dropped,
-                                        unmeasured_visible))
+                                        unmeasured_visible,
+                                        len(survivors) - len(matched)))
 
     @staticmethod
     def _quietness_status(visible, surviving, total, dropped,
-                          unmeasured_visible=0):
+                          unmeasured_visible=0, filtered_out=0):
         """The surviving-candidate count, and what the filters removed.
 
         Not decoration. The level slider has a cliff at zero — 68.8% of
@@ -796,9 +860,18 @@ class SimilarityUIMixin:
         Nothing measures quietness until asked, so a first search shows a
         column of dashes — and reporting only "50 of 7241 shown" left
         nothing to connect those dashes to the button that fills them in.
+
+        `filtered_out` is the text filter's doing, reported separately
+        from the quietness counts for the same reason those are split
+        from each other: it is the one number the user can undo by
+        clearing a box, and it must not read as candidates that failed.
         """
+        text_note = (f"{filtered_out} hidden by filter" if filtered_out
+                     else "")
         if surviving == total:
             shown = f"{visible} of {total} shown"
+            if text_note:
+                shown += f" — {text_note}"
             if unmeasured_visible:
                 shown += (f" — {unmeasured_visible} not yet measured for "
                           f"startle (use Measure quietness)")
@@ -811,6 +884,8 @@ class SimilarityUIMixin:
         unmeasured = dropped["startle_unmeasured"] + dropped["level_unmeasured"]
         if unmeasured:
             parts.append(f"{unmeasured} unmeasured")
+        if text_note:
+            parts.append(text_note)
         if unmeasured_visible:
             parts.append(f"{unmeasured_visible} shown unmeasured")
         return " — ".join(parts)

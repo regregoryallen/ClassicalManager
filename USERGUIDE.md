@@ -6,15 +6,16 @@
 2. [Installation](#installation)
 3. [Initial Setup](#initial-setup)
 4. [Getting Started](#getting-started)
-5. [The Sidebar](#the-sidebar)
-6. [Playlist Builder Tab](#playlist-builder-tab)
-7. [Rules](#rules)
-8. [Cleanup / Overlay Tab](#cleanup--overlay-tab)
-9. [Settings](#settings)
-10. [Command-Line Interface](#command-line-interface)
-11. [Usage Patterns](#usage-patterns)
-12. [Configuration Reference](#configuration-reference)
-13. [Troubleshooting](#troubleshooting)
+5. [The Full Workflow](#the-full-workflow)
+6. [The Sidebar](#the-sidebar)
+7. [Playlist Builder Tab](#playlist-builder-tab)
+8. [Rules](#rules)
+9. [Cleanup / Overlay Tab](#cleanup--overlay-tab)
+10. [Settings](#settings)
+11. [Command-Line Interface](#command-line-interface)
+12. [Usage Patterns](#usage-patterns)
+13. [Configuration Reference](#configuration-reference)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -109,6 +110,31 @@ pip install -r requirements.txt
 cp config.example.json config.json
 python main.py
 ```
+
+### Running it afterwards
+
+The install steps above create a virtual environment in `venv/` and
+install everything into it. That environment is not active in a new
+terminal, so **every later run has to activate it first**:
+
+```bash
+source venv/bin/activate
+python main.py
+```
+
+On Windows the activate line is `venv\Scripts\activate` instead.
+
+This applies to every `python main.py` in this guide — the GUI, each CLI
+command, the webhook server — and to `rgtag.py`. Running `python main.py`
+without activating uses the system Python, which does not have the
+dependencies and fails with `ModuleNotFoundError`.
+
+Two shortcuts avoid the activation step. On Windows, `run.bat` activates
+the environment and starts the GUI in one go. On Linux and macOS,
+`venv/bin/python main.py` works from anywhere without activating —
+naming the interpreter inside the environment is equivalent to
+activating it. `./rgtag.py` re-runs itself inside `venv/` for the same
+reason.
 
 ### Dependencies
 
@@ -214,6 +240,171 @@ Switch to the **Playlist Builder** tab:
 
 Enter a name in the Profile field and click **Save**. Your rules and settings are
 stored in the database and can be reloaded anytime with **Load**.
+
+---
+
+## The Full Workflow
+
+"Getting Started" above is the shortest path to a playlist. This chapter
+is the whole pipeline, in the order the stages depend on one another,
+with links to the chapter that covers each one in detail.
+
+You do not need all of it. Stages 1–3 and 7–8 produce playlists on their
+own; stages 4–6 exist to make those playlists *flow* — to stop a quiet
+Adagio being followed by something that makes you reach for the volume.
+Add them when that starts to matter.
+
+**The dependencies that actually constrain the order:**
+
+- Work grouping (3) must be right before tagging (4), because ReplayGain
+  album gain is computed *per work*. Regrouping afterwards means
+  retagging.
+- Tagging (4) must precede any use of the **vs Work** filter (7), which
+  is computed from the two ReplayGain tags and is blank without them.
+- Audio analysis (5) and quietness measurement (6) are independent
+  passes with separate costs and separate versions. Neither invalidates
+  the other, and either can be skipped.
+
+### 1. Acquire and organise the files
+
+The scanner takes one album per folder, so the layout on disk decides
+what an album is. Tags matter more than filenames: `COMPOSER`,
+`ALBUMARTIST`, and above all `WORK` (or MusicBrainz work ids) are what
+let the app group movements into works. See
+[How Works Are Detected](#how-works-are-detected) for exactly which
+fields are consulted and in what order.
+
+Getting tags right at this stage is much cheaper than correcting the
+results later — an overlay correction (3) fixes one work, a good tag
+fixes every album you ever import from that source.
+
+### 2. Scan
+
+**Scan Library...** in the sidebar. First time, that is a **Full
+rebuild**; afterwards prefer **Scan changes**, which updates rows in
+place and keeps analyses. See [Scan Library...](#scan-library) and
+[Scan Report](#scan-report).
+
+Read the scan report rather than closing it. It tells you how many works
+came from tags versus heuristics, which is the number that tells you
+whether stage 3 is a five-minute job or an afternoon.
+
+### 3. Clean up work grouping
+
+The [Cleanup / Overlay Tab](#cleanup--overlay-tab) is where detection
+mistakes get corrected. Corrections are stored as an *overlay* — the
+files are never modified — so they survive rescans and can be exported
+and reimported.
+
+Sort the Works Browser by **Source** and start with `heuristic`: those
+are the works the app guessed from title prefixes, and they are where
+the errors are. `mb_workid` and `work_tag` came from your tags and are
+usually right.
+
+**Finish this before stage 4.** Album gain is calculated across a work's
+members, so changing what belongs to a work invalidates the tags written
+for it.
+
+### 4. Write ReplayGain tags (optional)
+
+`rgtag.py` writes work-scoped ReplayGain tags, so every movement of a
+work plays at a level consistent with the rest of that work rather than
+being individually normalised to the same loudness — which is what
+flattens a symphony's dynamics.
+
+```bash
+source venv/bin/activate
+python rgtag.py --library "My Collection"          # dry run: writes nothing
+python rgtag.py --library "My Collection" --write
+```
+
+It needs `rsgain` on your PATH. Dry-run is the default; nothing is
+written without `--write`. Run `python rgtag.py --help` for the full
+option list — it documents provenance filtering, clipping prediction and
+the mtime behaviour in more detail than belongs here.
+
+**Follow a real run with a rescan**, or the app will not know the tags
+exist:
+
+```bash
+python main.py --cli scan-changes --library "My Collection"
+```
+
+Use `scan-changes`, not a full rebuild: a full rescan only restores
+analyses when mtime and size both match, and tagging changes the mtime,
+so it would discard the work done in stages 5 and 6.
+
+### 5. Analyse audio (optional)
+
+**Analyze Audio** in the sidebar. One librosa pass per track produces the
+feature vector behind [Find Similar](#find-similar-tracks) and the
+Dynamic Range figure.
+
+This is the expensive stage — hours for a large library, and it is
+CPU- and memory-bound. See `analysis_workers` in the
+[Configuration Reference](#configjson) before running it on a machine
+with limited RAM; more workers is not linearly faster and past a point
+will swap.
+
+Results are cached per track and survive `scan-changes`. You can also
+let Find Similar prompt you instead: it analyses what it needs and warns
+with a time estimate before starting anything long.
+
+### 6. Measure quietness (optional)
+
+**Measure quietness** inside the Find Similar window. A separate, much
+cheaper ffmpeg pass that produces the Startle figure — how sharply a
+track rises above what came before it.
+
+Deliberately *not* a library-wide operation. It measures the candidates
+you are looking at and the tracks already in your profile, so the
+library fills in as you curate rather than in one long batch up front.
+
+Needs `ffmpeg` on your PATH; without it, Measure and Audition grey
+themselves out.
+
+### 7. Build a profile
+
+The [Playlist Builder Tab](#playlist-builder-tab). Select albums, works
+or tracks; each selection becomes a [rule](#rules), and the rules are
+what get saved — not a frozen track list, so a profile picks up new
+music on the next scan.
+
+Typical loop:
+
+1. Seed the profile with a few works you know you want.
+2. **Find Similar** to widen it, filtering on Dyn Range, Startle and
+   **vs Work** to keep the flow even. (**vs Work** is blank unless you
+   did stage 4.)
+3. Accept what fits, re-search from the widened set, repeat.
+4. Watch the [Health Strip](#health-strip) for redundant or orphaned
+   rules and for the pool's track count and playing time.
+5. Set shuffle mode, work integrity and any length limit.
+6. **Save** under a name.
+
+### 8. Generate and publish
+
+**Preview** resolves the rules into an actual ordered playlist so you can
+check it before publishing. Then **Export M3U**, **Export JSON**, or
+**Push to Plex**.
+
+Everything here is also available from the
+[Command-Line Interface](#command-line-interface), which is what makes
+the last stage automatable.
+
+### 9. Keep it current
+
+New music arrives; the pipeline does not need re-running from the top.
+
+- `scan-changes` picks up added, changed and removed files and keeps
+  analyses.
+- Stages 3–6 apply only to what is new.
+- Saved profiles regenerate against the updated library without being
+  touched, because they store rules rather than tracks.
+
+To automate the regeneration, see [Cron Automation](#cron-automation)
+for a schedule, or the [Webhook Service](#webhook-service) to trigger it
+from Home Assistant or anything else that can make an HTTP request.
 
 ---
 
@@ -481,13 +672,30 @@ searches are fast.
 
 Results appear in a popup with these controls:
 
+The controls sit on two rows. The first narrows the candidates; the
+second decides how they are scored and which of them you are looking at.
+
 - **Max results**: How many matches to return.
-- **Volatility max**: Optional filter. Volatility measures how much a track varies
-  internally (soft-to-loud, sparse-to-dense). Tick the checkbox next to the slider to
-  *enable* the filter — moving the slider alone does nothing until it is enabled.
-  Lower values keep more even, consistent tracks.
+- **Max dyn range**: Optional filter, in dB. Dynamic range is how much a
+  track varies internally (soft-to-loud, sparse-to-dense). Tick the
+  checkbox next to the slider to *enable* the filter — moving the slider
+  alone does nothing until it is enabled. Lower values keep more even,
+  consistent tracks.
+- **Max startle**: Optional filter, in LU. How sharply the track rises
+  above what came before it. Requires **Measure quietness** (below);
+  unmeasured tracks are excluded while this filter is on, not admitted.
+- **Max level vs work**: Optional filter, in dB. Where the track plays
+  relative to its own work once ReplayGain normalisation is applied.
+  Blank for untagged files — see stage 4 of
+  [The Full Workflow](#the-full-workflow).
 - **Blend**: Slides between *nearest* (rank by the single closest seed) and *consensus*
   (favor tracks that many seeds agree are close).
+- **Filter**: Free text, matched against title, composer and album. It
+  narrows what is displayed without re-running the search and without
+  changing what Match is measured against.
+- **Feature weights**: Expands sliders for the six feature groups —
+  timbre, register, dynamics, tempo, attack, harmony. 0 removes a group
+  from the comparison, 2 doubles its say.
 
 Each result row shows:
 
@@ -495,22 +703,38 @@ Each result row shows:
   seeds already are to one another, decaying as it gets looser. It is self-calibrating
   per search, so it stays meaningful regardless of how broad your seed set is.
   Color-coded green (strong), amber (loose), red (weak).
-- **Agreement**: How many of your seeds consider the track a close match (e.g. `12/31`).
-- **Volatility**: The track's internal-variation score.
+- **Rank**: The track's position among the candidates scored, e.g. `7 of 500`.
+- **Dyn Range**: The track's internal-variation score, in dB.
+- **Startle** and **vs Work**: The two quietness figures above. An em
+  dash means *not measured*, which is different from a measured zero.
+
+The status line under the results reports how many candidates passed the
+filters, how many were rejected as too loud, how many are unmeasured,
+and how many the text filter is hiding — each counted separately,
+because each asks for a different action.
+
+Column widths and the window's size are remembered between sessions.
 
 Actions:
 
 - **Accept Selected / Accept All**: Add result tracks to the profile as track-level
   selections.
 - **Re-search (include accepted)**: Re-run using the widened seed set.
-- **Sort results**: double-click any column header to rank by Match, Agreement, or Volatility (numeric-aware).
-- **Right-click** a result for **Play**, **Details** (metadata popup), or
-  **Show in Folder** to audition and inspect before accepting.
+- **Measure quietness**: Runs the ffmpeg pass that fills in the Startle
+  and vs Work columns, for the candidates on screen and the tracks
+  already in the profile. Results are saved as they finish, so it can be
+  stopped and resumed.
+- **Sort results**: double-click any column header to rank by it (numeric-aware).
+- **Right-click** a result for **Play**, **Audition loudest moment**
+  (eight seconds from where the Startle figure came from), **Details**,
+  **Show Album**, or **Show in Folder**.
 
 Find Similar analyzes any tracks that still need it before searching. For a small
 number it just runs; for a large backlog it warns with a time estimate first, so a
 search click never silently starts a multi-hour job. To do that work deliberately,
-use **Analyze Audio** in the sidebar.
+use **Analyze Audio** in the sidebar. A search seeded from more than
+2000 tracks asks for confirmation as well — scoring that many seeds
+against the library takes minutes, with the window unresponsive.
 
 ### Pin to Position
 
@@ -540,10 +764,16 @@ your rules; the Rules window shows the rules themselves.
 ### Health Strip
 
 The status line at the bottom right of the Builder summarizes your rules and the
-resulting track count, e.g.
-`Rules: 12 (9 active, 2 redundant, 1 orphaned ⚠) — 45 trk (41 + 4 via integrity)`.
+resulting pool, e.g.
+`Rules: 12 (9 active, 2 redundant, 1 orphaned ⚠) — pool: 45 trk (41 + 4 via integrity) / 3h 12m`.
 Click it to open the Rules window. An empty profile reads "playlist is empty" —
 no rules means no tracks.
+
+It says **pool** because that is what it measures: the material the
+profile is allowed to draw from. For a profile with a time or count
+limit, that is deliberately *not* what the generated playlist will
+contain — a 3h 12m pool with a one-hour limit is working correctly. Use
+**Preview** to see what will actually play.
 
 ### Rules Window
 
@@ -635,7 +865,15 @@ Album, Tracks, Composer.
 
 - **Play** (tracks only): Opens the audio file in your system's default player
 - **Details**: Read-only popup showing all work and track metadata (names, paths,
-  MB IDs, durations, and per-track volatility once analyzed) with copy buttons
+  MB IDs, durations, and per-track dynamic range once analyzed) with copy buttons.
+  The work's internal id is shown dimmed at the bottom — that is the
+  value `rgtag.py --work-id` expects, and clicking it copies it.
+  **Show advanced metrics** expands each track with everything else on
+  record: tags, file size and timestamps, ReplayGain values, the feature
+  vector by group, and the quietness metrics. Three of those are
+  labelled *diagnostics* and are not comparable between tracks — they
+  are stored because re-measuring is expensive, not because they mean
+  anything on their own
 - **Show Album**: Opens the album popup (see below)
 - **Set Work Name / Group Key / Composer**: Focuses the corresponding edit field
 - **Make Standalone**: Sets `__standalone__` group key for all tracks in the selected
@@ -1051,12 +1289,27 @@ playlist updates it in place without creating a duplicate.
 
 ### config.json
 
+`config.example.json` in the install directory is the authoritative
+copy — it carries explanatory `_comment` keys that are stripped here for
+readability. Any key beginning with `_` is ignored, which is how that
+file annotates itself; JSON has no comment syntax.
+
 ```json
 {
   "active_library": 1,
-  "db_path": "/path/to/music_manager.db",
+  "autosave_interval": 60,
+  "analysis_workers": 12,
+  "similarity_weights": {
+    "timbre": 1.0,
+    "register": 0.6,
+    "dynamics": 1.0,
+    "tempo": 1.0,
+    "attack": 1.0,
+    "harmony": 0.4
+  },
   "database": {
     "backend": "mysql",
+    "path": "",
     "host": "dbhost",
     "port": 3306,
     "name": "classical_manager",
@@ -1090,13 +1343,20 @@ playlist updates it in place without creating a duplicate.
     "host": "0.0.0.0",
     "port": 5588,
     "library": "My Collection",
-    "allowed_commands": ["plex", "scan", "scan+plex", "scan+m3u", "m3u"]
+    "libraries": {
+      "My Collection": {"m3u_output_dir": "~/Playlists"}
+    },
+    "allowed_commands": ["plex", "scan", "scan+plex", "scan+m3u", "m3u",
+                         "exclude-track"],
+    "token_env": "CM_WEBHOOK_TOKEN"
   }
 }
 ```
 
 | Field | Notes |
 |-------|-------|
+| `active_library` | Library id used when nothing else names one. The app writes this when you switch libraries in the sidebar. |
+| `autosave_interval` | Seconds between builder autosaves. Default: 60; `0` disables autosaving entirely. The autosave is what a crash recovers from, so raising it widens the window of work you can lose. |
 | `db_path` | Legacy, still read. Superseded by `database.path`, which wins when both are present. Saving from the Settings dialog rewrites it as `database.path` and removes this key. |
 | `similarity_weights` | Optional. Per-group influence in Find Similar: `timbre`, `register`, `dynamics`, `tempo`, `attack`, `harmony`. Groups are normalised by size before weighting, so a weight is a decision rather than a consequence of how many columns a group has. 0 removes a group, 2 doubles it. The Find Similar window has sliders for the same values. |
 | `analysis_workers` | Optional. Processes used by audio analysis. Omit for three quarters of the cores. Analysis is CPU-bound and the measured speedup flattens past about 12 workers, so more is not linearly faster. The GUI's Analyze Audio dialog lets you choose per run; this sets the default for the GUI, CLI, webhook and cron alike. |
@@ -1121,11 +1381,15 @@ playlist updates it in place without creating a duplicate.
 | `webhook.port` | Listen port. Default: `5588`. |
 | `webhook.library` | Default library, used when a request does not name one. Falls back to `active_library` if omitted. |
 | `webhook.libraries` | Optional. Maps a library name to its own `m3u_output_dir`, letting one service serve several libraries. A leading `~` is expanded to your home directory. A request may name only libraries listed here. See [Serving several libraries](#serving-several-libraries). |
-| `webhook.allowed_commands` | List of allowed commands. Default: all five modes. |
+| `webhook.allowed_commands` | List of allowed commands. Valid values: `plex`, `m3u`, `scan`, `scan+plex`, `scan+m3u`, `exclude-track`. Defaults to the five mode commands — `exclude-track` must be enabled explicitly, since it changes a profile rather than only publishing one. |
+| `webhook.token_env` | Name of an environment variable holding the shared secret, used instead of putting `webhook.token` in the file. See [Webhook Service](#webhook-service). |
 
 ### gui_prefs.json (auto-managed)
 
-Stores window geometry and last-used export directory. Do not edit manually.
+Stores the main window's geometry, each popup's remembered size and
+position, tree column widths, the last-used export directory and the
+last library. Written as you use the app; do not edit manually. Deleting
+it is safe — everything in it returns to a default.
 
 ### Supported Audio Formats
 
@@ -1516,6 +1780,27 @@ The app uses zenity (GNOME) or kdialog (KDE) for native file dialogs. If neither
 installed, it falls back to Tkinter's built-in dialogs:
 ```bash
 sudo apt install zenity
+```
+
+### Popup windows show minimize and maximize buttons that do nothing
+
+Expected on GNOME, and harmless. Popups (Find Similar, Details, Album,
+Rules) are dialogs, and the app asks the window manager not to draw
+those two controls. GNOME's Mutter ignores the request: it applies the
+`button-layout` preference to every window regardless of type, so the
+buttons are drawn even though neither action is available to a dialog.
+Clicking them does nothing at all — nothing is at risk.
+
+Resize the window by dragging its edge instead. Each popup remembers the
+size and position you leave it at, along with its column widths, so this
+is a one-time adjustment rather than something to redo each session.
+
+Window managers that honour window type — XFCE, KDE and others — do not
+draw the buttons in the first place. If you want them gone under GNOME,
+the setting is global rather than per-application:
+
+```bash
+gsettings set org.gnome.desktop.wm.preferences button-layout ':close'
 ```
 
 ### Plex push fails with "section not found"

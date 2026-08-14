@@ -24,6 +24,48 @@ from music_manager.interfaces.gui.common import (
 
 logger = logging.getLogger(__name__)
 
+
+class _SelectionView:
+    """Dict views over the selection list, kept current across a batch.
+
+    The bulk loops used to ask _selection_maps() and _find_selection()
+    once per item, and both walk the whole selection list. Selecting the
+    library with Ctrl-A and adding it therefore rebuilt three dicts from
+    a list that was growing underneath it — around 75 million dictionary
+    inserts for 7000 tracks, all of it on the UI thread, which is what
+    made the window go grey for minutes.
+
+    Same answers, built once and updated as the batch proceeds. Callers
+    that hold one must route every mutation through it; the single-item
+    paths pass nothing and keep the old scan-per-call behaviour, which
+    is fine for one item and has no cache to go stale.
+    """
+
+    __slots__ = ("by_key", "levels")
+
+    def __init__(self, selections):
+        self.by_key = {}
+        self.levels = {"album": {}, "work": {}, "track": {}}
+        for s in selections:
+            self.add(s)
+
+    def add(self, sel):
+        self.by_key[(sel["level"], sel["key"])] = sel
+        self.levels[sel["level"]][sel["key"]] = sel["excluded"]
+
+    def discard(self, sel):
+        self.by_key.pop((sel["level"], sel["key"]), None)
+        self.levels[sel["level"]].pop(sel["key"], None)
+
+    def get(self, level, key):
+        return self.by_key.get((level, key))
+
+    @property
+    def maps(self):
+        """(album, work, track) key → excluded, as _selection_maps returns."""
+        return self.levels["album"], self.levels["work"], self.levels["track"]
+
+
 class BuilderTabMixin:
     # ------------------------------------------------------------------
     # Library index cache (V3 Phase 4)
@@ -232,17 +274,19 @@ class BuilderTabMixin:
         return display_name_for_selection(self.active_library, level, key)
 
     def _add_selection(self, level, key, excluded=False, pin_position=None,
-                       track_paths=None, refresh=True):
+                       track_paths=None, refresh=True, view=None):
         """Add a selection to the in-memory list."""
         # At most one selection may exist per (level, key). Skip if this
         # exact state already exists; otherwise remove the stale opposite-
         # state entry so it doesn't linger and get picked up ahead of this
         # one by _find_selection or disagree with resolve_selections.
-        existing = self._find_selection(level, key)
+        existing = self._find_selection(level, key, view)
         if existing is not None:
             if existing["excluded"] == excluded:
                 return
             self._current_selections.remove(existing)
+            if view is not None:
+                view.discard(existing)
 
         display_name = self._display_name(level, key)
         prefix = "EXCEPT" if excluded else "ADD"
@@ -257,27 +301,32 @@ class BuilderTabMixin:
             "display": f"{pin_str}{prefix}: {level} — {display_name}",
         }
         self._current_selections.append(sel)
+        if view is not None:
+            view.add(sel)
         if refresh:
             self._refresh_rules_display()
 
-    def _find_selection(self, level, key):
+    def _find_selection(self, level, key, view=None):
         """Find an existing selection by level and key."""
+        if view is not None:
+            return view.get(level, key)
         return next((s for s in self._current_selections
                      if s["level"] == level and s["key"] == key), None)
 
-    def _is_item_selected(self, level, key):
+    def _is_item_selected(self, level, key, view=None):
         """Check if item is selected (directly or via parent, respecting
         specificity).  V3: answered from the library index and the shared
         decision function — zero queries (V2 walked the DB per call)."""
         from music_manager.core.selection import _decide_track, parse_work_key
 
-        album_sel, work_sel, track_sel = self._selection_maps()
+        album_sel, work_sel, track_sel = (
+            view.maps if view is not None else self._selection_maps())
         index = self._get_library_index()
 
         if level == "track":
             tid = index.track_id_by_path.get(key)
             if tid is None:
-                sel = self._find_selection(level, key)
+                sel = self._find_selection(level, key, view)
                 return sel is not None and not sel["excluded"]
             t = index.tracks[tid]
             included, _ = _decide_track(
@@ -285,7 +334,7 @@ class BuilderTabMixin:
                 track_sel, work_sel, album_sel)
             return bool(included)
 
-        sel = self._find_selection(level, key)
+        sel = self._find_selection(level, key, view)
         if sel is not None:
             return not sel["excluded"]
         if level == "work":
@@ -338,8 +387,29 @@ class BuilderTabMixin:
         else:
             trk = f"{n_sel} trk"
 
-        return (f"Rules: {len(results)} ({', '.join(parts)}) — {trk}{dirty}"
-                if parts else f"Rules: {len(results)} — {trk}{dirty}")
+        # "pool", not "length": these describe what the profile is allowed
+        # to draw from, which is not what a time- or count-limited profile
+        # will play. Naming the set removes the contradiction rather than
+        # leaving the reader to notice it.
+        total_ms = sum(
+            index.tracks[tid].duration_ms
+            for tid in (*state.included_track_ids, *state.expanded_track_ids)
+            if tid in index.tracks)
+        pool = f"pool: {trk} / {self._format_pool_duration(total_ms)}"
+
+        return (f"Rules: {len(results)} ({', '.join(parts)}) — {pool}{dirty}"
+                if parts else f"Rules: {len(results)} — {pool}{dirty}")
+
+    @staticmethod
+    def _format_pool_duration(total_ms):
+        """A pool's playing time, at the precision the strip can use.
+
+        Seconds are noise on a figure this size and would flicker on
+        every rule change, so the smallest unit is a minute.
+        """
+        minutes = (total_ms or 0) // 60000
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
 
     def _backfill_breadcrumbs(self):
         """Regenerate missing track_paths on work-level ADD rules.
@@ -518,6 +588,9 @@ class BuilderTabMixin:
         self.builder_lib_tree.column("genre", width=90)
         self.builder_lib_tree.column("year", width=50, anchor="center")
         self.builder_lib_tree.column("info", width=70, anchor="center")
+        for col in ("genre", "year", "info"):
+            self.builder_lib_tree.column(col, stretch=False)
+        self._remember_columns(self.builder_lib_tree, "builder_lib")
         self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         lib_scroll = ttk.Scrollbar(left_frame, orient="vertical",
@@ -603,6 +676,9 @@ class BuilderTabMixin:
         self.builder_pl_tree.column("genre", width=90)
         self.builder_pl_tree.column("year", width=50, anchor="center")
         self.builder_pl_tree.column("info", width=70, anchor="center")
+        for col in ("genre", "year", "info"):
+            self.builder_pl_tree.column(col, stretch=False)
+        self._remember_columns(self.builder_pl_tree, "builder_pl")
         self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         pl_scroll = ttk.Scrollbar(right_frame, orient="vertical",
@@ -1030,31 +1106,38 @@ class BuilderTabMixin:
             if entry:
                 entries.append(entry)
 
+        if not self._confirm_bulk_selection(len(entries)):
+            return "break"
+
+        view = _SelectionView(self._current_selections)
         for level, entity_id, key in entries:
-            existing = self._find_selection(level, key)
+            existing = self._find_selection(level, key, view)
             if existing is not None:
                 if existing["excluded"]:
                     # Exception → remove it (re-includes via parent)
                     # Also clean up child selections that were workarounds
                     self._current_selections.remove(existing)
-                    self._cascade_remove_children(level, key)
+                    view.discard(existing)
+                    self._cascade_remove_children(level, key, view)
                 else:
                     # Direct add → remove it and clean up children
                     self._current_selections.remove(existing)
-                    self._cascade_remove_children(level, key)
+                    view.discard(existing)
+                    self._cascade_remove_children(level, key, view)
                     # If still covered by a broader parent selection, one
                     # toggle should hide it — add an exclusion rather than
                     # leaving it visible via the parent (which would take a
                     # second toggle to clear).
-                    if self._is_item_selected(level, key):
+                    if self._is_item_selected(level, key, view):
                         self._add_selection(level, key, excluded=True,
-                                            refresh=False)
-            elif self._is_item_selected(level, key):
+                                            refresh=False, view=view)
+            elif self._is_item_selected(level, key, view):
                 # Included via parent — add exception
-                self._add_selection(level, key, excluded=True, refresh=False)
+                self._add_selection(level, key, excluded=True, refresh=False,
+                                    view=view)
             else:
                 # Not selected — add it
-                self._add_with_breadcrumbs(level, key, entity_id)
+                self._add_with_breadcrumbs(level, key, entity_id, view)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -1076,17 +1159,22 @@ class BuilderTabMixin:
             if entry:
                 entries.append(entry)
 
+        if not self._confirm_bulk_selection(len(entries)):
+            return "break"
+
+        view = _SelectionView(self._current_selections)
         for level, entity_id, key in entries:
-            existing = self._find_selection(level, key)
+            existing = self._find_selection(level, key, view)
             if existing and not existing["excluded"]:
                 continue  # already added
             if existing and existing["excluded"]:
                 # Has exception — remove it to re-include via parent
                 # Also clean up child selections that are now redundant
                 self._current_selections.remove(existing)
-                self._cascade_remove_children(level, key)
+                view.discard(existing)
+                self._cascade_remove_children(level, key, view)
             else:
-                self._add_with_breadcrumbs(level, key, entity_id)
+                self._add_with_breadcrumbs(level, key, entity_id, view)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -1113,8 +1201,12 @@ class BuilderTabMixin:
             if entry:
                 entries.append(entry)
 
+        if not self._confirm_bulk_selection(len(entries)):
+            return "break"
+
+        view = _SelectionView(self._current_selections)
         for level, entity_id, key in entries:
-            self._remove_item_selection(level, key)
+            self._remove_item_selection(level, key, view)
 
         with self._busy():
             view_state = self._save_builder_view_state()
@@ -1122,7 +1214,7 @@ class BuilderTabMixin:
             self._restore_builder_view_state(view_state)
         return "break"
 
-    def _remove_item_selection(self, level, key):
+    def _remove_item_selection(self, level, key, view=None):
         """Remove an item from the playlist, container semantics included.
 
         Removing a container takes out everything beneath it, regardless
@@ -1134,42 +1226,59 @@ class BuilderTabMixin:
         album that was covered purely by child rules (e.g. one added
         work) silently did nothing.
         """
-        existing = self._find_selection(level, key)
+        existing = self._find_selection(level, key, view)
         if existing and not existing["excluded"]:
             self._current_selections.remove(existing)
-        self._cascade_remove_children(level, key)
-        if self._is_item_selected(level, key):
-            self._add_selection(level, key, excluded=True, refresh=False)
+            if view is not None:
+                view.discard(existing)
+        self._cascade_remove_children(level, key, view)
+        if self._is_item_selected(level, key, view):
+            self._add_selection(level, key, excluded=True, refresh=False,
+                                view=view)
 
-    def _cascade_remove_children(self, level, key):
+    def _cascade_remove_children(self, level, key, view=None):
         """Remove all child selections when a parent selection is removed."""
         from music_manager.core.selection import COMPOSITE_SEP
 
         if level == "album":
             album_key = key
-            self._current_selections = [
-                s for s in self._current_selections
-                if not (
-                    (s["level"] == "work" and s["key"].startswith(album_key + COMPOSITE_SEP))
-                    or (s["level"] == "track" and s["key"].startswith(album_key + "/"))
-                )
-            ]
+
+            def doomed(s):
+                return ((s["level"] == "work"
+                         and s["key"].startswith(album_key + COMPOSITE_SEP))
+                        or (s["level"] == "track"
+                            and s["key"].startswith(album_key + "/")))
         elif level == "work":
             # Remove track-level selections for tracks belonging to this
             # work (resolved from the index — no queries)
             index = self._get_library_index()
             wid = index.work_id_by_key.get(key)
-            if wid is not None:
-                track_paths = {
-                    index.tracks[tid].relative_path
-                    for tid in index.works[wid].track_ids
-                }
-                self._current_selections = [
-                    s for s in self._current_selections
-                    if not (s["level"] == "track" and s["key"] in track_paths)
-                ]
+            if wid is None:
+                return
+            track_paths = {
+                index.tracks[tid].relative_path
+                for tid in index.works[wid].track_ids
+            }
 
-    def _add_with_breadcrumbs(self, level, key, entity_id):
+            def doomed(s):
+                return s["level"] == "track" and s["key"] in track_paths
+        else:
+            return
+
+        # Partitioned rather than filtered in place, so a caller holding a
+        # view can be told what left. The list rebuild is the same work it
+        # always was.
+        kept, removed = [], []
+        for s in self._current_selections:
+            (removed if doomed(s) else kept).append(s)
+        if not removed:
+            return
+        self._current_selections = kept
+        if view is not None:
+            for s in removed:
+                view.discard(s)
+
+    def _add_with_breadcrumbs(self, level, key, entity_id, view=None):
         """Add a selection, including track_paths breadcrumbs for work-level."""
         track_paths = None
         if level == "work":
@@ -1181,7 +1290,7 @@ class BuilderTabMixin:
                     for tid in work.track_ids
                 ])
         self._add_selection(level, key, excluded=False,
-                            track_paths=track_paths, refresh=False)
+                            track_paths=track_paths, refresh=False, view=view)
 
     def _build_temp_profile(self):
         """Build a temporary PlaylistProfile from current UI settings."""
@@ -1189,7 +1298,7 @@ class BuilderTabMixin:
             messagebox.showwarning("No Library", "Select a library first.")
             return None
 
-        from music_manager.core.database import PlaylistProfile, ProfileSelection
+        from music_manager.core.database import PlaylistProfile
 
         # Use a temp name that won't collide with user-saved profiles
         name = "__temp_preview__"
@@ -1214,17 +1323,38 @@ class BuilderTabMixin:
             separate_forms=self.sep_form_var.get() == 1,
         )
 
-        for sel in self._current_selections:
-            ProfileSelection.create(
-                profile=profile,
-                level=sel["level"],
-                key=sel["key"],
-                excluded=sel["excluded"],
-                pin_position=sel.get("pin_position"),
-                track_paths=sel.get("track_paths"),
-            )
-
+        self._write_profile_selections(profile)
         return profile
+
+    def _write_profile_selections(self, profile, selections=None):
+        """Write the current selections to *profile* in batches.
+
+        One statement per 500 rows, not one per selection. A profile
+        holding the whole library meant 7000 separate round trips to the
+        server — the bulk of the freeze behind Preview, Find Similar and
+        Measure Quietness, all of which rebuild the temp profile first,
+        and behind the 60-second autosave, which wrote every row again
+        each time it fired. Batched like create_import_profile.
+        """
+        from music_manager.core.database import ProfileSelection, database
+
+        if selections is None:
+            selections = self._current_selections
+        rows = [
+            {"profile": profile,
+             "level": sel["level"],
+             "key": sel["key"],
+             "excluded": sel.get("excluded", False),
+             "pin_position": sel.get("pin_position"),
+             "track_paths": sel.get("track_paths")}
+            for sel in selections
+        ]
+        if not rows:
+            return
+        with database.atomic():
+            for start in range(0, len(rows), 500):
+                ProfileSelection.insert_many(
+                    rows[start:start + 500]).execute()
 
     @staticmethod
     def _parse_length_value(text):
@@ -1372,15 +1502,7 @@ class BuilderTabMixin:
                 # Sync selections from current UI state
                 ProfileSelection.delete().where(
                     ProfileSelection.profile == existing).execute()
-                for sel in self._current_selections:
-                    ProfileSelection.create(
-                        profile=existing,
-                        level=sel["level"],
-                        key=sel["key"],
-                        excluded=sel["excluded"],
-                        pin_position=sel.get("pin_position"),
-                        track_paths=sel.get("track_paths"),
-                    )
+                self._write_profile_selections(existing)
             else:
                 profile = PlaylistProfile.create(
                     library=self.active_library,
@@ -1395,15 +1517,7 @@ class BuilderTabMixin:
                     separate_albums=self.sep_album_var.get() == 1,
                     separate_forms=self.sep_form_var.get() == 1,
                 )
-                for sel in self._current_selections:
-                    ProfileSelection.create(
-                        profile=profile,
-                        level=sel["level"],
-                        key=sel["key"],
-                        excluded=sel["excluded"],
-                        pin_position=sel.get("pin_position"),
-                        track_paths=sel.get("track_paths"),
-                    )
+                self._write_profile_selections(profile)
 
             self._clear_autosave()
         else:
@@ -1566,7 +1680,7 @@ class BuilderTabMixin:
             self.profile_name_entry.delete(0, "end")
             self.profile_name_entry.insert(0, name)
 
-        from music_manager.core.database import PlaylistProfile, ProfileSelection
+        from music_manager.core.database import PlaylistProfile
 
         # Heal work-level rules that lack breadcrumbs before persisting
         self._backfill_breadcrumbs()
@@ -1609,15 +1723,7 @@ class BuilderTabMixin:
             separate_forms=self.sep_form_var.get() == 1,
         )
 
-        for sel in self._current_selections:
-            ProfileSelection.create(
-                profile=profile,
-                level=sel["level"],
-                key=sel["key"],
-                excluded=sel.get("excluded", False),
-                pin_position=sel.get("pin_position"),
-                track_paths=sel.get("track_paths"),
-            )
+        self._write_profile_selections(profile)
 
         self._clear_autosave()
         self._mark_builder_clean()

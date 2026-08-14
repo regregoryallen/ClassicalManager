@@ -426,3 +426,139 @@ def test_measure_reaches_pool_tracks_the_search_excludes():
         "Measure does not look at the profile's own tracks")
     # The two sets are combined before asking what needs work.
     assert "candidate_ids + pool_ids" in body
+
+
+# ---------------------------------------------------------------------------
+# The text filter (v3.9)
+#
+# It shares the render path with the quietness sliders, which is what
+# makes the two compose — but it sits at a specific point in that path,
+# and the position is the design: after the percentiles (so typing does
+# not change what a Match % is relative to) and before the limit (so it
+# searches every survivor rather than the visible fifty).
+# ---------------------------------------------------------------------------
+
+class _FakeTree:
+    def __init__(self):
+        self.rows = []
+
+    def delete(self, *iids):
+        self.rows = []
+
+    def get_children(self):
+        return []
+
+    def insert(self, _parent, _index, text=None, tags=(), values=()):
+        iid = f"row{len(self.rows)}"
+        self.rows.append({"iid": iid, "text": text, "values": values})
+        return iid
+
+
+class _Var:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value):
+        self._value = value
+
+
+class _FakeLabel:
+    def __init__(self):
+        self.text = ""
+
+    def configure(self, text=None, **_kw):
+        self.text = text
+
+
+def _named(track_id, score, title, composer, album):
+    r = result(track_id, score)
+    r.update(title=title, composer=composer, album=album,
+             volatility=None, rank=track_id, candidate_count=3)
+    return r
+
+
+def _render(results, query="", limit=50):
+    """Drive the real render path with fakes; return (tree, sim_state)."""
+    from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
+
+    tree = _FakeTree()
+    sim_state = {
+        "all_results": results,
+        "result_map": {},
+        "status_label": _FakeLabel(),
+        "startle_var": _Var(MAX_STARTLE_LU), "startle_enabled": _Var(False),
+        "level_var": _Var(MAX_LEVEL_OFFSET_DB), "level_enabled": _Var(False),
+        "vol_var": _Var(100.0), "vol_enabled": _Var(False),
+        "filter_var": _Var(query),
+    }
+    SimilarityUIMixin._apply_quietness_filter(
+        object.__new__(SimilarityUIMixin), tree, sim_state, _Var(str(limit)))
+    return tree, sim_state
+
+
+def results():
+    """Fresh dicts per test — recompute_match_percentiles mutates them.
+
+    Brahms is deliberately the two *middle* scores. A subset taken from
+    the ends would be renormalised to the same 100/0 it already had, and
+    a percentile test built on it would pass whether or not the filter
+    sits on the correct side of the restatement.
+    """
+    return [
+        _named(1, 0.10, "Adagio", "Mahler", "Symphony 4"),
+        _named(2, 0.20, "Allegro", "Brahms", "Late Works"),
+        _named(3, 0.30, "Andante", "Brahms", "Sextets"),
+        _named(4, 0.40, "Largo", "Sibelius", "Tapiola"),
+    ]
+
+
+def test_text_filter_narrows_the_visible_rows():
+    tree, _ = _render(results(), query="brahms")
+    assert [r["text"] for r in tree.rows] == ["Allegro", "Andante"]
+
+
+def test_text_filter_matches_title_and_album_too():
+    assert [r["text"] for r in _render(results(), query="larg")[0].rows] \
+        == ["Largo"]
+    assert [r["text"] for r in _render(results(), query="sextets")[0].rows] \
+        == ["Andante"]
+
+
+def test_text_filter_is_case_insensitive_and_trims():
+    assert len(_render(results(), query="  BRAHMS ")[0].rows) == 2
+
+
+def test_empty_filter_shows_everything():
+    assert len(_render(results(), query="   ")[0].rows) == 4
+
+
+def test_text_filter_does_not_restate_match_percentiles():
+    """The percentile answers "closer than X% of candidates". Typing a
+    composer's name must not silently change which candidates that is."""
+    unfiltered, _ = _render(results())
+    filtered, _ = _render(results(), query="brahms")
+
+    by_title = {r["text"]: r["values"][2] for r in unfiltered.rows}
+    assert by_title["Allegro"] != by_title["Adagio"]   # guards the guard
+    for row in filtered.rows:
+        assert row["values"][2] == by_title[row["text"]]
+
+
+def test_text_filter_searches_past_the_result_limit():
+    """With Max results at 1, the filter must still see every row —
+    filtering the visible one would answer about the wrong set."""
+    tree, _ = _render(results(), query="andante", limit=1)
+    assert [r["text"] for r in tree.rows] == ["Andante"]
+
+
+def test_status_line_reports_what_the_filter_hid():
+    _, sim_state = _render(results(), query="brahms")
+    assert "2 hidden by filter" in sim_state["status_label"].text
+
+
+def test_status_line_stays_quiet_with_no_filter():
+    _, sim_state = _render(results())
+    assert "hidden by filter" not in sim_state["status_label"].text

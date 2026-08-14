@@ -314,4 +314,275 @@ def test_rules_strip_text(lib):
     assert "1 active" in text
     assert "1 redundant" in text
     assert "1 orphaned ⚠" in text
-    assert text.endswith("3 trk")
+    # Named as the pool, so a length-limited profile reads as pool-vs-limit
+    # rather than as a figure contradicting what it will play. Three 60s
+    # tracks from make_album.
+    assert text.endswith("pool: 3 trk / 3m")
+
+
+def test_rules_strip_pool_duration_units():
+    fmt = BuilderTabMixin._format_pool_duration
+    assert fmt(0) == "0m"
+    assert fmt(None) == "0m"
+    assert fmt(59_000) == "0m"           # seconds are below the strip's noise
+    assert fmt(60_000) == "1m"
+    assert fmt(3_600_000) == "1h 00m"
+    assert fmt(98_040_000) == "27h 14m"
+
+
+# ---------------------------------------------------------------------------
+# Batched bulk selection (v3.9)
+#
+# The bulk loops carry a _SelectionView so they stop rebuilding the same
+# dicts once per item. The risk that buys is drift: a view that disagrees
+# with the list it describes decides the wrong branch, and the damage is
+# silent. Every test here pins the batch to the same answer the loop gives
+# when it runs one item at a time, which is the un-batched path.
+# ---------------------------------------------------------------------------
+
+class _FakeTree:
+    def __init__(self):
+        self._sel = ()
+
+    def selection(self):
+        return self._sel
+
+
+class _BulkApp(_FakeApp):
+    """_FakeApp plus the surface the bulk toggle loops touch."""
+
+    def __init__(self, index):
+        super().__init__(index)
+        self.builder_lib_tree = _FakeTree()
+        self.builder_pl_tree = _FakeTree()
+        self._builder_lib_iid_map = {}
+        self._builder_pl_iid_map = {}
+
+    # The loops call these purely to redraw; nothing here has widgets.
+    def _refresh_rules_display(self):
+        pass
+
+    def _save_builder_view_state(self):
+        return None
+
+    def _restore_builder_view_state(self, state):
+        pass
+
+    def _confirm_bulk_selection(self, count, what="items", parent=None):
+        return True
+
+    def _busy(self):
+        from contextlib import nullcontext
+        return nullcontext()
+
+    def load(self, entries):
+        """Register iids for *entries* and return them in order."""
+        iids = []
+        for i, entry in enumerate(entries):
+            iid = f"I{i}"
+            self._builder_lib_iid_map[iid] = entry
+            iids.append(iid)
+        return iids
+
+    def toggle(self, iids):
+        self.builder_lib_tree._sel = tuple(iids)
+        self._builder_toggle_include()
+
+    def include(self, iids):
+        self.builder_lib_tree._sel = tuple(iids)
+        self._builder_include_selected()
+
+    def state(self):
+        return sorted((s["level"], s["key"], s["excluded"])
+                      for s in self._current_selections)
+
+
+def _entries(lib, index):
+    """A mix of levels, so cascades and specificity are all exercised."""
+    album = next(iter(index.albums.values()))
+    wk1 = work_key("A/Alb1", "Work One", 1)
+    wk2 = work_key("A/Alb1", "Work Two", 2)
+    return [
+        ("album", album.id, "A/Alb1"),
+        ("work", index.work_id_by_key[wk1], wk1),
+        ("work", index.work_id_by_key[wk2], wk2),
+        ("track", index.track_id_by_path["A/Alb1/01.flac"], "A/Alb1/01.flac"),
+        ("track", index.track_id_by_path["A/Alb1/03.flac"], "A/Alb1/03.flac"),
+    ]
+
+
+def test_batched_toggle_matches_one_at_a_time(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    entries = _entries(lib, index)
+
+    batched = _BulkApp(index)
+    iids = batched.load(entries)
+    batched.toggle(iids)
+
+    stepwise = _BulkApp(index)
+    step_iids = stepwise.load(entries)
+    for iid in step_iids:
+        stepwise.toggle([iid])
+
+    assert batched.state() == stepwise.state()
+
+
+def test_batched_toggle_off_matches_one_at_a_time(lib):
+    """The second toggle is the removal path: cascades and exclusions."""
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    entries = _entries(lib, index)
+
+    batched = _BulkApp(index)
+    iids = batched.load(entries)
+    batched.toggle(iids)
+    batched.toggle(iids)
+
+    stepwise = _BulkApp(index)
+    step_iids = stepwise.load(entries)
+    for iid in step_iids:
+        stepwise.toggle([iid])
+    for iid in step_iids:
+        stepwise.toggle([iid])
+
+    assert batched.state() == stepwise.state()
+
+
+def test_batched_include_matches_one_at_a_time(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    entries = _entries(lib, index)
+
+    batched = _BulkApp(index)
+    iids = batched.load(entries)
+    batched.include(iids)
+
+    stepwise = _BulkApp(index)
+    step_iids = stepwise.load(entries)
+    for iid in step_iids:
+        stepwise.include([iid])
+
+    assert batched.state() == stepwise.state()
+
+
+def test_batched_remove_matches_one_at_a_time(lib):
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+    entries = _entries(lib, index)
+
+    batched = _BulkApp(index)
+    iids = batched.load(entries)
+    batched.include(iids)
+    batched.builder_lib_tree._sel = tuple(iids)
+    batched._builder_exclude_selected()
+
+    stepwise = _BulkApp(index)
+    step_iids = stepwise.load(entries)
+    stepwise.include(step_iids)
+    for iid in step_iids:
+        stepwise.builder_lib_tree._sel = (iid,)
+        stepwise._builder_exclude_selected()
+
+    assert batched.state() == stepwise.state()
+
+
+def test_bulk_toggle_rebuilds_the_maps_once(lib):
+    """The point of the view: one dict build per batch, not one per item."""
+    make_album(lib, "A/Alb1", [("Work One", 2), ("Work Two", 2)])
+    index = load_library_index(lib)
+
+    app = _BulkApp(index)
+    iids = app.load(_entries(lib, index))
+
+    calls = []
+    original = app._selection_maps
+    app._selection_maps = lambda: (calls.append(1), original())[1]
+    app.toggle(iids)
+
+    assert calls == []          # the view answers every lookup in the batch
+
+
+def test_bulk_selection_confirm_threshold(lib):
+    """A batch under the threshold must not prompt; over it must."""
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    index = load_library_index(lib)
+
+    from music_manager.interfaces.gui.app import App
+
+    app = _FakeApp(index)
+    app.root = object()
+    asked = []
+    app._confirm_bulk_selection = App._confirm_bulk_selection.__get__(app)
+    app.BULK_CONFIRM_THRESHOLD = App.BULK_CONFIRM_THRESHOLD
+
+    import music_manager.interfaces.gui.app as app_mod
+    original = app_mod.messagebox.askyesno
+    app_mod.messagebox.askyesno = lambda *a, **k: (asked.append(a), False)[1]
+    try:
+        assert app._confirm_bulk_selection(App.BULK_CONFIRM_THRESHOLD) is True
+        assert asked == []
+        assert app._confirm_bulk_selection(
+            App.BULK_CONFIRM_THRESHOLD + 1) is False
+        assert len(asked) == 1
+    finally:
+        app_mod.messagebox.askyesno = original
+
+
+def test_write_profile_selections_round_trip(lib):
+    """Batched inserts must store exactly what per-row creates did.
+
+    Including the two nullable columns, which an insert_many with ragged
+    dictionaries would silently drop.
+    """
+    from music_manager.core.database import PlaylistProfile, ProfileSelection
+
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    index = load_library_index(lib)
+    app = _FakeApp(index)
+
+    profile = PlaylistProfile.create(
+        library=lib, name="batch-test", shuffle_mode="work",
+        work_integrity="respect_selection", length_mode="all")
+
+    selections = [
+        {"level": "album", "key": "A/Alb1", "excluded": False,
+         "pin_position": 3, "track_paths": '["A/Alb1/01.flac"]'},
+        {"level": "track", "key": "A/Alb1/02.flac", "excluded": True,
+         "pin_position": None, "track_paths": None},
+    ]
+    app._write_profile_selections(profile, selections)
+
+    stored = sorted(
+        ((s.level, s.key, s.excluded, s.pin_position, s.track_paths)
+         for s in ProfileSelection.select().where(
+             ProfileSelection.profile == profile)))
+    assert stored == [
+        ("album", "A/Alb1", False, 3, '["A/Alb1/01.flac"]'),
+        ("track", "A/Alb1/02.flac", True, None, None),
+    ]
+
+
+def test_write_profile_selections_batches_past_500(lib):
+    """The 500-row chunking must not lose or duplicate the tail."""
+    from music_manager.core.database import PlaylistProfile, ProfileSelection
+
+    make_album(lib, "A/Alb1", [("Work One", 1)])
+    index = load_library_index(lib)
+    app = _FakeApp(index)
+
+    profile = PlaylistProfile.create(
+        library=lib, name="chunk-test", shuffle_mode="work",
+        work_integrity="respect_selection", length_mode="all")
+
+    selections = [
+        {"level": "track", "key": f"A/Alb1/{i:05d}.flac", "excluded": False,
+         "pin_position": None, "track_paths": None}
+        for i in range(1203)
+    ]
+    app._write_profile_selections(profile, selections)
+
+    rows = list(ProfileSelection.select().where(
+        ProfileSelection.profile == profile))
+    assert len(rows) == 1203
+    assert len({r.key for r in rows}) == 1203

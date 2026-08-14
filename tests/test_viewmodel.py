@@ -314,7 +314,20 @@ def test_rules_strip_text(lib):
     assert "1 active" in text
     assert "1 redundant" in text
     assert "1 orphaned ⚠" in text
-    assert text.endswith("3 trk")
+    # Named as the pool, so a length-limited profile reads as pool-vs-limit
+    # rather than as a figure contradicting what it will play. Three 60s
+    # tracks from make_album.
+    assert text.endswith("pool: 3 trk / 3m")
+
+
+def test_rules_strip_pool_duration_units():
+    fmt = BuilderTabMixin._format_pool_duration
+    assert fmt(0) == "0m"
+    assert fmt(None) == "0m"
+    assert fmt(59_000) == "0m"           # seconds are below the strip's noise
+    assert fmt(60_000) == "1m"
+    assert fmt(3_600_000) == "1h 00m"
+    assert fmt(98_040_000) == "27h 14m"
 
 
 # ---------------------------------------------------------------------------

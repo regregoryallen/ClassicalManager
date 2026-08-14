@@ -387,8 +387,29 @@ class BuilderTabMixin:
         else:
             trk = f"{n_sel} trk"
 
-        return (f"Rules: {len(results)} ({', '.join(parts)}) — {trk}{dirty}"
-                if parts else f"Rules: {len(results)} — {trk}{dirty}")
+        # "pool", not "length": these describe what the profile is allowed
+        # to draw from, which is not what a time- or count-limited profile
+        # will play. Naming the set removes the contradiction rather than
+        # leaving the reader to notice it.
+        total_ms = sum(
+            index.tracks[tid].duration_ms
+            for tid in (*state.included_track_ids, *state.expanded_track_ids)
+            if tid in index.tracks)
+        pool = f"pool: {trk} / {self._format_pool_duration(total_ms)}"
+
+        return (f"Rules: {len(results)} ({', '.join(parts)}) — {pool}{dirty}"
+                if parts else f"Rules: {len(results)} — {pool}{dirty}")
+
+    @staticmethod
+    def _format_pool_duration(total_ms):
+        """A pool's playing time, at the precision the strip can use.
+
+        Seconds are noise on a figure this size and would flicker on
+        every rule change, so the smallest unit is a minute.
+        """
+        minutes = (total_ms or 0) // 60000
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
 
     def _backfill_breadcrumbs(self):
         """Regenerate missing track_paths on work-level ADD rules.

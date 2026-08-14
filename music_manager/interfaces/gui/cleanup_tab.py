@@ -586,6 +586,23 @@ class CleanupTabMixin:
         ctk.CTkButton(btn_frame, text="Close", width=80,
                       command=popup.destroy).pack(side="right", padx=5)
 
+        # The internal work id, for rgtag.py --work-id. Not part of the
+        # work in any musical sense, so it sits dim and last rather than
+        # in the WORK block with the metadata that is. Click copies it:
+        # its only use is being retyped into a command line.
+        id_label = ctk.CTkLabel(btn_frame, text=f"Work ID: {work.id}",
+                                text_color=("gray45", "gray60"))
+        id_label.pack(side="right", padx=(5, 15))
+
+        def _copy_id(_event=None):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(work.id))
+            id_label.configure(text=f"Work ID: {work.id} — copied")
+            id_label.after(
+                1200, lambda: id_label.configure(text=f"Work ID: {work.id}"))
+
+        id_label.bind("<Button-1>", _copy_id)
+
     def _show_album_popup(self, album_id):
         """Open a popup showing all works and tracks in an album for editing."""
         from music_manager.core.database import Album, Work, Track

@@ -38,8 +38,9 @@ Dry-run is the default. Nothing is written without --write.
 Selecting what to work on:
   --library NAME        Restrict to one library (default: all of them).
   --list                List the selected works with their ids, and stop.
-                        Measures nothing. CM's GUI does not show work ids,
-                        so this is how you find one.
+                        Measures nothing. The GUI also shows a work's id at
+                        the foot of its Details window, which is easier when
+                        you already have the work in front of you.
   --album TEXT          Only works whose album title contains TEXT.
   --work TEXT           Only works whose name contains TEXT.
   --work-id ID          Only this work. Repeatable. Overrides the

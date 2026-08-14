@@ -310,6 +310,7 @@ class SimilarityUIMixin:
 
         def _done(stats):
             popup.destroy()
+            self._restore_grab(owner)
             if seed_ids is None:
                 messagebox.showinfo(
                     "Analyze Audio",
@@ -797,6 +798,32 @@ class SimilarityUIMixin:
         return " — ".join(parts)
 
     @staticmethod
+    def _restore_grab(window):
+        """Hand the input grab back to `window`.
+
+        Destroying a window that holds a grab does not return the grab to
+        whoever had it before — it leaves no grab at all. The Find Similar
+        popup grabs when it opens, so every transient dialog raised over
+        it has to give the grab back on the way out, or the next modal
+        dialog is the only thing that can take input.
+
+        `winfo_viewable()` rather than `wait_visibility()`, and the
+        distinction is the point: grab_set() raises TclError on a window
+        that is not mapped, and the usual way to guarantee that is to
+        wait. Here there is nothing to wait *for* — the owner was mapped
+        and grabbed before the dialog over it ever existed. If it is
+        somehow not viewable now, the window is going away and there is
+        no grab worth restoring, so testing is right where waiting would
+        hang.
+        """
+        try:
+            if (window is not None and window.winfo_exists()
+                    and window.winfo_viewable()):
+                window.grab_set()
+        except tk.TclError:                         # pragma: no cover
+            pass
+
+    @staticmethod
     def _disable_without_ffmpeg(button):
         """Grey a control out when ffmpeg is missing, and say why (A2.1).
 
@@ -842,21 +869,27 @@ class SimilarityUIMixin:
         except ValueError:
             limit = 50
 
+        # parent= on every one of these. The Find Similar popup holds a
+        # grab, so a dialog parented to root instead appears behind it,
+        # takes the input grab, and cannot be seen or reached: the app
+        # simply freezes. _accept_sim_tracks already knew this.
+        owner = sim_state.get("popup")
+
         candidates = (sim_state.get("all_results") or [])[:limit]
         if not candidates:
-            messagebox.showinfo("Measure", "Run a search first.")
+            messagebox.showinfo("Measure", "Run a search first.", parent=owner)
             return
 
         try:
             todo = tracks_needing_quietness([r["track_id"] for r in candidates])
         except Exception as exc:                    # noqa: BLE001 - reported
-            messagebox.showerror("Measure", str(exc))
+            messagebox.showerror("Measure", str(exc), parent=owner)
             return
         if not todo:
             messagebox.showinfo(
                 "Measure",
                 f"All {len(candidates)} candidates on screen are already "
-                f"measured.")
+                f"measured.", parent=owner)
             return
 
         # ~24 tracks a minute measured over the library share (A3).
@@ -866,7 +899,7 @@ class SimilarityUIMixin:
                 f"Measure {len(todo)} of the top {len(candidates)} "
                 f"candidates?\n\nRoughly {minutes} minute(s). Results are "
                 f"saved as they finish, so this can be run again to "
-                f"continue."):
+                f"continue.", parent=owner):
             return
 
         self._sim_cancel_flag = False
@@ -896,6 +929,7 @@ class SimilarityUIMixin:
 
         def _done(stats):
             popup.destroy()
+            self._restore_grab(owner)
             # Re-render so the new numbers appear in the columns without
             # re-running the search — but the cached results predate the
             # measurement, so they have to be refreshed from the database.
@@ -908,7 +942,8 @@ class SimilarityUIMixin:
                 parts.append(f"{stats['failed']} failed")
             if stats["missing"]:
                 parts.append(f"{stats['missing']} file missing")
-            messagebox.showinfo("Measure", "; ".join(parts) + ".")
+            messagebox.showinfo("Measure", "; ".join(parts) + ".",
+                                parent=owner)
 
         def worker():
             try:
@@ -926,13 +961,16 @@ class SimilarityUIMixin:
                 self.root.after(0, lambda: _done(stats))
             except AnalysisCancelled:
                 # Whatever finished before the cancel is already written.
-                self.root.after(0, popup.destroy)
+                self.root.after(0, lambda: (popup.destroy(),
+                                            self._restore_grab(owner)))
             except MeasurementError as exc:
                 self.root.after(0, lambda e=exc: (
-                    popup.destroy(), messagebox.showerror("Measure", str(e))))
+                    popup.destroy(), self._restore_grab(owner),
+                    messagebox.showerror("Measure", str(e), parent=owner)))
             except Exception as exc:                # noqa: BLE001 - reported
                 self.root.after(0, lambda e=exc: (
-                    popup.destroy(), messagebox.showerror("Measure", str(e))))
+                    popup.destroy(), self._restore_grab(owner),
+                    messagebox.showerror("Measure", str(e), parent=owner)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1108,7 +1146,8 @@ class SimilarityUIMixin:
             menu.add_command(
                 label=f"Audition loudest moment ({int(at_s // 60)}:"
                       f"{int(at_s % 60):02d})",
-                command=lambda: self._audition_loud_moment(track.id, r))
+                command=lambda: self._audition_loud_moment(
+                    track.id, r, owner=sim_state.get("popup")))
         if track.work_id:
             menu.add_command(label="Details...",
                              command=lambda: self._show_work_details(track.work_id))
@@ -1119,7 +1158,7 @@ class SimilarityUIMixin:
                          command=lambda: self._show_track_in_folder(track.id))
         menu.tk_popup(event.x_root, event.y_root)
 
-    def _audition_loud_moment(self, track_id, result):
+    def _audition_loud_moment(self, track_id, result, owner=None):
         """Play the passage the startle score came from (C5).
 
         Eight seconds of listening in place of trusting a number. The
@@ -1137,7 +1176,8 @@ class SimilarityUIMixin:
         track = Track.get_by_id(track_id)
         source = Path(track.folder.root_path) / track.relative_path
         if not source.exists():
-            messagebox.showerror("File Not Found", f"File not found:\n{source}")
+            messagebox.showerror("File Not Found",
+                                 f"File not found:\n{source}", parent=owner)
             return
 
         at_ms = result.get("loud_at_ms")
@@ -1145,7 +1185,7 @@ class SimilarityUIMixin:
             messagebox.showinfo(
                 "Audition",
                 "This track has no measured loud moment. Run Measure "
-                "quietness first.")
+                "quietness first.", parent=owner)
             return
 
         def worker():
@@ -1154,11 +1194,11 @@ class SimilarityUIMixin:
                 excerpt = extract_excerpt(source, at_ms)
                 self.root.after(0, lambda: self._open_in_player(excerpt))
             except MeasurementError as exc:
-                self.root.after(
-                    0, lambda e=exc: messagebox.showerror("Audition", str(e)))
+                self.root.after(0, lambda e=exc: messagebox.showerror(
+                    "Audition", str(e), parent=owner))
             except Exception as exc:                # noqa: BLE001 - reported
-                self.root.after(
-                    0, lambda e=exc: messagebox.showerror("Audition", str(e)))
+                self.root.after(0, lambda e=exc: messagebox.showerror(
+                    "Audition", str(e), parent=owner))
 
         threading.Thread(target=worker, daemon=True).start()
 

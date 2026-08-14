@@ -219,6 +219,17 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
     afterwards. That window was already mapped and grabbed moments earlier,
     so wait_visibility() has nothing to wait for. The exemption is narrow:
     it needs a matching grab_release() on the same window just above.
+
+    A second restoration case arrived with v3.8, and it is the same
+    guarantee reached differently. Destroying a window that holds a grab
+    does not hand the grab back — it leaves none — so a dialog raised over
+    the grabbing Find Similar popup has to re-grab the owner on its way
+    out. There is no grab_release() to match, because nothing released it.
+    An explicit `winfo_viewable()` check on the same window is accepted
+    instead: wait_visibility() *waits* for mapped, winfo_viewable() *tests*
+    for it, and both establish exactly the precondition grab_set needs.
+    Waiting would be wrong here anyway — if the owner is no longer
+    viewable it is being torn down, and waiting for it would hang.
     """
     import pathlib
 
@@ -235,6 +246,8 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
             # between letting the grab go and taking it back.
             if f"{window}.grab_release()" in "\n".join(lines[max(0, i - 40):i]):
                 continue        # restoring a grab this code just released
+            if f"{window}.winfo_viewable()" in preceding:
+                continue        # mapped-ness tested rather than waited for
             if f"{window}.wait_visibility()" not in preceding:
                 offenders.append(f"{path.name}:{i + 1}")
     assert offenders == [], (

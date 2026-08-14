@@ -276,3 +276,60 @@ def test_the_quietness_help_mark_exists_and_lands_on_the_glossary():
             assert term in rest, f"help does not cover {term!r}"
     finally:
         root.destroy()
+
+
+# ---------------------------------------------------------------------------
+# The freeze
+# ---------------------------------------------------------------------------
+
+def test_every_dialog_raised_over_find_similar_has_a_parent():
+    """A parentless messagebox froze the app after Measure quietness.
+
+    The Find Similar popup calls grab_set(). A messagebox with no
+    `parent` is parented to the root window instead, so it opens *behind*
+    the grabbing Toplevel and takes the input grab for itself — invisible,
+    unreachable, and holding every keystroke and click. The application
+    does not crash; it simply stops responding, which is a far worse
+    failure than an error dialog.
+
+    `_accept_sim_tracks` already passed `parent=`; the v3.8 additions did
+    not, and the measure-complete summary is where it bit.
+
+    Source-level because reproducing it needs a display, a grab and a
+    modal dialog nobody can dismiss — a test that would hang exactly the
+    way the bug does.
+    """
+    import pathlib
+    import re
+
+    source = pathlib.Path(
+        "music_manager/interfaces/gui/similarity_ui.py").read_text()
+    # Everything from the grabbing popup onward.
+    start = source.index("def _show_sim_results")
+
+    offenders = []
+    for match in re.finditer(r"messagebox\.(?:show\w+|askyesno)\(.*?\)\)?\n",
+                             source[start:], re.S):
+        if "parent=" not in match.group(0):
+            line = source[:start + match.start()].count("\n") + 1
+            offenders.append(f"line {line}: {match.group(0).strip()[:60]}")
+    assert not offenders, (
+        "messagebox without parent= below the grabbing popup:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_restore_grab_tolerates_a_destroyed_window():
+    """Called on teardown paths, where the owner may already be gone."""
+    from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
+
+    # None is the no-owner case and must not raise.
+    SimilarityUIMixin._restore_grab(None)
+
+    class Gone:
+        def winfo_exists(self):
+            return False
+
+        def grab_set(self):                          # pragma: no cover
+            raise AssertionError("must not grab a destroyed window")
+
+    SimilarityUIMixin._restore_grab(Gone())

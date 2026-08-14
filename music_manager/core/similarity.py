@@ -982,7 +982,8 @@ def measure_quietness(track_ids, progress_callback=None,
 
 
 def filter_by_quietness(results: list[dict], startle_max: float | None = None,
-                        level_max: float | None = None) -> tuple[list, dict]:
+                        level_max: float | None = None,
+                        volatility_max: float | None = None) -> tuple[list, dict]:
     """Narrow results on the v3.8 axes, and say what was dropped and why.
 
     Returns `(survivors, counts)`, where counts explains the losses:
@@ -1001,10 +1002,21 @@ def filter_by_quietness(results: list[dict], startle_max: float | None = None,
     — so a track can fail either without implying anything about the
     other, and both are counted against the first test they fail.
     """
-    counts = {"startle": 0, "level": 0,
+    counts = {"startle": 0, "level": 0, "volatility": 0,
               "startle_unmeasured": 0, "level_unmeasured": 0}
     survivors = []
     for result in results:
+        # Dynamic range filters here too, rather than in the query. It
+        # predates the other two and was passed to find_similar, so it
+        # only took effect on Search while the v3.8 sliders re-rendered
+        # as they moved — three adjacent sliders, one behaving unlike the
+        # others for no reason a user could see. Every result already
+        # carries its volatility, so this costs nothing.
+        if volatility_max is not None:
+            value = result.get("volatility")
+            if value is not None and value > volatility_max:
+                counts["volatility"] += 1
+                continue
         if startle_max is not None:
             value = result.get("startle_local")
             if value is None:

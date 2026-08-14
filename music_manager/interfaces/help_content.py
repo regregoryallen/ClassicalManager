@@ -339,7 +339,13 @@ def build_help_content(text: tk.Text) -> None:
            "Match, Rank, Dyn Range, Startle and vs Work sort by value, "
            "not as text")
     bullet("Accept Selected / Accept All \u2014 add matches as track-level selections")
-    bullet("Re-search (include accepted) \u2014 re-run with the widened seed set")
+    bullet("Search (top) vs Re-search (bottom) \u2014 Search re-runs with the "
+           "same seeds you opened the window with, applying whatever "
+           "settings you have changed since. Re-search rebuilds the seed "
+           "set from the profile as it stands now, so tracks you have "
+           "accepted become seeds too and the search broadens toward what "
+           "you have been choosing. Use Search to retune, Re-search to "
+           "move on")
     bullet("Right-click a result for Play, Audition loudest moment, "
            "Details, Show Album, or Show in Folder")
     bullet("Audition loudest moment — plays twelve seconds around the "
@@ -349,6 +355,16 @@ def build_help_content(text: tk.Text) -> None:
            "been measured. Checking a track by ear takes about eight "
            "seconds this way, which is the difference between reviewing "
            "a shortlist in an evening and not reviewing it at all")
+    bullet("The excerpt already has the work's ReplayGain applied, so it "
+           "plays at the level the playlist will play it — not at the "
+           "level of the file. Do not switch ReplayGain on in your player "
+           "for these: the excerpt is a plain WAV with no gain tags, so "
+           "there is nothing for the player to apply, and the adjustment "
+           "has been made already")
+    bullet("Excerpts are WAV files, written to a temporary folder. "
+           "Whatever your system opens .wav with is what plays them — if "
+           "that is a tag editor rather than a player, nothing will be "
+           "heard until the file association is changed")
 
     subheading("Quietness measures", mark="quietness")
     body(
@@ -392,6 +408,27 @@ def build_help_content(text: tk.Text) -> None:
            "LUFS, the broadcast standard. Recorded for reference; Music "
            "Assistant normalizes this away before you hear it, which is "
            "exactly why “vs work” is the number that matters")
+    body(
+        "\nWhy there is no “overall loudness” filter. It is tempting to want "
+        "one, and two tracks really can sound very different when you play "
+        "the files directly. But that difference is mostly gone by the time "
+        "you hear them in a playlist: Music Assistant levels every work to "
+        "the same target, so what survives is each track's position within "
+        "its own work — which is precisely what “vs work” measures. Filtering "
+        "on the file's own loudness would be filtering on something the "
+        "player is about to discard.\n"
+    )
+    body(
+        "The corollary is worth knowing when a playlist surprises you. Gain "
+        "is applied per *work*, and a playlist rarely contains a whole work — "
+        "so a single movement lifted out of a quiet symphony still plays at "
+        "the level it had inside that symphony, not at the level it would "
+        "have on its own. That is deliberate (it is what keeps a symphony's "
+        "internal shape intact), and it is the reason a track can be "
+        "unexpectedly loud or soft next to its neighbours. The “vs work” "
+        "column is where to look, and the pool report's seam figures are "
+        "where the consequences add up.\n"
+    )
 
     subheading("Pin to Position")
     body(

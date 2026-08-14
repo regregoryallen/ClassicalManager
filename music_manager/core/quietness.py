@@ -534,7 +534,7 @@ def prune_auditions(older_than_s=AUDITION_KEEP_S):
 
 
 def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
-                    length_s=AUDITION_LENGTH_S, out_dir=None):
+                    length_s=AUDITION_LENGTH_S, out_dir=None, gain_db=None):
     """Cut the passage around `at_ms` out to a temporary file (C5).
 
     `loud_at_ms` exists so a startle score can be checked by ear in eight
@@ -546,6 +546,14 @@ def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
     on an ffmpeg build without libmp3lame, and every platform's default
     player opens it. Twelve seconds is about 2 MB, which is not worth
     compressing.
+
+    `gain_db` should be the track's ALBUM (work) ReplayGain, and it is
+    what makes the audition honest. Music Assistant applies that gain at
+    playback, so the raw file is *not* what a listener hears — a movement
+    can be 6 dB down in the mix and sound perfectly loud on its own. An
+    excerpt played without it answers a question nobody asked. A plain
+    WAV also carries no ReplayGain tags, so the player cannot apply it
+    either, whatever its own settings say.
 
     Returns the path to the excerpt.
     """
@@ -561,15 +569,22 @@ def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
     # Named for the source and the offset, so re-auditioning the same
     # moment reuses one file instead of littering.
     stem = "".join(c if c.isalnum() else "_" for c in source.stem)[:60]
-    target = out_dir / f"{stem}_{int(start)}s.wav"
+    # The gain is part of the identity: the same moment at a different
+    # level is a different excerpt, and reusing the file would play the
+    # wrong one.
+    suffix = "" if not gain_db else f"_{gain_db:+.2f}dB".replace(".", "p")
+    target = out_dir / f"{stem}_{int(start)}s{suffix}.wav"
 
     command = [
         binary or find_ffmpeg(), "-hide_banner", "-nostats", "-nostdin", "-y",
         # Before -i: ffmpeg seeks rather than decoding from the start,
         # which matters on a ten-minute movement read over a share.
         "-ss", f"{start:.3f}", "-i", str(source),
-        "-t", f"{length_s:.3f}", "-ac", "2", str(target),
+        "-t", f"{length_s:.3f}", "-ac", "2",
     ]
+    if gain_db:
+        command += ["-af", f"volume={gain_db:.2f}dB"]
+    command.append(str(target))
     try:
         result = subprocess.run(command, capture_output=True, text=True,
                                 stdin=subprocess.DEVNULL)

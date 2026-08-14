@@ -351,6 +351,12 @@ class SimilarityUIMixin:
         ctk.CTkEntry(param_frame, textvariable=limit_var, width=55).pack(
             side="left", padx=(0, 12))
 
+        # Bound after sim_state exists; the slider is built before it.
+        vol_change_hook = {"fn": lambda: None}
+
+        def _on_vol_change():
+            vol_change_hook["fn"]()
+
         from music_manager.core.similarity import MAX_DYNAMIC_RANGE_DB
 
         # Dynamic range is now measured in dB (95th minus 10th percentile of
@@ -363,8 +369,10 @@ class SimilarityUIMixin:
         vol_slider = ctk.CTkSlider(
             param_frame, from_=0.0, to=MAX_DYNAMIC_RANGE_DB, variable=vol_var,
             width=110,
-            command=lambda v: vol_label.configure(
-                text=f"{float(v):.0f} dB" if vol_enabled.get() else "Off"))
+            command=lambda v: (
+                vol_label.configure(
+                    text=f"{float(v):.0f} dB" if vol_enabled.get() else "Off"),
+                _on_vol_change()))
         vol_slider.pack(side="left", padx=(0, 2))
         vol_label = ctk.CTkLabel(param_frame, text="Off", width=44)
         vol_label.pack(side="left", padx=(0, 2))
@@ -532,8 +540,8 @@ class SimilarityUIMixin:
         result_tree.column("match", width=60)
         result_tree.column("rank", width=90, anchor="e")
         result_tree.column("volatility", width=80, anchor="e")
-        result_tree.column("startle", width=70, anchor="e")
-        result_tree.column("level", width=70, anchor="e")
+        result_tree.column("startle", width=78, anchor="e")
+        result_tree.column("level", width=88, anchor="e")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")
@@ -631,6 +639,8 @@ class SimilarityUIMixin:
             "level_var": level_var,
             "level_enabled": level_enabled,
             "pool_label": pool_label,
+            "vol_var": vol_var,
+            "vol_enabled": vol_enabled,
         }
         self._refresh_pool_report(sim_state)
 
@@ -647,6 +657,9 @@ class SimilarityUIMixin:
         level_slider.configure(command=lambda _v: _on_quietness_change())
         startle_enabled.trace_add("write", _on_quietness_change)
         level_enabled.trace_add("write", _on_quietness_change)
+        # Dyn range behaves like its neighbours now.
+        vol_enabled.trace_add("write", _on_quietness_change)
+        vol_change_hook["fn"] = _on_quietness_change
 
         # Wire up search button
         search_btn.configure(command=lambda: self._do_sim_search(
@@ -674,13 +687,15 @@ class SimilarityUIMixin:
         """
         from music_manager.core.similarity import find_similar
 
-        vol_max = vol_var.get() if vol_enabled.get() else None
         blend = blend_var.get()
         seed_ids = sim_state["seed_ids"]
 
         results = find_similar(
             list(seed_ids), limit=None,
-            volatility_max=vol_max, blend=blend,
+            # Not volatility_max: that filtered in the query, so the
+            # slider only bit on Search while its two neighbours redrew
+            # as they moved. It is applied in the tree now, with them.
+            blend=blend,
             weights={g: v.get() for g, v in (weight_vars or {}).items()})
 
         # Filter out tracks already in the profile
@@ -710,9 +725,12 @@ class SimilarityUIMixin:
                        if sim_state["startle_enabled"].get() else None)
         level_max = (sim_state["level_var"].get()
                      if sim_state["level_enabled"].get() else None)
+        volatility_max = (sim_state["vol_var"].get()
+                          if sim_state["vol_enabled"].get() else None)
 
         survivors, dropped = filter_by_quietness(
-            results, startle_max=startle_max, level_max=level_max)
+            results, startle_max=startle_max, level_max=level_max,
+            volatility_max=volatility_max)
 
         # Restated over the survivors, so "closer than 92% of candidates"
         # keeps referring to the candidates that got through the filter —
@@ -1213,7 +1231,12 @@ class SimilarityUIMixin:
         def worker():
             try:
                 prune_auditions()
-                excerpt = extract_excerpt(source, at_ms)
+                # The work gain, so the excerpt plays at the level MA
+                # would play it. Without this the audition answers a
+                # question nobody asked: how loud the file is, rather
+                # than how loud it will be in the playlist.
+                excerpt = extract_excerpt(source, at_ms,
+                                          gain_db=track.rg_album_gain)
                 self.root.after(0, lambda: self._open_in_player(excerpt))
             except MeasurementError as exc:
                 self.root.after(0, lambda e=exc: messagebox.showerror(

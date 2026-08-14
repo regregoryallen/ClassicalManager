@@ -296,3 +296,41 @@ def test_seam_figures_appear_as_soon_as_two_tracks_qualify():
 
     assert "No seam figures yet" not in text
     assert "Worst reachable seam" in text
+
+
+def test_the_worst_seam_is_never_a_track_following_itself():
+    """A two-track pool named "Pavane into Pavane" as its worst case.
+
+    The worst seam was taken as max(head) - min(tail) over the pool, with
+    no check that those were two different tracks. When one piece holds
+    both extremes — easy with a small pool — the answer is an ordering
+    the shuffle can never produce. `expected_seams` had always excluded
+    self-pairs; this now agrees with it.
+    """
+    # One track owns both the highest head and the lowest tail.
+    tracks = [
+        track(1, "Pavane", head=+5.0, tail=-9.0, offset=0.0),
+        track(2, "Nocturne", head=-1.0, tail=-2.0, offset=0.0),
+    ]
+    report = build_report(tracks, playlist_length=2)
+
+    assert report.worst_seam_from != report.worst_seam_to
+    # Reachable orderings are Pavane->Nocturne (-1 - -9 = 8) and
+    # Nocturne->Pavane (5 - -2 = 7). The worst is 8.
+    assert report.worst_seam == pytest.approx(8.0)
+    assert report.worst_seam_from == "Pavane"
+    assert report.worst_seam_to == "Nocturne"
+
+
+def test_the_worst_seam_still_finds_the_true_extremes_when_they_differ():
+    """The common case must not be disturbed by the self-pair guard."""
+    tracks = [
+        track(1, "fades out", head=0.0, tail=-12.0, offset=0.0),
+        track(2, "bursts in", head=+4.0, tail=0.0, offset=0.0),
+        track(3, "ordinary", head=-1.0, tail=-3.0, offset=0.0),
+    ]
+    report = build_report(tracks, playlist_length=3)
+
+    assert report.worst_seam == pytest.approx(16.0)
+    assert report.worst_seam_from == "fades out"
+    assert report.worst_seam_to == "bursts in"

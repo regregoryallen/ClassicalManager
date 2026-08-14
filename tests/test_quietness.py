@@ -552,9 +552,20 @@ def test_ffmpeg_never_inherits_the_terminal():
 
     source = pathlib.Path("music_manager/core/quietness.py").read_text()
 
+    def function_body(name):
+        """Everything up to the next top-level def.
+
+        Not a fixed slice: the first version took 2000 characters and
+        broke the moment a docstring grew, which is a guard that fails
+        for the wrong reason.
+        """
+        start = source.index(f"def {name}")
+        rest = source[start + 1:]
+        end = re.search(r"\n(?:def |@|# ---)", rest)
+        return rest[:end.start()] if end else rest
+
     for command_builder in ("build_command", "extract_excerpt"):
-        start = source.index(f"def {command_builder}")
-        body = source[start:start + 2000]
+        body = function_body(command_builder)
         assert '"-nostdin"' in body, f"{command_builder} omits -nostdin"
 
     calls = re.findall(r"subprocess\.run\((.*?)\)\n", source, re.S)
@@ -588,3 +599,45 @@ def test_launching_a_player_does_not_inherit_the_terminal():
     for launcher in ('"open"', '"xdg-open"'):
         assert launcher in body
         assert "**detached" in body
+
+
+def test_the_excerpt_is_played_at_the_level_the_playlist_would_use(tmp_path):
+    """The audition applies the work's gain, so it is not the raw file.
+
+    MA levels each work at playback, so a movement can sit 6 dB down in
+    the mix and still sound perfectly loud played on its own. An excerpt
+    without that gain answers a question nobody asked. It also cannot be
+    fixed in the player: a plain WAV carries no ReplayGain tags, so there
+    is nothing for the player to apply whatever its settings say.
+    """
+    import array
+    import wave
+
+    from music_manager.core.quietness import extract_excerpt
+
+    source = make_envelope(tmp_path / "src.wav", [(20, -20, -20)])
+
+    def rms(path):
+        with wave.open(str(path)) as handle:
+            samples = array.array("h", handle.readframes(handle.getnframes()))
+        return (sum(float(s) * s for s in samples) / len(samples)) ** 0.5
+
+    plain = extract_excerpt(source, at_ms=10_000, out_dir=tmp_path)
+    quieter = extract_excerpt(source, at_ms=10_000, out_dir=tmp_path,
+                              gain_db=-6.0)
+
+    assert rms(quieter) / rms(plain) == pytest.approx(0.501, abs=0.02)
+    # Cached under different names: the same moment at a different level
+    # is a different excerpt, and reuse would play the wrong one.
+    assert plain != quieter
+    assert plain.exists() and quieter.exists()
+
+
+def test_no_gain_means_no_filter_rather_than_a_zero_dB_one(tmp_path):
+    """An untagged track has no work gain, and must not be re-encoded."""
+    from music_manager.core.quietness import extract_excerpt
+
+    source = make_envelope(tmp_path / "src2.wav", [(20, -20, -20)])
+    a = extract_excerpt(source, at_ms=10_000, out_dir=tmp_path, gain_db=None)
+    b = extract_excerpt(source, at_ms=10_000, out_dir=tmp_path, gain_db=0.0)
+    assert a == b            # both are the unmodified excerpt

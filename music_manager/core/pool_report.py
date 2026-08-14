@@ -178,13 +178,30 @@ def build_report(tracks, playlist_length,
         return report
 
     # The worst ordering the shuffle can reach is the loudest opening
-    # after the quietest ending. A hard bound over every permutation,
-    # found without enumerating any of them.
-    loudest_head = max(eligible, key=lambda t: t.head_abs)
-    quietest_tail = min(eligible, key=lambda t: t.tail_abs)
-    report.worst_seam = loudest_head.head_abs - quietest_tail.tail_abs
-    report.worst_seam_from = quietest_tail.title
-    report.worst_seam_to = loudest_head.title
+    # after the quietest ending — but they have to be two different
+    # tracks. A track cannot follow itself, and taking the extremes
+    # blindly reported one doing exactly that: with a two-track pool the
+    # same piece held both the highest head and the lowest tail, so the
+    # report named "Pavane into Pavane" as the worst case. Unreachable,
+    # and confusing rather than merely untidy. `expected_seams` below has
+    # always excluded self-pairs; this now agrees with it.
+    #
+    # Still no enumeration of pairs: if the extremes collide, the answer
+    # is the better of (best head, second-lowest tail) and (second-best
+    # head, lowest tail).
+    by_head = sorted(eligible, key=lambda t: -t.head_abs)
+    by_tail = sorted(eligible, key=lambda t: t.tail_abs)
+    if by_head[0] is not by_tail[0]:
+        follower, leader = by_head[0], by_tail[0]
+    else:
+        first = (by_head[0].head_abs - by_tail[1].tail_abs, by_head[0],
+                 by_tail[1])
+        second = (by_head[1].head_abs - by_tail[0].tail_abs, by_head[1],
+                  by_tail[0])
+        _, follower, leader = max(first, second, key=lambda item: item[0])
+    report.worst_seam = follower.head_abs - leader.tail_abs
+    report.worst_seam_from = leader.title
+    report.worst_seam_to = follower.title
 
     # Expected count of bad seams in one night. Adjacent pairs in a
     # shuffle are ordered pairs drawn from the pool, so the count scales

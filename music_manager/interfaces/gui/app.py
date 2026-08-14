@@ -415,24 +415,41 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     # Remembered window geometry and column widths (v3.9)
     #
     # The popups used to open at a fixed size every time, and the only
-    # way to enlarge one was the maximize button — which does nothing,
-    # because a transient window gets no maximize function from most
-    # window managers even though they still draw the control. Rather
-    # than make maximize work, the size a window is dragged to is now
-    # kept, and the dead controls are asked for explicitly.
+    # way to enlarge one was the maximize button — which does nothing.
+    # Remembering the size a window is dragged to replaces the need for
+    # it; see _no_min_max for why the button itself cannot be removed
+    # everywhere, and why it is inert rather than dangerous.
     #
-    # Minimize is the reason not to simply un-transient these. Most of
-    # them hold a grab; minimizing one would hide the window holding the
-    # input grab and leave the app unreachable with nothing on screen to
-    # explain it.
+    # These windows stay transient deliberately. A transient popup cannot
+    # be iconified at all (Tk refuses: "can't iconify: it is a
+    # transient"), which is what keeps a grab-holding window from being
+    # hidden while it owns the input grab — the state that leaves the app
+    # unreachable with nothing on screen to explain it.
     # ------------------------------------------------------------------
 
     def _no_min_max(self, window):
         """Ask the WM not to draw minimize/maximize on a popup.
 
-        X11 only — 'wm attributes -type' does not exist elsewhere. On
-        Windows a transient window already has neither control, so the
-        failure is silent and correct on both.
+        A request, not a guarantee, and worth keeping even where it is
+        refused. X11 only — 'wm attributes -type' does not exist
+        elsewhere; on Windows a transient already has neither control,
+        so the failure is silent and correct on both.
+
+        **GNOME ignores it.** Measured on Mutter under X11: the property
+        is set correctly (_NET_WM_WINDOW_TYPE_DIALOG appears on the
+        managed window) and the buttons are drawn anyway, because
+        Mutter applies org.gnome.desktop.wm.preferences button-layout
+        uniformly. Setting the window type to 'utility', and setting
+        _MOTIF_WM_HINTS after mapping, are ignored for the same reason.
+        The only thing that removes maximize there is resizable(False,
+        False), which would defeat remembering a dragged size.
+
+        Left in because WMs that do honour window type — XFCE, KDE and
+        others — get what was asked for, and because the buttons it
+        fails to remove are inert: a transient cannot be iconified, and
+        Tk cannot maximize on X11 at all ('-zoomed' is a no-op,
+        state('zoomed') is unsupported). Nothing is at risk when the
+        request is refused; the user simply sees two dead controls.
         """
         try:
             window.attributes("-type", "dialog")

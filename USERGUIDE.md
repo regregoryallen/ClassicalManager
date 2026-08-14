@@ -1782,6 +1782,27 @@ installed, it falls back to Tkinter's built-in dialogs:
 sudo apt install zenity
 ```
 
+### Popup windows show minimize and maximize buttons that do nothing
+
+Expected on GNOME, and harmless. Popups (Find Similar, Details, Album,
+Rules) are dialogs, and the app asks the window manager not to draw
+those two controls. GNOME's Mutter ignores the request: it applies the
+`button-layout` preference to every window regardless of type, so the
+buttons are drawn even though neither action is available to a dialog.
+Clicking them does nothing at all — nothing is at risk.
+
+Resize the window by dragging its edge instead. Each popup remembers the
+size and position you leave it at, along with its column widths, so this
+is a one-time adjustment rather than something to redo each session.
+
+Window managers that honour window type — XFCE, KDE and others — do not
+draw the buttons in the first place. If you want them gone under GNOME,
+the setting is global rather than per-application:
+
+```bash
+gsettings set org.gnome.desktop.wm.preferences button-layout ':close'
+```
+
 ### Plex push fails with "section not found"
 
 The Plex Section name must match exactly (case-sensitive) with your Plex library name.

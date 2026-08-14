@@ -238,6 +238,99 @@ def _tracks_for_track_key(library, relative_path):
     return {track.id}
 
 
+# Batched forms of the three above. `resolve_selections` called the
+# single-key helpers once per selection, which is one round trip per
+# selection: a profile holding 7000 tracks opened 7000 queries against
+# the server before it could answer anything, and every caller paid it —
+# Preview, Find Similar, Measure quietness, the CLI, cron and the
+# webhook alike. The single-key helpers remain for resolve_key_to_track_ids,
+# which genuinely has one key.
+#
+# Chunked because the parameter list is bounded: SQLite refuses more than
+# 999 variables per statement, and MySQL has max_allowed_packet.
+_KEY_CHUNK = 500
+
+
+def _chunks(items):
+    items = list(items)
+    for start in range(0, len(items), _KEY_CHUNK):
+        yield items[start:start + _KEY_CHUNK]
+
+
+def _albums_by_key(library, album_keys):
+    """{album_key: album_id} for the keys that exist."""
+    found = {}
+    for chunk in _chunks(album_keys):
+        found.update({
+            a.album_key: a.id for a in
+            Album.select(Album.id, Album.album_key).where(
+                (Album.library == library) & (Album.album_key.in_(chunk)))
+        })
+    return found
+
+
+def _tracks_for_album_ids(library, album_ids):
+    ids = set()
+    for chunk in _chunks(album_ids):
+        ids |= {t.id for t in Track.select(Track.id).where(
+            (Track.library == library) & (Track.album.in_(chunk)))}
+    return ids
+
+
+def _tracks_for_album_keys(library, album_keys):
+    """Track IDs covered by any of *album_keys*."""
+    album_ids = _albums_by_key(library, album_keys).values()
+    return _tracks_for_album_ids(library, album_ids) if album_ids else set()
+
+
+def _tracks_for_work_keys(library, work_keys):
+    """Track IDs covered by any of *work_keys*.
+
+    A work key is composite — album key, work name, and usually a
+    sequence number — so the match is done in Python over one query per
+    album batch rather than as a compound SQL condition per key.
+    """
+    parsed = [(k, parse_work_key(k)) for k in work_keys]
+    parsed = [(k, p) for k, p in parsed if p]
+    if not parsed:
+        return set()
+
+    album_ids_by_key = _albums_by_key(library, {p[0] for _, p in parsed})
+    if not album_ids_by_key:
+        return set()
+
+    wanted = set()
+    for _key, (album_key, work_name, work_seq) in parsed:
+        album_id = album_ids_by_key.get(album_key)
+        if album_id is not None:
+            wanted.add((album_id, work_name, work_seq))
+
+    work_ids = set()
+    for chunk in _chunks({a for a, _, _ in wanted}):
+        for w in Work.select(Work.id, Work.album, Work.work_name,
+                             Work.work_sequence).where(Work.album.in_(chunk)):
+            # A key without a sequence matches on name alone, as the
+            # single-key form does by omitting the sequence filter.
+            if ((w.album_id, w.work_name, w.work_sequence) in wanted
+                    or (w.album_id, w.work_name, None) in wanted):
+                work_ids.add(w.id)
+
+    ids = set()
+    for chunk in _chunks(work_ids):
+        ids |= {t.id for t in Track.select(Track.id).where(
+            (Track.library == library) & (Track.work.in_(chunk)))}
+    return ids
+
+
+def _tracks_for_track_keys(library, relative_paths):
+    """Track IDs for any of *relative_paths*."""
+    ids = set()
+    for chunk in _chunks(relative_paths):
+        ids |= {t.id for t in Track.select(Track.id).where(
+            (Track.library == library) & (Track.relative_path.in_(chunk)))}
+    return ids
+
+
 def resolve_key_to_track_ids(library, level, key):
     """Expand a single (level, key) to the set of track IDs it covers."""
     if level == "album":
@@ -323,17 +416,15 @@ def resolve_selections(profile) -> SelectionResult:
 
     album_sel, work_sel, track_sel = _selection_maps(selections)
 
-    # Expand all adds to candidate track IDs
+    # Expand all adds to candidate track IDs — batched per level, so the
+    # cost is a handful of queries rather than one per selection.
     candidate_ids = set()
-    for key, excluded in album_sel.items():
-        if not excluded:
-            candidate_ids |= _tracks_for_album_key(library, key)
-    for key, excluded in work_sel.items():
-        if not excluded:
-            candidate_ids |= _tracks_for_work_key(library, key)
-    for key, excluded in track_sel.items():
-        if not excluded:
-            candidate_ids |= _tracks_for_track_key(library, key)
+    candidate_ids |= _tracks_for_album_keys(
+        library, [k for k, exc in album_sel.items() if not exc])
+    candidate_ids |= _tracks_for_work_keys(
+        library, [k for k, exc in work_sel.items() if not exc])
+    candidate_ids |= _tracks_for_track_keys(
+        library, [k for k, exc in track_sel.items() if not exc])
 
     result = SelectionResult(
         excluded_work_keys={k for k, exc in work_sel.items() if exc},

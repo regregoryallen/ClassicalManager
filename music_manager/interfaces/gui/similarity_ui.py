@@ -204,18 +204,28 @@ class SimilarityUIMixin:
                 "for the similarity search.")
             return
 
+        # Every seed is compared against every candidate, so a profile
+        # holding most of the library turns one click into minutes of
+        # scoring with the window unpainted.
+        #
+        # Counted from the in-memory library index, not by resolving the
+        # profile first. Resolving is itself part of what takes the time,
+        # so asking afterwards put the warning several minutes after the
+        # click it was meant to precede — the user had already waited for
+        # the thing they were being offered the chance to avoid.
+        index = self._get_library_index()
+        state = self._current_effective_state(index)
+        expected_seeds = (len(state.included_track_ids)
+                          + len(state.expanded_track_ids))
+        if not self._confirm_bulk_selection(expected_seeds, "seed tracks"):
+            return
+
         # Resolve current selections to track IDs
         seed_ids = self._resolve_current_to_track_ids()
         if not seed_ids:
             messagebox.showinfo(
                 "No Tracks",
                 "Current selections don't match any tracks.")
-            return
-
-        # Every seed is compared against every candidate, so a profile
-        # holding most of the library turns one click into minutes of
-        # scoring with the window unpainted.
-        if not self._confirm_bulk_selection(len(seed_ids), "seed tracks"):
             return
 
         # Top up any missing analyses first. Small gaps just run; a large
@@ -473,9 +483,9 @@ class SimilarityUIMixin:
         # percentiles are restated, so narrowing to one composer does not
         # change what "closer than 90% of candidates" refers to.
         filter_var = tk.StringVar()
-        ctk.CTkEntry(param_row2, textvariable=filter_var, width=150,
-                     placeholder_text="title, composer, album").pack(
-            side="right")
+        self._make_filter_entry(
+            param_row2, filter_var,
+            placeholder="title, composer, album").pack(side="right")
         ctk.CTkLabel(param_row2, text="Filter:",
                      text_color=("gray25", "gray70")).pack(
             side="right", padx=(12, 3))

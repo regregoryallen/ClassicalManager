@@ -97,8 +97,8 @@ def test_a_homogeneous_pool_has_no_seam_worth_reporting():
 def test_expected_seams_scales_with_playlist_length_not_pool_size():
     """(n-1) x P(a random ordered pair exceeds the threshold).
 
-    A longer night has more joins; a bigger pool just has more candidates
-    for each one.
+    A longer playlist has more joins; a bigger pool just has more
+    candidates for each one.
     """
     # Every track ends at 0, so a seam is decided entirely by what opens
     # next: only track 3, at +10, clears the 8 dB threshold. Three of the
@@ -139,7 +139,7 @@ def test_the_ceiling_is_stated_probabilistically():
     """Stating a flat worst case would overstate the problem.
 
     The plan's own worked example: 6 loud tracks in a 250-track pool that
-    draws 50 gives 1.2 per playlist and roughly 70% of nights.
+    draws 50 gives 1.2 per playlist and roughly 70% containing one.
     """
     tracks = [track(i, head=0.0, tail=0.0, offset=0.0, startle=2.0)
               for i in range(1, 245)]
@@ -247,17 +247,19 @@ def test_an_empty_pool_says_so_rather_than_dividing_by_zero():
 # Wording
 # ---------------------------------------------------------------------------
 
-def test_describe_states_the_ceiling_as_a_frequency():
+def test_describe_states_the_ceiling_as_a_frequency_not_a_certainty():
     tracks = [track(i, head=0.0, tail=0.0, offset=0.0, startle=2.0)
               for i in range(1, 245)]
     tracks += [track(1000 + i, head=0.0, tail=0.0, offset=0.0, startle=25.0)
                for i in range(6)]
 
     text = " ".join(describe(build_report(tracks, playlist_length=50)))
-    assert "per playlist" in text
-    assert "% of nights" in text
+    assert "A typical playlist draws" in text
+    assert "contain at least one" in text
     # Not a bare "worst case", which would overstate a capped draw.
     assert "6 exceed" in text
+    # And nothing about nights: sleep prompted this, it does not define it.
+    assert "night" not in text.lower()
 
 
 def test_describe_reports_exclusions_so_they_are_not_silent():
@@ -334,3 +336,19 @@ def test_the_worst_seam_still_finds_the_true_extremes_when_they_differ():
     assert report.worst_seam == pytest.approx(16.0)
     assert report.worst_seam_from == "fades out"
     assert report.worst_seam_to == "bursts in"
+
+
+def test_the_report_is_not_written_only_for_sleep():
+    """Sleep prompted the feature; it does not define it.
+
+    The same figures describe any listening where an abrupt jump in level
+    is unwelcome — reading, dining, working, a long drive — and wording
+    that assumes bedtime makes the panel read as belonging to someone
+    else's use case.
+    """
+    tracks = [track(i, f"t{i}", head=0.0, tail=-3.0, offset=0.0, startle=20.0)
+              for i in range(1, 6)]
+    text = " ".join(describe(build_report(tracks, playlist_length=3))).lower()
+
+    for word in ("night", "sleep", "asleep", "bedtime", "wake"):
+        assert word not in text, f"pool report still says {word!r}"

@@ -993,7 +993,7 @@ def filter_by_quietness(results: list[dict], startle_max: float | None = None,
     **An unmeasured track is excluded, not admitted.** It cannot be shown
     to be quiet, and the whole point of the pool is that everything in it
     has been checked; letting unknowns through would put precisely the
-    tracks nothing is known about into a sleep playlist. But the count is
+    tracks nothing is known about into the pool. But the count is
     reported separately from a genuine failure, because the two call for
     different actions: one means "measure these" and the other means
     "this track is loud".

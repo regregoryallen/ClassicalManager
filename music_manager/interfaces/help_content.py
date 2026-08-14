@@ -322,7 +322,7 @@ def build_help_content(text: tk.Text) -> None:
            "measure the Max dyn range filter applies")
     bullet("Max startle \u2014 optional filter on how sharply a track gets "
            "louder than the last half-minute of listening. This is the "
-           "\u201cwill it wake me\u201d control. Tick the checkbox to enable it")
+           "\u201cwill it make me jump\u201d control. Tick the checkbox to enable it")
     bullet("Max level vs work \u2014 optional filter on how loud a track plays "
            "compared to the rest of its own work. See \u201cQuietness "
            "measures\u201d below for why this is not the same as how loud "
@@ -368,11 +368,13 @@ def build_help_content(text: tk.Text) -> None:
 
     subheading("Quietness measures", mark="quietness")
     body(
-        "Built for making a playlist you can fall asleep to, but useful "
-        "anywhere you care about a track's dynamics rather than its style. "
-        "The similarity search answers “does this sound like that”; these "
-        "answer “is this going to startle me”, which turns out to be a "
-        "different question.\n"
+        "For playlists that should stay in the background — reading, "
+        "dining, working, driving, drifting off — where a sudden jump in "
+        "volume is the thing that spoils it. The similarity search answers "
+        "“does this sound like that”; these answer “is this going to make "
+        "me jump”, which turns out to be a different question. Useful "
+        "anywhere you care about a track's dynamics rather than its "
+        "style.\n"
     )
     body(
         "The one to understand first is “vs work”. Music Assistant "

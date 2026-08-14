@@ -1138,7 +1138,7 @@ class SimilarityUIMixin:
                                 len(pool)))
 
     def _profile_playlist_length(self, pool_size):
-        """How many tracks a night actually draws from the pool.
+        """How many tracks one generated playlist draws from the pool.
 
         The cap is what makes the ceiling probabilistic rather than
         certain, so getting it roughly right matters more than getting it

@@ -5,14 +5,20 @@ a 250-track pool yields a ~50-track playlist. Two consequences shape
 everything here.
 
 **Sequence statistics are meaningless; pool statistics are exact.** There
-is no ordering to describe, because the ordering is different every
-night. What can be described is the pool, and every reachable ordering is
-made of its pairs.
+is no ordering to describe, because the ordering differs every time the
+playlist is generated. What can be described is the pool, and every
+reachable ordering is made of its pairs.
 
-**The ceiling is probabilistic.** The pool's worst track appears on
-roughly one night in five, so stating a flat "worst case 14 LU" overstates
-the problem. "6 tracks exceed the threshold; expect 1.2 a night; 70% of
-nights contain at least one" is the honest form and the actionable one.
+**The ceiling is probabilistic.** The pool's worst track appears in
+roughly one playlist in five, so stating a flat "worst case 14 LU"
+overstates the problem. "6 tracks exceed the threshold; a typical
+playlist draws 1.2 of them, and 70% contain at least one" is the honest
+form and the actionable one.
+
+Sleep was the case that prompted this, and it is still the sharpest one,
+but nothing here is specific to it: the same figures describe any
+listening where an abrupt jump in level is unwelcome — reading, dinner,
+working, a long drive.
 
 The framing worth keeping in view: **under shuffle, seam control is
 variance control of the pool.** If the levels are homogeneous every
@@ -141,8 +147,8 @@ def build_report(tracks, playlist_length,
     """Describe what this pool can produce under shuffle.
 
     `tracks` is a list of PoolTrack. `playlist_length` is how many of
-    them a night actually draws — the cap is what makes the ceiling
-    probabilistic rather than certain.
+    them one generated playlist actually draws — the cap is what makes
+    the ceiling probabilistic rather than certain.
     """
     report = PoolReport(
         pool_size=len(tracks),
@@ -203,9 +209,9 @@ def build_report(tracks, playlist_length,
     report.worst_seam_from = leader.title
     report.worst_seam_to = follower.title
 
-    # Expected count of bad seams in one night. Adjacent pairs in a
+    # Expected count of bad seams in one playlist. Adjacent pairs in a
     # shuffle are ordered pairs drawn from the pool, so the count scales
-    # with playlist length and not with pool size — a longer night has
+    # with playlist length and not with pool size — a longer playlist has
     # more joins, a bigger pool just has more candidates for each.
     heads = sorted(t.head_abs for t in eligible)
     over = 0
@@ -290,10 +296,9 @@ def describe(report: PoolReport) -> list[str]:
     if report.loud_tracks:
         lines.append(
             f"{len(report.loud_tracks)} exceed "
-            f"{report.startle_threshold:.0f} LU startle. Expect "
-            f"{report.expected_loud_per_playlist:.1f} per playlist; "
-            f"{report.chance_of_any_loud * 100:.0f}% of nights contain "
-            f"at least one.")
+            f"{report.startle_threshold:.0f} LU startle. A typical playlist "
+            f"draws {report.expected_loud_per_playlist:.1f} of them, and "
+            f"{report.chance_of_any_loud * 100:.0f}% contain at least one.")
     elif report.startle_measured:
         lines.append(f"No track exceeds {report.startle_threshold:.0f} LU "
                      f"startle.")

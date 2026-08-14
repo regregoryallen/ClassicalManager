@@ -1,4 +1,4 @@
-"""v3.8: how likely a track is to wake you, measured from its envelope.
+"""v3.8: how abruptly a track changes level, measured from its envelope.
 
 The feature vector's dynamics dimensions describe the *file*. This module
 describes what a listener hears: the short-term loudness envelope, and
@@ -365,8 +365,8 @@ class QuietnessMetrics:
 
     Every field is None when it could not be measured. None means "not
     known", never "zero" — a track scored zero on startle would sort into
-    the safest part of a sleep pool, which is the last place an unmeasured
-    track belongs.
+    the quietest end of a curated pool, which is the last place an
+    unmeasured track belongs.
     """
 
     startle_delta: float = None     # LU, p99 of S above integrated

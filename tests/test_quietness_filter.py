@@ -239,3 +239,40 @@ def test_the_level_column_format_parses_back_as_a_number():
 
     for offset in (-9.3, -0.1, 0.0, 2.9, 7.3):
         assert numeric_sort_key(f"{offset:+.1f}") == pytest.approx(offset)
+
+
+# ---------------------------------------------------------------------------
+# The help link
+# ---------------------------------------------------------------------------
+
+def test_the_quietness_help_mark_exists_and_lands_on_the_glossary():
+    """Find Similar's ? buttons jump here; a renamed section would break it.
+
+    `_help_jump` swallows a missing mark rather than raising — sensible
+    for a help window, and it means a broken link would silently do
+    nothing at all. Hence a test.
+    """
+    tk = pytest.importorskip("tkinter")
+    try:
+        root = tk.Tk()
+    except tk.TclError:                             # pragma: no cover
+        pytest.skip("no display")
+    root.withdraw()
+    try:
+        widget = tk.Text(root)
+        for tag in ("title", "h1", "h2", "bold", "body", "code", "sep"):
+            widget.tag_configure(tag)
+        from music_manager.interfaces.help_content import build_help_content
+        build_help_content(widget)
+
+        index = widget.index("quietness")
+        line = int(index.split(".")[0])
+        assert "Quietness measures" in widget.get(f"{line}.0", f"{line + 2}.0")
+
+        # And the section really does explain the terms the UI shows.
+        rest = widget.get(index, "end")
+        for term in ("vs work", "Startle", "Loudest moment",
+                     "Head level", "Loudness range", "Integrated loudness"):
+            assert term in rest, f"help does not cover {term!r}"
+    finally:
+        root.destroy()

@@ -19,7 +19,17 @@ def build_help_content(text: tk.Text) -> None:
         text.insert("end", f"\n{title}\n", "h1")
         text.insert("end", "\u2500" * 60 + "\n", "sep")
 
-    def subheading(title):
+    def subheading(title, mark=None):
+        """A second-level heading, optionally jumpable.
+
+        `mark` is for subsections a control links directly to — the
+        quietness glossary is reached from a help button in the Find
+        Similar window, and landing on the enclosing chapter would make
+        the reader hunt for it.
+        """
+        if mark:
+            text.mark_set(mark, "end-1c")
+            text.mark_gravity(mark, "left")
         text.insert("end", f"\n{title}\n", "h2")
 
     def body(content):
@@ -333,7 +343,7 @@ def build_help_content(text: tk.Text) -> None:
     bullet("Right-click a result for Play, Details, Show Album, or "
            "Show in Folder")
 
-    subheading("Quietness measures")
+    subheading("Quietness measures", mark="quietness")
     body(
         "Built for making a playlist you can fall asleep to, but useful "
         "anywhere you care about a track's dynamics rather than its style. "

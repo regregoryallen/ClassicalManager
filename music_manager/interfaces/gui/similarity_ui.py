@@ -423,7 +423,16 @@ class SimilarityUIMixin:
         level_slider.pack(side="left", padx=(0, 2))
         level_label.pack(side="left", padx=(0, 2))
         ctk.CTkCheckBox(param_frame, text="", variable=level_enabled,
-                        width=20).pack(side="left", padx=(0, 12))
+                        width=20).pack(side="left", padx=(0, 2))
+        # Next to the controls whose names prompt the question. There is
+        # a second one on the pool panel: this window is 900x560, so its
+        # top and bottom are far enough apart that one button would be
+        # off-screen from wherever the reader happens to be looking.
+        ctk.CTkButton(
+            param_frame, text="?", width=26, height=24,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda: self._show_help("quietness")).pack(
+            side="left", padx=(0, 12))
 
         ctk.CTkLabel(param_frame, text="Blend:").pack(
             side="left", padx=(0, 4))
@@ -549,13 +558,26 @@ class SimilarityUIMixin:
         # can reach, which makes them exact rather than indicative.
         pool_frame = ctk.CTkFrame(popup)
         pool_frame.pack(fill="x", padx=12, pady=(4, 0))
-        ctk.CTkLabel(pool_frame, text="This profile's pool",
-                     font=ctk.CTkFont(size=11, weight="bold")).pack(
-            anchor="w", padx=8, pady=(6, 0))
+        pool_header = ctk.CTkFrame(pool_frame, fg_color="transparent")
+        pool_header.pack(fill="x", padx=8, pady=(6, 0))
+        ctk.CTkLabel(pool_header, text="This profile's pool",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            side="left")
+        # Links straight to the glossary, not to the chapter containing
+        # it: the terms are the thing being asked about.
+        ctk.CTkButton(
+            pool_header, text="?", width=26, height=24,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda: self._show_help("quietness")).pack(
+            side="left", padx=(8, 0))
+
+        # Full size and default colour, not a 10pt grey caption. These
+        # are the numbers the panel exists to report, and the first
+        # version rendered them almost unreadable.
         pool_label = ctk.CTkLabel(
             pool_frame, text="", justify="left", anchor="w",
-            font=ctk.CTkFont(size=10), text_color="gray70")
-        pool_label.pack(anchor="w", padx=8, pady=(0, 6), fill="x")
+            font=ctk.CTkFont(size=12))
+        pool_label.pack(anchor="w", padx=8, pady=(2, 8), fill="x")
 
         # -- Bottom: action buttons + status --
         bot_frame = ctk.CTkFrame(popup, fg_color="transparent")
@@ -729,12 +751,16 @@ class SimilarityUIMixin:
                 ))
             sim_state["result_map"][iid] = r
 
+        unmeasured_visible = sum(
+            1 for r in visible if r.get("startle_local") is None)
         sim_state["status_label"].configure(
             text=self._quietness_status(len(visible), len(survivors),
-                                        len(results), dropped))
+                                        len(results), dropped,
+                                        unmeasured_visible))
 
     @staticmethod
-    def _quietness_status(visible, surviving, total, dropped):
+    def _quietness_status(visible, surviving, total, dropped,
+                          unmeasured_visible=0):
         """The surviving-candidate count, and what the filters removed.
 
         Not decoration. The level slider has a cliff at zero — 68.8% of
@@ -746,9 +772,18 @@ class SimilarityUIMixin:
         Unmeasured tracks are counted apart from tracks that genuinely
         failed, because the two ask for different things: one is "run
         Measure", the other is "this track is loud".
+
+        `unmeasured_visible` covers the case with no filter on at all.
+        Nothing measures quietness until asked, so a first search shows a
+        column of dashes — and reporting only "50 of 7241 shown" left
+        nothing to connect those dashes to the button that fills them in.
         """
         if surviving == total:
-            return f"{visible} of {total} shown"
+            shown = f"{visible} of {total} shown"
+            if unmeasured_visible:
+                shown += (f" — {unmeasured_visible} not yet measured for "
+                          f"startle (use Measure quietness)")
+            return shown
 
         parts = [f"{visible} shown, {surviving} of {total} pass"]
         failed = dropped["startle"] + dropped["level"]
@@ -757,6 +792,8 @@ class SimilarityUIMixin:
         unmeasured = dropped["startle_unmeasured"] + dropped["level_unmeasured"]
         if unmeasured:
             parts.append(f"{unmeasured} unmeasured")
+        if unmeasured_visible:
+            parts.append(f"{unmeasured_visible} shown unmeasured")
         return " — ".join(parts)
 
     @staticmethod

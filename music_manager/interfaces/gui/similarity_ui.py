@@ -341,7 +341,7 @@ class SimilarityUIMixin:
         popup = tk.Toplevel(self.root)
         popup.title("Find Similar Tracks")
         popup.transient(self.root)
-        self._center_on_main(popup, 900, 560)
+        self._remember_geometry(popup, "find_similar", 900, 560)
         popup.wait_visibility()
         popup.grab_set()
 
@@ -543,11 +543,17 @@ class SimilarityUIMixin:
         result_tree.column("#0", width=200)
         result_tree.column("composer", width=130)
         result_tree.column("album", width=150)
-        result_tree.column("match", width=60)
-        result_tree.column("rank", width=90, anchor="e")
-        result_tree.column("volatility", width=80, anchor="e")
-        result_tree.column("startle", width=78, anchor="e")
-        result_tree.column("level", width=88, anchor="e")
+        result_tree.column("match", width=58, anchor="e")
+        result_tree.column("rank", width=74, anchor="e")
+        result_tree.column("volatility", width=76, anchor="e")
+        result_tree.column("startle", width=64, anchor="e")
+        result_tree.column("level", width=72, anchor="e")
+        # Numbers get what their headings need and no more; the surplus
+        # from a widened window goes to the three text columns, which are
+        # the ones that were being starved.
+        for col in ("match", "rank", "volatility", "startle", "level"):
+            result_tree.column(col, stretch=False)
+        self._remember_columns(result_tree, "find_similar")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")

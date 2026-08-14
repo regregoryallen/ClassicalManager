@@ -134,6 +134,9 @@ class CleanupTabMixin:
         self.works_tree.column("album", width=200)
         self.works_tree.column("tracks", width=60, anchor="center")
         self.works_tree.column("composer", width=150)
+        for col in ("source", "tracks"):
+            self.works_tree.column(col, stretch=False)
+        self._remember_columns(self.works_tree, "cleanup_works")
         self.works_tree.pack(fill="both", expand=True, padx=10, pady=5)
 
         w_scroll = ttk.Scrollbar(self.works_tree, orient="vertical",
@@ -519,7 +522,7 @@ class CleanupTabMixin:
         popup = tk.Toplevel(self.root)
         popup.title(f"Details: {work.work_name}")
         popup.transient(self.root)
-        self._center_on_main(popup, 750, 500)
+        self._remember_geometry(popup, "work_details", 750, 500)
         popup.wait_visibility()
         popup.grab_set()
 
@@ -614,7 +617,7 @@ class CleanupTabMixin:
         popup = tk.Toplevel(self.root)
         popup.title(f"Album: {album.title}")
         popup.transient(self.root)
-        self._center_on_main(popup, 1100, 750)
+        self._remember_geometry(popup, "album", 1100, 750)
         popup.wait_visibility()
         popup.grab_set()
 

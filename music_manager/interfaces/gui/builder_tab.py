@@ -567,6 +567,9 @@ class BuilderTabMixin:
         self.builder_lib_tree.column("genre", width=90)
         self.builder_lib_tree.column("year", width=50, anchor="center")
         self.builder_lib_tree.column("info", width=70, anchor="center")
+        for col in ("genre", "year", "info"):
+            self.builder_lib_tree.column(col, stretch=False)
+        self._remember_columns(self.builder_lib_tree, "builder_lib")
         self.builder_lib_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         lib_scroll = ttk.Scrollbar(left_frame, orient="vertical",
@@ -652,6 +655,9 @@ class BuilderTabMixin:
         self.builder_pl_tree.column("genre", width=90)
         self.builder_pl_tree.column("year", width=50, anchor="center")
         self.builder_pl_tree.column("info", width=70, anchor="center")
+        for col in ("genre", "year", "info"):
+            self.builder_pl_tree.column(col, stretch=False)
+        self._remember_columns(self.builder_pl_tree, "builder_pl")
         self.builder_pl_tree.pack(fill="both", expand=True, padx=5, pady=2)
 
         pl_scroll = ttk.Scrollbar(right_frame, orient="vertical",

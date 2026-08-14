@@ -309,7 +309,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         """Silently save current builder state as an __autosave__ profile."""
         if not self.active_library:
             return
-        from music_manager.core.database import PlaylistProfile, ProfileSelection
+        from music_manager.core.database import PlaylistProfile
 
         # Capture current UI state
         length_val = self.length_value.get().strip()
@@ -340,15 +340,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 separate_forms=self.sep_form_var.get() == 1,
             )
 
-            for sel in self._current_selections:
-                ProfileSelection.create(
-                    profile=profile,
-                    level=sel["level"],
-                    key=sel["key"],
-                    excluded=sel["excluded"],
-                    pin_position=sel.get("pin_position"),
-                    track_paths=sel.get("track_paths"),
-                )
+            self._write_profile_selections(profile)
 
         # Remember the profile name entry text separately
         self._prefs["autosave_profile_name"] = profile_name
@@ -390,6 +382,24 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     def mainloop(self):
         """Start the Tk event loop."""
         self.root.mainloop()
+
+    # Above this many items, an operation is slow enough that the window
+    # stops repainting and the app looks hung. The bulk selection paths
+    # are no longer quadratic, so this is about the tree rebuild and the
+    # per-track work that follows — seconds, not minutes, but still long
+    # enough that a user who did not mean to select the whole library
+    # deserves the chance to say so.
+    BULK_CONFIRM_THRESHOLD = 2000
+
+    def _confirm_bulk_selection(self, count, what="items", parent=None):
+        """Ask before an operation large enough to lock the UI. True to go."""
+        if count <= self.BULK_CONFIRM_THRESHOLD:
+            return True
+        return messagebox.askyesno(
+            "Large selection",
+            f"This affects {count:,} {what}.\n\nThe window will stop "
+            f"responding until it finishes. Continue?",
+            parent=parent or self.root)
 
     def _center_on_main(self, window, width=400, height=300):
         """Position a toplevel window centered on the main window."""

@@ -212,6 +212,12 @@ class SimilarityUIMixin:
                 "Current selections don't match any tracks.")
             return
 
+        # Every seed is compared against every candidate, so a profile
+        # holding most of the library turns one click into minutes of
+        # scoring with the window unpainted.
+        if not self._confirm_bulk_selection(len(seed_ids), "seed tracks"):
+            return
+
         # Top up any missing analyses first. Small gaps just run; a large
         # gap gets an explicit warning with a time estimate, so clicking
         # a search button never silently starts a multi-hour job.

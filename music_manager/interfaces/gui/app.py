@@ -129,6 +129,9 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._pl_search_meta = {}    # iid → searchable text for builder pl tree
         self._tree_sort_state = {}     # tree id → (column, reverse)
         self._help_window = None       # singleton help window
+        # Set while help is open over a window that had to give up its
+        # input grab to let help be usable; called back on close.
+        self._help_restore_grab = None
         self._autosave_after_id = None # repeating timer for autosave
 
         self._setup_theme()
@@ -397,9 +400,39 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         y = my - height // 2
         window.geometry(f"{width}x{height}+{x}+{y}")
 
+    @staticmethod
+    def _open_in_player(file_path):
+        """Hand a path to the system default player.
+
+        Split out of _play_track for v3.8's audition, which plays a
+        temporary excerpt rather than a library track. Nothing here cares
+        which it is, so nothing here needed to change — only to be
+        callable with a path instead of a track id.
+
+        Detached from the terminal — stdin especially. A launched player
+        that reads stdin takes SIGTTIN when the GUI was started as a
+        background job (`python main.py &`), and SIGTTIN suspends the
+        whole process group: the application stops dead and looks
+        deadlocked. That is exactly what ffmpeg did to v3.8's Measure
+        button, and a media player is at least as likely to want a
+        terminal. stdout and stderr go the same way so a chatty player
+        cannot scribble over the shell either.
+        """
+        import subprocess
+        detached = dict(stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+        _sys = platform.system()
+        if _sys == "Windows":
+            import os
+            os.startfile(str(file_path))
+        elif _sys == "Darwin":
+            subprocess.Popen(["open", str(file_path)], **detached)
+        else:
+            subprocess.Popen(["xdg-open", str(file_path)], **detached)
+
     def _play_track(self, track_id):
         """Open a track's audio file in the system default player."""
-        import subprocess
         from music_manager.core.database import Track
         try:
             track = Track.get_by_id(track_id)
@@ -407,14 +440,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             if not file_path.exists():
                 messagebox.showerror("File Not Found", f"File not found:\n{file_path}")
                 return
-            _sys = platform.system()
-            if _sys == "Windows":
-                import os
-                os.startfile(str(file_path))
-            elif _sys == "Darwin":
-                subprocess.Popen(["open", str(file_path)])
-            else:
-                subprocess.Popen(["xdg-open", str(file_path)])
+            self._open_in_player(file_path)
         except Exception as exc:
             messagebox.showerror("Playback Error", str(exc))
 
@@ -443,18 +469,23 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         folder = str(path if path.is_dir() else path.parent)
         _sys = platform.system()
         try:
+            # Detached, for the reason given in _open_in_player: an
+            # inherited stdin can suspend the whole application.
+            detached = dict(stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
             if _sys == "Windows":
                 if path.is_dir():
-                    subprocess.Popen(["explorer", target])
+                    subprocess.Popen(["explorer", target], **detached)
                 else:
                     # /select, takes the path as one token, comma-joined.
-                    subprocess.Popen(f'explorer /select,"{target}"')
+                    subprocess.Popen(f'explorer /select,"{target}"', **detached)
             elif _sys == "Darwin":
                 subprocess.Popen(["open", "-R", target] if not path.is_dir()
-                                 else ["open", target])
+                                 else ["open", target], **detached)
             else:
                 if path.is_dir() or not self._linux_reveal(target):
-                    subprocess.Popen(["xdg-open", folder])
+                    subprocess.Popen(["xdg-open", folder], **detached)
         except Exception as exc:
             messagebox.showerror("Could Not Open Folder", str(exc))
 

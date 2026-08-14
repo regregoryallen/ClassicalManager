@@ -10,13 +10,18 @@
   section), v3.6.3 (2026-08-11, 361 tests green on SQLite — four small
   tweaks; see that section). Branches deleted after merging, as is the
   convention.
-- **In progress: v3.7, the work-scoped ReplayGain tagger** (branch
-  `v3.7-dev`, started 2026-08-11; see that section). Riding along on the
-  same branch: the multi-library webhook and the `cron.m3u_output_dir`
-  tilde fix (2026-08-12), the latter carrying a behaviour change — see
-  *Riding along on `v3.7-dev`*. Still to come from the loudness/MA
-  programme after it: the loudness analysis for sleep-playlist curation,
-  with its own version.
+- **Released and tagged: v3.7**, the work-scoped ReplayGain tagger
+  (2026-08-13; see that section). Riding along on the same branch: the
+  multi-library webhook and the `cron.m3u_output_dir` tilde fix
+  (2026-08-12), the latter carrying a behaviour change — see *Riding
+  along on `v3.7-dev`*.
+- **Released and tagged: v3.8**, quietness metrics and curation
+  (2026-08-14, 612 tests on SQLite / 618 on MariaDB). Find Similar gained
+  two filters, on-demand measurement, an audition, and a pool report. The
+  banded shuffle originally planned as its Stage D was **deferred to
+  Future directions** rather than built — see below for why the pool
+  report has to answer that question first. This completes the
+  loudness/MA programme.
 - **The version lives in four places and nowhere else**: `__version__` in
   `music_manager/__init__.py` (added v3.6.3), the git tag, the heading in
   this file, and the docstrings of test modules added by that release. A
@@ -714,6 +719,185 @@ the v3.6 rewrite replaced with Rank; the sorting and context-menu bullets
 were updated here, that one was left for whoever re-reads the Find Similar
 help as a whole.
 
+## v3.8 — Quietness metrics and sleep-playlist curation (branch `v3.8-dev`, started 2026-08-13)
+
+Filter Find Similar on how likely a track is to wake you, and control level
+seams in a shuffled pool. Plan: `no_git/CM-quietness-plan.md`. Stage A's
+report, which gates the rest: `no_git/CM-quietness-A4-report.md`.
+
+Four stages. **Stage A gated everything and ended in a report, not code.**
+A1 the tag-derived playback level and its coverage; A2 an `ffmpeg ebur128`
+metrics harness; A3 the distribution from a 300-track sample; A4 the report.
+Then B storage, C Find Similar, D banded shuffle.
+
+### Stage A — what the measurements changed
+
+**Audio measurement is required, and the reason is not the one expected.**
+The plan allowed that high ReplayGain coverage might make the audio pass
+unnecessary. Coverage came back at **99.5%** — the entire 38-track residue
+is the 31 m4a and 7 ape files no tagger can write — and the answer was
+still no. **68.8% of the library scores exactly zero** on the tag-derived
+axis, by construction: a standalone work is its own work, so it plays at
+precisely the reference level, and the library is ~3,800 standalone works
+out of ~5,500. Coverage and discriminating power turned out to be different
+questions, and only the first was being asked.
+
+The algebra itself is exact: `ALBUM_GAIN − TRACK_GAIN` recovered
+`L_m − L_work` with a **worst disagreement of 0.000 dB** over seven
+re-measured members, and **3,772 of 3,772** standalone works gave exactly
+zero.
+
+**`startle_delta` inverts, and was dropped.** It is `p99(S) − integrated`,
+and R128 integrated loudness is *gated*: for a track with 30 s at −1 dBFS
+and 50 s at −20, every quiet block falls outside the relative gate and
+integrated converges on the loud passage itself. A 200 ms crack scores 7.17
+and a 30 s blast scores 0.04 — the harmless signal ranked ahead of the
+dangerous one. Pinned as a test so the arithmetic is not "fixed" without
+meeting the reason.
+
+**Two sliders ship, not five.** `startle_local` (0..25 LU) and the derived
+playback level (−10..+5 dB). The two are **orthogonal** — the offset
+correlates at −0.05 to −0.11 against every envelope metric — which is the
+argument for keeping both. `rise_rate` measures how deep the trough was ten
+seconds earlier, so it scores 64 LU on a piece with 11.6 LU of range; `lra`
+duplicates the `volatility` already in the UI at r=0.78.
+
+**Three assumptions in the plan did not survive contact.** ffmpeg's
+per-frame `framelog` prints nothing at the default log level, so the series
+comes from `ametadata=print` on stdout instead. Short-term loudness is
+invalid until t=2.9 s and momentary until t=0.3 s, so head and tail levels
+come from momentary — an entry 1.5 s in is exactly the seam risk, and S
+cannot see it. And percentiles do not reject brief transients: a 3 s window
+smears 200 ms across thirty frames, so what damps a crack is the window's
+own averaging, 19 dB down to 7.9 LU.
+
+**One finding changed a specification rather than a parameter.**
+`tail_level` runs to −62 LU with 69 of 299 tracks below −20, while
+`head_level` bottoms out at −27 with only 7 below −20. That asymmetry is
+trailing silence in the rips, not music. The pool report's worst-seam
+formula computes to 65.7 LU on real data — a statement about ripping. The
+tail must be measured over the last 10 s of *audible* material.
+
+### Stage B — storage
+
+Quietness columns on **both** `TrackAnalysis` and `AnalysisSnapshot`, named
+once in `similarity.LOUDNESS_FIELDS` because four places copy them and the
+failure mode when they drift is a column that blanks on the next full
+rescan with the feature vector intact, so nothing looks broken.
+
+`loudness_version` moves independently of `FEATURE_VERSION`. That is the
+whole reason the quietness metrics are a separate pass: librosa analysis
+costs 219 MB + 93 MB per audio-minute per worker and ffmpeg costs a few MB,
+and forcing either to rerun for the other's sake is the coupling avoided.
+
+ReplayGain goes on `Track` as `rg_track_gain` / `rg_album_gain`, read by
+the ordinary scan alongside genre and performer, so it survives rescans by
+the ordinary path. **The offset is derived, never stored** — storing it
+would let the tags and their difference disagree. Read by one
+`_extract_replaygain` rather than a branch in each of the five per-format
+extractors: the tag names are identical everywhere and only the container
+differs, so five copies would be five chances to write it differently. Opus
+is checked first and separately, being an Ogg container that would
+otherwise match the Vorbis branch, find nothing, and be recorded as
+untagged when it is in fact tagged as Q7.8 fixed point against −23 LUFS.
+
+**Two hazards fixed while here.** `similarity.ensure_table()` hardcoded
+`SqliteMigrator` against a MariaDB production database — it happened to
+work for the one column it added, and would not have kept working. It also
+wrapped the add in a bare `except OperationalError: pass`, which cannot
+tell "already exists" from "was not added"; presence is now checked with
+`get_columns()` and a real failure raises. Every new column is `null=True`,
+because a non-null `add_column` makes peewee rebuild the table and
+`track_analysis` is CASCADE-linked to `Track`.
+
+### Stage C — Find Similar becomes the curation tool
+
+Two sliders, not five: `startle_local` (0..25 LU) and the derived playback
+level (−10..+5 dB), with both metrics shown as sortable columns. Endpoints
+come from A3's sample. Both default to their maximum, so a search nobody
+has touched returns exactly what v3.7 returned.
+
+**The filters run in the tree, not in the query**, so a drag is instant.
+`find_similar` is called once with `limit=None` and carries the metrics on
+every result; the sliders re-render from that cache.
+
+**Match % had a subtler problem than the plan described.** The plan says
+fetch ~500 deep and recompute the percentile over the survivors — but a
+percentile recomputed over a *truncated* fetch is on a different scale
+entirely, so the 500th candidate would read 0% rather than its real
+position. What made it clean is that `find_similar` already builds a dict
+for every candidate and truncates only at the end, so `limit=None` costs
+nothing and recomputing over the survivors is then exact. It matches what
+`volatility_max` has always done; that just filters before scoring.
+
+**An unmeasured track is excluded when a filter is on, never admitted.**
+It cannot be shown to be quiet, and admitting unknowns is the one thing a
+sleep pool exists to prevent. The status line counts those apart from
+tracks that genuinely failed, because "run Measure" and "this is loud"
+call for different actions. The surviving-candidate count is load-bearing,
+not decoration: the level slider has a cliff at zero where 68.8% of the
+library sits, so one step below it drops two thirds of the candidates.
+
+C4 measures on demand, 8 parallel ffmpeg processes over the candidates on
+screen. It ignores the sliders when choosing what to measure — with a
+filter on, unmeasured tracks are excluded from the view, so measuring what
+is displayed could never measure anything. The queue keys on
+`loudness_version`, not on a null metric: a silent track measures fine and
+legitimately has no startle value, and keying on the metric would re-queue
+it forever.
+
+C5 cuts twelve seconds around `loud_at_ms`, with two seconds of lead
+because the same fortissimo is alarming or unremarkable depending on what
+preceded it. WAV, so no encoder dependency. Excerpts are swept by age, not
+deleted after playing — deleting on completion pulls the file out from
+under the player.
+
+C6 reports on the *pool*, since under shuffle there is no sequence to
+describe and the pool's properties hold for every reachable ordering. The
+ceiling is stated as a frequency ("6 exceed 15 LU; expect 1.2 per
+playlist; 74% of nights contain at least one"), because a length-capped
+draw makes a flat worst case an overstatement.
+
+**LOUDNESS_VERSION went to 2 during Stage C.** `head_level` and
+`tail_level` now cover the first and last ten seconds of *audible*
+material rather than of the file — ungated they were reporting how much
+digital silence a rip carried, which put the worst reachable seam at
+65.7 LU. Related: those two windows are 10 s each, so on anything shorter
+than 20 s they overlap and are not independent measurements.
+
+### Stage D — deferred, not built
+
+The banded shuffle moved to *Future directions* on 2026-08-14, with the
+mechanism designed and the two decisions it needs written down. The
+reason is the plan's own framing: under shuffle, seam control is variance
+control of the pool, so a homogeneous pool needs no ordering logic at
+all. C6 now reports exactly the figures that settle it, and a real
+curated pool should answer the question before any code is written.
+
+### What using it changed
+
+Six rounds of fixes came from the application being used, and none was
+reachable by the test suite — each was either two correct parts fitting
+together badly, or a number that meant the wrong thing to a listener.
+
+The freezes are worth remembering as a family. **A modal dialog with no
+`parent=` under a grabbing window** takes the input grab invisibly;
+**a non-modal window** opened under one receives no events at all; and
+**destroying a window that holds a grab** returns the grab to nobody. All
+three present as a hung application.
+
+**The worst one was not a hang.** ffmpeg reads stdin for interactive
+keys, `capture_output=True` leaves stdin inherited, and the GUI is
+launched as a background job — so ffmpeg took SIGTTIN and suspended the
+whole process group. Three plausible theories about threads, grabs and
+the database were investigated and disproved before `jobs` reported
+`Stopped` in one line. **Check the process state before theorising about
+the code.**
+
+And two numbers that were right but not useful: the audition played the
+raw file rather than the level the playlist would use, and the worst-seam
+figure named a track following itself.
+
 ## v3.7 — Work-scoped ReplayGain tagger (branch `v3.7-dev`, started 2026-08-11)
 
 Phase 3 of the loudness/MA programme. Design: `no_git/CM-rg-tagger-handoff.md`;
@@ -1174,6 +1358,51 @@ avoiding profiles.
 
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
+
+- **Banded shuffle — planned as v3.8 Stage D, deferred 2026-08-14 with
+  the mechanism designed but unbuilt.** Split a pool into 3–4 bands on a
+  key, order the bands, shuffle freely within each: downward drift across
+  the playlist with full local randomness, so there is no recognisable
+  sequence and big jumps are confined to band boundaries. Generalised as
+  **(key, direction, band count)** from the start — a quiet-first playlist
+  is `(playback_level, descending)` and a morning mix is the same key
+  ascending, so tempo banding would cost nothing extra later.
+
+  **Deferred because the measurements may remove the need for it.** Under
+  shuffle, seam control is variance control *of the pool*: if the levels
+  are homogeneous then every reachable ordering is already safe and no
+  ordering logic buys anything. v3.8's pool report states exactly that —
+  worst reachable seam, and expected jumps per playlist — so a real
+  curated pool answers the question before any code is written. This is
+  the same shape as v3.8's `rise_rate` decision, where measuring first
+  meant not building something.
+
+  **Two things to settle before starting, both already established.**
+
+  *The pipeline order is the trap.* The pipeline is shuffle → pins → stop
+  conditions, and `_apply_stop_conditions` truncates with `tracks[:n]` —
+  it keeps the **head**, in both `count` and `duration` modes. A banded
+  shuffle inserted at the shuffle step and ordered loud→quiet would be
+  truncated to its loud bands: the playlist comes out as the loudest 50
+  tracks of the pool, in descending order, with the entire quiet end
+  discarded. That presents as "why is this mix all forte" rather than as
+  an obvious bug. **Sample the pool to the length target first, then band
+  and order the survivors** — a change to the step *sequence*, not to a
+  step, which is why it needs deciding before the work rather than
+  during. Bands computed over tonight's 50 rather than the full 250 are
+  also tighter, which improves the seams for free. Cover it with a test
+  asserting the quiet band is non-empty after truncation.
+
+  *Band boundaries.* Fixed count with quantile boundaries keeps every band
+  populated; fixed dB widths keep a band's meaning stable across pools.
+  Not decided.
+
+  Held in reserve alongside it: a **level-aware separation constraint**.
+  `_apply_separation` is already a constrained shuffle — greedy pick from
+  non-conflicting candidates, with a least-conflicting fallback — and a
+  level-jump predicate fits it naturally, being graded where the existing
+  conflicts are binary. If a tightened pool makes it unnecessary, it
+  should not be built.
 
 - **Disc-spanning works — investigated 2026-07-29, NOT automated.** The
   heuristic cannot group a work split across a disc boundary:

@@ -24,6 +24,14 @@ from music_manager.interfaces.gui.common import (
 
 logger = logging.getLogger(__name__)
 
+
+def pw_fn_avg():
+    """AVG(duration_ms), for converting a duration cap into a track count."""
+    import peewee as pw
+
+    from music_manager.core.database import Track
+    return pw.fn.AVG(Track.duration_ms)
+
 # Above this many unanalyzed tracks, Find Similar warns loudly rather
 # than quietly launching hours of librosa work.
 _LARGE_ANALYSIS_GAP = 100
@@ -302,6 +310,7 @@ class SimilarityUIMixin:
 
         def _done(stats):
             popup.destroy()
+            self._restore_grab(owner)
             if seed_ids is None:
                 messagebox.showinfo(
                     "Analyze Audio",
@@ -342,6 +351,12 @@ class SimilarityUIMixin:
         ctk.CTkEntry(param_frame, textvariable=limit_var, width=55).pack(
             side="left", padx=(0, 12))
 
+        # Bound after sim_state exists; the slider is built before it.
+        vol_change_hook = {"fn": lambda: None}
+
+        def _on_vol_change():
+            vol_change_hook["fn"]()
+
         from music_manager.core.similarity import MAX_DYNAMIC_RANGE_DB
 
         # Dynamic range is now measured in dB (95th minus 10th percentile of
@@ -354,8 +369,10 @@ class SimilarityUIMixin:
         vol_slider = ctk.CTkSlider(
             param_frame, from_=0.0, to=MAX_DYNAMIC_RANGE_DB, variable=vol_var,
             width=110,
-            command=lambda v: vol_label.configure(
-                text=f"{float(v):.0f} dB" if vol_enabled.get() else "Off"))
+            command=lambda v: (
+                vol_label.configure(
+                    text=f"{float(v):.0f} dB" if vol_enabled.get() else "Off"),
+                _on_vol_change()))
         vol_slider.pack(side="left", padx=(0, 2))
         vol_label = ctk.CTkLabel(param_frame, text="Off", width=44)
         vol_label.pack(side="left", padx=(0, 2))
@@ -365,6 +382,66 @@ class SimilarityUIMixin:
             command=lambda: vol_label.configure(
                 text=f"{vol_var.get():.0f} dB" if vol_enabled.get() else "Off")
         ).pack(side="left", padx=(0, 12))
+
+        # -- v3.8 quietness filters -----------------------------------------
+        # Two controls, not five. A3 measured the alternatives over the
+        # library: startle_delta inverts on sustained loud passages,
+        # rise_rate reports how deep the trough was ten seconds ago rather
+        # than how loud the music is, and lra correlates at 0.78 with the
+        # dyn-range slider three widgets to the left. See
+        # no_git/CM-quietness-A4-report.md §6.
+        #
+        # Unlike the dyn-range slider, these filter in the tree rather
+        # than in the query, so a drag is instant. _apply_quietness_filter
+        # is bound to the slider command, not to Search.
+        from music_manager.core.quietness import (
+            MAX_LEVEL_OFFSET_DB, MAX_STARTLE_LU, MIN_LEVEL_OFFSET_DB,
+        )
+
+        ctk.CTkLabel(param_frame, text="Max startle:").pack(
+            side="left", padx=(0, 4))
+        startle_var = tk.DoubleVar(value=MAX_STARTLE_LU)
+        startle_enabled = tk.BooleanVar(value=False)
+        startle_label = ctk.CTkLabel(param_frame, text="Off", width=48)
+
+        def _startle_text():
+            return (f"{startle_var.get():.0f} LU" if startle_enabled.get()
+                    else "Off")
+
+        startle_slider = ctk.CTkSlider(
+            param_frame, from_=0.0, to=MAX_STARTLE_LU, variable=startle_var,
+            width=110)
+        startle_slider.pack(side="left", padx=(0, 2))
+        startle_label.pack(side="left", padx=(0, 2))
+        ctk.CTkCheckBox(param_frame, text="", variable=startle_enabled,
+                        width=20).pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(param_frame, text="Max level vs work:").pack(
+            side="left", padx=(0, 4))
+        level_var = tk.DoubleVar(value=MAX_LEVEL_OFFSET_DB)
+        level_enabled = tk.BooleanVar(value=False)
+        level_label = ctk.CTkLabel(param_frame, text="Off", width=48)
+
+        def _level_text():
+            return (f"{level_var.get():+.1f} dB" if level_enabled.get()
+                    else "Off")
+
+        level_slider = ctk.CTkSlider(
+            param_frame, from_=MIN_LEVEL_OFFSET_DB, to=MAX_LEVEL_OFFSET_DB,
+            variable=level_var, width=110)
+        level_slider.pack(side="left", padx=(0, 2))
+        level_label.pack(side="left", padx=(0, 2))
+        ctk.CTkCheckBox(param_frame, text="", variable=level_enabled,
+                        width=20).pack(side="left", padx=(0, 2))
+        # Next to the controls whose names prompt the question. There is
+        # a second one on the pool panel: this window is 900x560, so its
+        # top and bottom are far enough apart that one button would be
+        # off-screen from wherever the reader happens to be looking.
+        ctk.CTkButton(
+            param_frame, text="?", width=26, height=24,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda: self._show_help("quietness")).pack(
+            side="left", padx=(0, 12))
 
         ctk.CTkLabel(param_frame, text="Blend:").pack(
             side="left", padx=(0, 4))
@@ -443,7 +520,8 @@ class SimilarityUIMixin:
 
         result_tree = ttk.Treeview(
             tree_frame,
-            columns=("composer", "album", "match", "rank", "volatility"),
+            columns=("composer", "album", "match", "rank", "volatility",
+                     "startle", "level"),
             show="tree headings", selectmode="extended")
         result_tree.heading("#0", text="Title")
         result_tree.heading("composer", text="Composer")
@@ -451,12 +529,19 @@ class SimilarityUIMixin:
         result_tree.heading("match", text="Match")
         result_tree.heading("rank", text="Rank")
         result_tree.heading("volatility", text="Dyn Range")
-        result_tree.column("#0", width=220)
-        result_tree.column("composer", width=140)
-        result_tree.column("album", width=160)
+        # Shown, not just filtered on (C3). With 50-100 rows on screen the
+        # numbers should be visible and orderable — it is also how the
+        # metrics get sanity-checked against the music in practice.
+        result_tree.heading("startle", text="Startle")
+        result_tree.heading("level", text="vs Work")
+        result_tree.column("#0", width=200)
+        result_tree.column("composer", width=130)
+        result_tree.column("album", width=150)
         result_tree.column("match", width=60)
         result_tree.column("rank", width=90, anchor="e")
         result_tree.column("volatility", width=80, anchor="e")
+        result_tree.column("startle", width=78, anchor="e")
+        result_tree.column("level", width=88, anchor="e")
         result_tree.pack(fill="both", expand=True)
         result_tree.tag_configure("match_close", foreground="#2d7d46")
         result_tree.tag_configure("match_loose", foreground="#c98a1f")
@@ -474,6 +559,34 @@ class SimilarityUIMixin:
 
         result_tree.bind("<Button-3>", lambda e: self._sim_result_context_menu(
             e, result_tree, sim_state))
+
+        # -- Pool report (C6) ------------------------------------------------
+        # Describes the profile's accepted tracks, not the search results.
+        # Every profile shuffles, so there is no sequence to describe —
+        # but the pool's properties hold for every ordering the shuffle
+        # can reach, which makes them exact rather than indicative.
+        pool_frame = ctk.CTkFrame(popup)
+        pool_frame.pack(fill="x", padx=12, pady=(4, 0))
+        pool_header = ctk.CTkFrame(pool_frame, fg_color="transparent")
+        pool_header.pack(fill="x", padx=8, pady=(6, 0))
+        ctk.CTkLabel(pool_header, text="This profile's pool",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            side="left")
+        # Links straight to the glossary, not to the chapter containing
+        # it: the terms are the thing being asked about.
+        ctk.CTkButton(
+            pool_header, text="?", width=26, height=24,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=lambda: self._show_help("quietness")).pack(
+            side="left", padx=(8, 0))
+
+        # Full size and default colour, not a 10pt grey caption. These
+        # are the numbers the panel exists to report, and the first
+        # version rendered them almost unreadable.
+        pool_label = ctk.CTkLabel(
+            pool_frame, text="", justify="left", anchor="w",
+            font=ctk.CTkFont(size=12))
+        pool_label.pack(anchor="w", padx=8, pady=(2, 8), fill="x")
 
         # -- Bottom: action buttons + status --
         bot_frame = ctk.CTkFrame(popup, fg_color="transparent")
@@ -497,6 +610,16 @@ class SimilarityUIMixin:
                 result_tree, sim_state, limit_var, vol_var,
                 vol_enabled, blend_var, weight_vars)
         ).pack(side="left", padx=(0, 4))
+        measure_btn = ctk.CTkButton(
+            bot_frame, text="Measure quietness", width=150,
+            command=lambda: self._measure_visible_quietness(
+                result_tree, sim_state, limit_var))
+        measure_btn.pack(side="left", padx=(0, 4))
+        # A2.1: ffmpeg is not on a default Windows PATH, and the
+        # tag-derived Level column works without it. Disable with a
+        # reason rather than letting the button raise.
+        self._disable_without_ffmpeg(measure_btn)
+
         ctk.CTkButton(
             bot_frame, text="Close", width=70,
             command=popup.destroy).pack(side="left", padx=(0, 4))
@@ -507,10 +630,36 @@ class SimilarityUIMixin:
         # Shared state dict for the results window
         sim_state = {
             "seed_ids": seed_ids,
-            "result_map": {},       # iid → result dict
+            "result_map": {},       # iid → result dict, visible rows only
+            "all_results": [],      # every scored candidate (v3.8)
             "status_label": status_label,
             "popup": popup,
+            "startle_var": startle_var,
+            "startle_enabled": startle_enabled,
+            "level_var": level_var,
+            "level_enabled": level_enabled,
+            "pool_label": pool_label,
+            "vol_var": vol_var,
+            "vol_enabled": vol_enabled,
         }
+        self._refresh_pool_report(sim_state)
+
+        # The quietness sliders re-render from the cached scores; they do
+        # not re-run the search. Wired after sim_state exists because the
+        # callbacks close over it.
+        def _on_quietness_change(*_args):
+            startle_label.configure(text=_startle_text())
+            level_label.configure(text=_level_text())
+            if sim_state["all_results"]:
+                self._apply_quietness_filter(result_tree, sim_state, limit_var)
+
+        startle_slider.configure(command=lambda _v: _on_quietness_change())
+        level_slider.configure(command=lambda _v: _on_quietness_change())
+        startle_enabled.trace_add("write", _on_quietness_change)
+        level_enabled.trace_add("write", _on_quietness_change)
+        # Dyn range behaves like its neighbours now.
+        vol_enabled.trace_add("write", _on_quietness_change)
+        vol_change_hook["fn"] = _on_quietness_change
 
         # Wire up search button
         search_btn.configure(command=lambda: self._do_sim_search(
@@ -523,30 +672,76 @@ class SimilarityUIMixin:
 
     def _do_sim_search(self, result_tree, sim_state, limit_var, vol_var,
                        vol_enabled, blend_var, weight_vars=None):
-        """Execute similarity search and populate the results Treeview."""
+        """Score the library against the seeds, then render (v3.8).
+
+        Split in two. This half is the expensive part — the query, the
+        z-scoring, the distance matrix — and runs only on Search. The
+        quietness sliders re-render from `all_results` without touching
+        the database, which is what makes dragging one feel like a
+        filter rather than a search.
+
+        `limit=None` deliberately: every scored candidate is kept, so
+        `_apply_quietness_filter` can restate Match % over a complete
+        candidate set. The loop in `find_similar` builds those dicts
+        regardless, so asking for all of them costs nothing.
+        """
         from music_manager.core.similarity import find_similar
+
+        blend = blend_var.get()
+        seed_ids = sim_state["seed_ids"]
+
+        results = find_similar(
+            list(seed_ids), limit=None,
+            # Not volatility_max: that filtered in the query, so the
+            # slider only bit on Search while its two neighbours redrew
+            # as they moved. It is applied in the tree now, with them.
+            blend=blend,
+            weights={g: v.get() for g, v in (weight_vars or {}).items()})
+
+        # Filter out tracks already in the profile
+        selected_track_ids = self._resolve_current_to_track_ids()
+        sim_state["all_results"] = [
+            r for r in results if r["track_id"] not in selected_track_ids]
+
+        self._apply_quietness_filter(result_tree, sim_state, limit_var)
+
+    def _apply_quietness_filter(self, result_tree, sim_state, limit_var):
+        """Re-render from the cached scores. No query, no re-scoring.
+
+        Bound to the sliders, so it runs on every drag.
+        """
+        from music_manager.core.similarity import (
+            filter_by_quietness, recompute_match_percentiles,
+        )
+        from music_manager.interfaces.gui.treeutil import UNMEASURED
 
         try:
             limit = int(limit_var.get())
         except ValueError:
             limit = 50
-        vol_max = vol_var.get() if vol_enabled.get() else None
-        blend = blend_var.get()
-        seed_ids = sim_state["seed_ids"]
 
-        results = find_similar(
-            list(seed_ids), limit=limit,
-            volatility_max=vol_max, blend=blend,
-            weights={g: v.get() for g, v in (weight_vars or {}).items()})
+        results = sim_state.get("all_results") or []
+        startle_max = (sim_state["startle_var"].get()
+                       if sim_state["startle_enabled"].get() else None)
+        level_max = (sim_state["level_var"].get()
+                     if sim_state["level_enabled"].get() else None)
+        volatility_max = (sim_state["vol_var"].get()
+                          if sim_state["vol_enabled"].get() else None)
 
-        # Filter out tracks already in the profile
-        selected_track_ids = self._resolve_current_to_track_ids()
-        results = [r for r in results if r["track_id"] not in selected_track_ids]
+        survivors, dropped = filter_by_quietness(
+            results, startle_max=startle_max, level_max=level_max,
+            volatility_max=volatility_max)
 
-        # Populate tree
+        # Restated over the survivors, so "closer than 92% of candidates"
+        # keeps referring to the candidates that got through the filter —
+        # which is how volatility_max has always behaved, it just does its
+        # filtering before scoring rather than after.
+        survivors = recompute_match_percentiles(survivors)
+        visible = survivors[:limit]
+
         result_tree.delete(*result_tree.get_children())
         sim_state["result_map"].clear()
-        for r in results:
+        for r in visible:
             match_pct = r.get("match_pct")
             if match_pct is None:
                 tag = "match_loose"
@@ -556,6 +751,8 @@ class SimilarityUIMixin:
                 tag = "match_loose"
             else:
                 tag = "match_weak"
+            startle = r.get("startle_local")
+            offset = r.get("playback_offset")
             iid = result_tree.insert(
                 "", "end", text=r["title"],
                 tags=(tag,),
@@ -565,11 +762,284 @@ class SimilarityUIMixin:
                     f"{match_pct:.0f}%" if match_pct is not None else "",
                     f"{r['rank']} of {r['candidate_count']}",
                     f"{r['volatility']:.1f} dB" if r["volatility"] is not None else "",
+                    # An em dash, not a blank and not a zero: unmeasured
+                    # has to be visibly different from "measured, and it
+                    # is fine".
+                    f"{startle:.1f}" if startle is not None else UNMEASURED,
+                    f"{offset:+.1f}" if offset is not None else UNMEASURED,
                 ))
             sim_state["result_map"][iid] = r
 
+        unmeasured_visible = sum(
+            1 for r in visible if r.get("startle_local") is None)
         sim_state["status_label"].configure(
-            text=f"{len(results)} similar tracks found")
+            text=self._quietness_status(len(visible), len(survivors),
+                                        len(results), dropped,
+                                        unmeasured_visible))
+
+    @staticmethod
+    def _quietness_status(visible, surviving, total, dropped,
+                          unmeasured_visible=0):
+        """The surviving-candidate count, and what the filters removed.
+
+        Not decoration. The level slider has a cliff at zero — 68.8% of
+        the library is a standalone work and scores exactly 0.0 — so
+        nudging it below zero drops two thirds of the candidates in one
+        step. Without a live count that reads as a broken control rather
+        than as the filter doing exactly what was asked.
+
+        Unmeasured tracks are counted apart from tracks that genuinely
+        failed, because the two ask for different things: one is "run
+        Measure", the other is "this track is loud".
+
+        `unmeasured_visible` covers the case with no filter on at all.
+        Nothing measures quietness until asked, so a first search shows a
+        column of dashes — and reporting only "50 of 7241 shown" left
+        nothing to connect those dashes to the button that fills them in.
+        """
+        if surviving == total:
+            shown = f"{visible} of {total} shown"
+            if unmeasured_visible:
+                shown += (f" — {unmeasured_visible} not yet measured for "
+                          f"startle (use Measure quietness)")
+            return shown
+
+        parts = [f"{visible} shown, {surviving} of {total} pass"]
+        failed = dropped["startle"] + dropped["level"]
+        if failed:
+            parts.append(f"{failed} too loud")
+        unmeasured = dropped["startle_unmeasured"] + dropped["level_unmeasured"]
+        if unmeasured:
+            parts.append(f"{unmeasured} unmeasured")
+        if unmeasured_visible:
+            parts.append(f"{unmeasured_visible} shown unmeasured")
+        return " — ".join(parts)
+
+    @staticmethod
+    def _restore_grab(window):
+        """Hand the input grab back to `window`.
+
+        Destroying a window that holds a grab does not return the grab to
+        whoever had it before — it leaves no grab at all. The Find Similar
+        popup grabs when it opens, so every transient dialog raised over
+        it has to give the grab back on the way out, or the next modal
+        dialog is the only thing that can take input.
+
+        `winfo_viewable()` rather than `wait_visibility()`, and the
+        distinction is the point: grab_set() raises TclError on a window
+        that is not mapped, and the usual way to guarantee that is to
+        wait. Here there is nothing to wait *for* — the owner was mapped
+        and grabbed before the dialog over it ever existed. If it is
+        somehow not viewable now, the window is going away and there is
+        no grab worth restoring, so testing is right where waiting would
+        hang.
+        """
+        try:
+            if (window is not None and window.winfo_exists()
+                    and window.winfo_viewable()):
+                window.grab_set()
+        except tk.TclError:                         # pragma: no cover
+            pass
+
+    @staticmethod
+    def _disable_without_ffmpeg(button):
+        """Grey a control out when ffmpeg is missing, and say why (A2.1).
+
+        The quietness metrics need an external binary; the tag-derived
+        playback level does not. ffmpeg is absent from a default Windows
+        PATH, and nothing about a Find Similar button warns a user that a
+        system binary is involved — so the control has to explain itself
+        rather than raise from a thread.
+        """
+        from music_manager.core.quietness import MeasurementError, find_ffmpeg
+        try:
+            find_ffmpeg()
+        except MeasurementError:
+            button.configure(state="disabled")
+            try:
+                # CTk has no tooltip; the label carries the reason.
+                button.configure(text="Measure (needs ffmpeg)")
+            except Exception:       # pragma: no cover - cosmetic only
+                pass
+            return False
+        return True
+
+    def _measure_visible_quietness(self, result_tree, sim_state, limit_var):
+        """Measure the top candidates that have no quietness data yet (C4).
+
+        Scoped to the candidates the user is actually looking at, in score
+        order, ignoring the quietness sliders. Ignoring them is the point:
+        with a filter on, unmeasured tracks are excluded from the view, so
+        measuring only what is displayed could never measure anything.
+
+        There is no library-wide pass in this design. The library fills in
+        as curation proceeds.
+        """
+        import threading
+
+        from music_manager.core.quietness import MeasurementError
+        from music_manager.core.similarity import (
+            AnalysisCancelled, measure_quietness, tracks_needing_quietness,
+        )
+
+        try:
+            limit = int(limit_var.get())
+        except ValueError:
+            limit = 50
+
+        # parent= on every one of these. The Find Similar popup holds a
+        # grab, so a dialog parented to root instead appears behind it,
+        # takes the input grab, and cannot be seen or reached: the app
+        # simply freezes. _accept_sim_tracks already knew this.
+        owner = sim_state.get("popup")
+
+        candidates = (sim_state.get("all_results") or [])[:limit]
+        candidate_ids = [r["track_id"] for r in candidates]
+
+        # The profile's own tracks as well, not only the candidates.
+        # _do_sim_search deliberately excludes anything already accepted
+        # from the results, so a pool track that was never measured could
+        # not be reached from this window at all: the pool report said
+        # "1 not measured" and Measure replied that everything on screen
+        # was done. Both were true, and between them there was no way to
+        # fix it.
+        pool_ids = [t for t in self._resolve_current_to_track_ids()
+                    if t not in set(candidate_ids)]
+
+        if not candidate_ids and not pool_ids:
+            messagebox.showinfo("Measure", "Run a search first.", parent=owner)
+            return
+
+        try:
+            todo = tracks_needing_quietness(candidate_ids + pool_ids)
+        except Exception as exc:                    # noqa: BLE001 - reported
+            messagebox.showerror("Measure", str(exc), parent=owner)
+            return
+        if not todo:
+            messagebox.showinfo(
+                "Measure",
+                f"All {len(candidates)} candidates on screen and "
+                f"{len(pool_ids)} pool track(s) are already measured.",
+                parent=owner)
+            return
+
+        from_pool = sum(1 for t in todo if t in set(pool_ids))
+        from_candidates = len(todo) - from_pool
+        what = []
+        if from_candidates:
+            what.append(f"{from_candidates} of the top {len(candidates)} "
+                        f"candidates")
+        if from_pool:
+            what.append(f"{from_pool} track(s) already in the profile")
+
+        # ~24 tracks a minute measured over the library share (A3).
+        minutes = max(1, round(len(todo) / 24))
+        if not messagebox.askyesno(
+                "Measure quietness",
+                f"Measure {' and '.join(what)}?\n\nRoughly {minutes} "
+                f"minute(s). Results are saved as they finish, so this can "
+                f"be run again to continue.", parent=owner):
+            return
+
+        self._sim_cancel_flag = False
+        ctk = self.ctk
+        popup = tk.Toplevel(self.root)
+        popup.title("Measuring quietness")
+        popup.transient(self.root)
+        popup.resizable(False, False)
+        self._center_on_main(popup, 400, 120)
+        popup.wait_visibility()
+        popup.grab_set()
+
+        status = ctk.CTkLabel(popup, text="Measuring...")
+        status.pack(padx=20, pady=(15, 5))
+        progress = ctk.CTkProgressBar(popup, width=300)
+        progress.pack(padx=20, pady=5)
+        progress.set(0)
+        ctk.CTkButton(
+            popup, text="Cancel", width=80,
+            command=lambda: setattr(self, "_sim_cancel_flag", True)
+        ).pack(pady=(5, 10))
+
+        def _update(current, total):
+            if total:
+                progress.set(current / total)
+            status.configure(text=f"Measuring {current}/{total}")
+
+        def _done(stats):
+            popup.destroy()
+            self._restore_grab(owner)
+            # Re-render so the new numbers appear in the columns without
+            # re-running the search — but the cached results predate the
+            # measurement, so they have to be refreshed from the database.
+            self._refresh_cached_quietness(sim_state)
+            self._apply_quietness_filter(result_tree, sim_state, limit_var)
+            self._refresh_pool_report(sim_state)
+            parts = [f"Measured {stats['measured']}"]
+            if stats["silent"]:
+                parts.append(f"{stats['silent']} silent or too short")
+            if stats["failed"]:
+                parts.append(f"{stats['failed']} failed")
+            if stats["missing"]:
+                parts.append(f"{stats['missing']} file missing")
+            messagebox.showinfo("Measure", "; ".join(parts) + ".",
+                                parent=owner)
+
+        def worker():
+            try:
+                throttle = UIThrottle()
+
+                def prog(current, total, _msg):
+                    if not throttle.ready(force=(current >= total)):
+                        return
+                    self.root.after(0, lambda c=current, t=total:
+                                    _update(c, t))
+
+                stats = measure_quietness(
+                    todo, progress_callback=prog,
+                    cancel_check=lambda: self._sim_cancel_flag)
+                self.root.after(0, lambda: _done(stats))
+            except AnalysisCancelled:
+                # Whatever finished before the cancel is already written.
+                self.root.after(0, lambda: (popup.destroy(),
+                                            self._restore_grab(owner)))
+            except MeasurementError as exc:
+                self.root.after(0, lambda e=exc: (
+                    popup.destroy(), self._restore_grab(owner),
+                    messagebox.showerror("Measure", str(e), parent=owner)))
+            except Exception as exc:                # noqa: BLE001 - reported
+                self.root.after(0, lambda e=exc: (
+                    popup.destroy(), self._restore_grab(owner),
+                    messagebox.showerror("Measure", str(e), parent=owner)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _refresh_cached_quietness(sim_state):
+        """Re-read the metrics for the cached results after measuring.
+
+        `all_results` is a snapshot taken at search time, so it still
+        holds the nulls the measurement has just replaced. Only the
+        quietness columns are re-read — the scores and rankings are
+        unaffected by measurement and re-running the search would be a
+        needless several seconds.
+        """
+        from music_manager.core.similarity import LOUDNESS_FIELDS, TrackAnalysis
+
+        results = sim_state.get("all_results") or []
+        if not results:
+            return
+        by_id = {r["track_id"]: r for r in results}
+        rows = (TrackAnalysis
+                .select(TrackAnalysis.track, *[
+                    getattr(TrackAnalysis, n) for n in LOUDNESS_FIELDS])
+                .where(TrackAnalysis.track.in_(list(by_id))))
+        for row in rows:
+            result = by_id.get(row.track_id)
+            if result is None:
+                continue
+            for name in LOUDNESS_FIELDS:
+                result[name] = getattr(row, name)
 
     def _accept_sim_tracks(self, result_tree, sim_state, selected_only=True):
         """Add result tracks as track-level selections in the profile."""
@@ -611,6 +1081,86 @@ class SimilarityUIMixin:
         sim_state["status_label"].configure(
             text=f"{added} accepted, {remaining} remaining")
 
+        # C6: the pool report describes the profile's selections, so it
+        # moves every time something is accepted.
+        self._refresh_pool_report(sim_state)
+
+    def _refresh_pool_report(self, sim_state):
+        """Recompute the pool panel from the profile's current selections.
+
+        Describes what the *profile* will produce, not what the search
+        returned — under shuffle the search order means nothing and the
+        pool is the only thing with stable properties.
+        """
+        panel = sim_state.get("pool_label")
+        if panel is None:
+            return
+        try:
+            report = self._build_pool_report()
+        except Exception as exc:                    # noqa: BLE001 - shown
+            logger.debug("Pool report failed: %s", exc)
+            panel.configure(text="Pool report unavailable.")
+            return
+        from music_manager.core.pool_report import describe
+        panel.configure(text="\n".join(describe(report)))
+
+    def _build_pool_report(self):
+        """Gather the profile's accepted tracks and reduce them to a report."""
+        from music_manager.core.database import Track
+        from music_manager.core.pool_report import PoolTrack, build_report
+        from music_manager.core.quietness import playback_offset
+        from music_manager.core.similarity import TrackAnalysis
+
+        track_ids = self._resolve_current_to_track_ids()
+        if not track_ids:
+            return build_report([], playlist_length=0)
+
+        rows = (TrackAnalysis
+                .select(TrackAnalysis, Track)
+                .join(Track)
+                .where(TrackAnalysis.track.in_(list(track_ids))))
+        by_id = {r.track_id: r for r in rows}
+
+        pool = []
+        for track in Track.select().where(Track.id.in_(list(track_ids))):
+            analysis = by_id.get(track.id)
+            pool.append(PoolTrack(
+                track_id=track.id,
+                title=track.title,
+                startle_local=getattr(analysis, "startle_local", None),
+                head_level=getattr(analysis, "head_level", None),
+                tail_level=getattr(analysis, "tail_level", None),
+                playback_offset=playback_offset(track.rg_track_gain,
+                                                track.rg_album_gain),
+            ))
+        return build_report(pool,
+                            playlist_length=self._profile_playlist_length(
+                                len(pool)))
+
+    def _profile_playlist_length(self, pool_size):
+        """How many tracks one generated playlist draws from the pool.
+
+        The cap is what makes the ceiling probabilistic rather than
+        certain, so getting it roughly right matters more than getting it
+        exactly right. A duration cap is converted at the library's mean
+        track length; anything else means the whole pool plays.
+        """
+        profile = getattr(self, "current_profile", None)
+        mode = getattr(profile, "length_mode", None)
+        value = getattr(profile, "length_value", None)
+        if mode == "count" and value:
+            return min(int(value), pool_size)
+        if mode == "duration" and value:
+            from music_manager.core.database import Track
+            average = (Track
+                       .select(pw_fn_avg())
+                       .where(Track.library == self.active_library)
+                       .scalar())
+            if average:
+                return max(1, min(pool_size,
+                                  int(round(value * 1000 / average))))
+        return pool_size
+
     def _sim_result_context_menu(self, event, result_tree, sim_state):
         """Right-click context menu on the Find Similar results tree."""
         iid = result_tree.identify_row(event.y)
@@ -629,6 +1179,15 @@ class SimilarityUIMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="Play",
                          command=lambda: self._play_track(track.id))
+        # C5. Only offered when there is a moment to jump to — a track
+        # that has not been measured, or measured as silent, has none.
+        if r.get("loud_at_ms") is not None:
+            at_s = r["loud_at_ms"] / 1000.0
+            menu.add_command(
+                label=f"Audition loudest moment ({int(at_s // 60)}:"
+                      f"{int(at_s % 60):02d})",
+                command=lambda: self._audition_loud_moment(
+                    track.id, r, owner=sim_state.get("popup")))
         if track.work_id:
             menu.add_command(label="Details...",
                              command=lambda: self._show_work_details(track.work_id))
@@ -638,6 +1197,55 @@ class SimilarityUIMixin:
         menu.add_command(label="Show in Folder",
                          command=lambda: self._show_track_in_folder(track.id))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _audition_loud_moment(self, track_id, result, owner=None):
+        """Play the passage the startle score came from (C5).
+
+        Eight seconds of listening in place of trusting a number. The
+        extraction is quick but not instant over the share, so it runs
+        off the UI thread; the player is then handed the excerpt on the
+        UI thread like any other file.
+        """
+        import threading
+
+        from music_manager.core.database import Track
+        from music_manager.core.quietness import (
+            MeasurementError, extract_excerpt, prune_auditions,
+        )
+
+        track = Track.get_by_id(track_id)
+        source = Path(track.folder.root_path) / track.relative_path
+        if not source.exists():
+            messagebox.showerror("File Not Found",
+                                 f"File not found:\n{source}", parent=owner)
+            return
+
+        at_ms = result.get("loud_at_ms")
+        if at_ms is None:
+            messagebox.showinfo(
+                "Audition",
+                "This track has no measured loud moment. Run Measure "
+                "quietness first.", parent=owner)
+            return
+
+        def worker():
+            try:
+                prune_auditions()
+                # The work gain, so the excerpt plays at the level MA
+                # would play it. Without this the audition answers a
+                # question nobody asked: how loud the file is, rather
+                # than how loud it will be in the playlist.
+                excerpt = extract_excerpt(source, at_ms,
+                                          gain_db=track.rg_album_gain)
+                self.root.after(0, lambda: self._open_in_player(excerpt))
+            except MeasurementError as exc:
+                self.root.after(0, lambda e=exc: messagebox.showerror(
+                    "Audition", str(e), parent=owner))
+            except Exception as exc:                # noqa: BLE001 - reported
+                self.root.after(0, lambda e=exc: messagebox.showerror(
+                    "Audition", str(e), parent=owner))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _sim_re_search(self, result_tree, sim_state, limit_var, vol_var,
                        vol_enabled, blend_var, weight_vars=None):

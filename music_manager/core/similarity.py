@@ -53,6 +53,7 @@ import peewee as pw
 from music_manager.core.database import (
     MAX_PATH_LENGTH, Album, BaseModel, Composer, Library, Track, SourceFolder,
     database)
+from music_manager.core.quietness import playback_offset
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +107,82 @@ GROUP_DESCRIPTIONS = {
 }
 
 
+# v3.8 quietness metrics. Named once, because they live on two tables and
+# are copied by hand in scanner._snapshot_analyses / _restore_analyses —
+# four places that must agree, and the failure mode when they do not is a
+# column that silently blanks on the next full rescan, hours later.
+# test_quietness_storage.py asserts this list against both models.
+#
+# Which of these reach a slider is decided in CM-quietness-A4-report.md
+# §6, not here: `startle_local` and the derived playback level. The rest
+# are stored because re-measuring the library costs ~3 hours and a
+# nullable double costs nothing — `startle_delta` in particular MUST NOT
+# be exposed as a filter, since it inverts on sustained loud passages
+# (A4 §3.2).
+LOUDNESS_FIELDS = (
+    "startle_local",     # LU, worst rise above the preceding 30 s — SHIPS
+    "startle_delta",     # LU, diagnostic only; inverts, see A4 §3.2
+    "rise_rate",         # LU, diagnostic only; tracks silence, A4 §5.4
+    "lra",               # LU, diagnostic; r=0.78 with volatility
+    "head_level",        # LU, first 10 s relative to the body
+    "tail_level",        # LU, last 10 s relative to the body
+    "loud_at_ms",        # where startle_local happens, for C5's audition
+    "integrated_lufs",
+    "loudness_version",
+)
+
+
+def _loudness_columns():
+    """The v3.8 columns, as fresh field instances.
+
+    A factory rather than a dict of shared instances: peewee fields bind
+    to the model that declares them, so handing the same object to two
+    tables — or to a migration and a model — corrupts both.
+
+    Every one is `null=True`, and not merely because the data is
+    optional. A non-null `add_column` makes peewee drop and recreate the
+    table, and `track_analysis` is CASCADE-linked to `Track`.
+    """
+    return {
+        "startle_local": pw.DoubleField(null=True),
+        "startle_delta": pw.DoubleField(null=True),
+        "rise_rate": pw.DoubleField(null=True),
+        "lra": pw.DoubleField(null=True),
+        "head_level": pw.DoubleField(null=True),
+        "tail_level": pw.DoubleField(null=True),
+        "loud_at_ms": pw.IntegerField(null=True),
+        "integrated_lufs": pw.DoubleField(null=True),
+        "loudness_version": pw.IntegerField(null=True),
+    }
+
+
 class TrackAnalysis(BaseModel):
-    """Per-track audio feature vector and volatility score."""
+    """Per-track audio feature vector, volatility, and quietness metrics.
+
+    The quietness columns (v3.8) are versioned by `loudness_version`,
+    which moves independently of `feature_version`. Bumping one must not
+    invalidate the other: the feature vector costs a librosa pass at
+    219 MB + 93 MB per audio-minute, the quietness metrics cost an ffmpeg
+    pass at a few MB, and forcing either to be redone for the other's
+    sake is the coupling the separate pass exists to avoid.
+    """
 
     track = pw.ForeignKeyField(Track, unique=True, on_delete="CASCADE")
     features = pw.TextField()  # JSON list of floats
     volatility = pw.DoubleField(null=True)
     analyzed_at = pw.DateTimeField()
     feature_version = pw.IntegerField(default=1)
+
+    # --- v3.8 quietness metrics; see LOUDNESS_FIELDS ---
+    startle_local = pw.DoubleField(null=True)
+    startle_delta = pw.DoubleField(null=True)
+    rise_rate = pw.DoubleField(null=True)
+    lra = pw.DoubleField(null=True)
+    head_level = pw.DoubleField(null=True)
+    tail_level = pw.DoubleField(null=True)
+    loud_at_ms = pw.IntegerField(null=True)
+    integrated_lufs = pw.DoubleField(null=True)
+    loudness_version = pw.IntegerField(null=True)
 
     class Meta:
         table_name = "track_analysis"
@@ -143,6 +212,21 @@ class AnalysisSnapshot(BaseModel):
     file_mtime = pw.DoubleField(null=True)
     file_size = pw.IntegerField(null=True)
 
+    # --- v3.8 quietness metrics; see LOUDNESS_FIELDS ---
+    # These must exist here as well as on TrackAnalysis. Omitting them
+    # would not fail: the feature vector would survive a full rescan and
+    # every quietness column would come back blank, discovered hours
+    # later as empty cells in Find Similar.
+    startle_local = pw.DoubleField(null=True)
+    startle_delta = pw.DoubleField(null=True)
+    rise_rate = pw.DoubleField(null=True)
+    lra = pw.DoubleField(null=True)
+    head_level = pw.DoubleField(null=True)
+    tail_level = pw.DoubleField(null=True)
+    loud_at_ms = pw.IntegerField(null=True)
+    integrated_lufs = pw.DoubleField(null=True)
+    loudness_version = pw.IntegerField(null=True)
+
     class Meta:
         table_name = "track_analysis_snapshot"
         indexes = (
@@ -151,18 +235,71 @@ class AnalysisSnapshot(BaseModel):
 
 
 def ensure_table():
-    """Create the similarity tables if they don't exist."""
+    """Create the similarity tables, and add any columns they are missing.
+
+    v3.8 replaced two things here that were waiting to bite.
+
+    `SqliteMigrator` was hardcoded, and production is MariaDB. It
+    happened to work for the one column it was asked to add, because the
+    generated SQL was the same either way; it would not have kept
+    working. `database.py` has had the backend-aware form since v3.5, and
+    this now uses it.
+
+    The add was also wrapped in a bare `except OperationalError: pass`,
+    which cannot tell "column already exists" from "the column was not
+    added". A migration that silently fails leaves a model whose fields
+    do not match its table, and the report of that arrives much later as
+    a query error from somewhere unrelated. Presence is now checked with
+    `get_columns()` and a genuine failure is allowed to raise.
+    """
     from music_manager.core.database import database
+
     database.create_tables([TrackAnalysis, AnalysisSnapshot])
-    # Add feature_version column if missing (existing databases)
-    from playhouse.migrate import SqliteMigrator, migrate as run_migrate
-    migrator = SqliteMigrator(database)
-    try:
+
+    from playhouse.migrate import (MySQLMigrator, SqliteMigrator,
+                                   migrate as run_migrate)
+
+    # Ask the *connected* database what it is, rather than asking the
+    # config what it should be. `initialize_database` accepts an explicit
+    # target, so the two can legitimately disagree — the test suite opens
+    # a temporary SQLite file on a machine whose config.json says mysql —
+    # and picking the migrator from config would then choose it for a
+    # database that is not there.
+    target = getattr(database, "obj", database)
+    migrator = (MySQLMigrator(database)
+                if isinstance(target, pw.MySQLDatabase)
+                else SqliteMigrator(database))
+
+    def add_missing(table, columns):
+        """Add whichever of `columns` the table does not have.
+
+        IMPORTANT: every field must be null=True. Peewee implements a
+        non-null add as a table rebuild, and `track_analysis` is
+        CASCADE-linked to `Track` — the rebuild would take the analyses
+        with it.
+        """
+        existing = {col.name for col in database.get_columns(table)}
+        operations = [migrator.add_column(table, name, field)
+                      for name, field in columns.items()
+                      if name not in existing]
+        if operations:
+            run_migrate(*operations)
+            logger.info("Migrated: added %s to %s",
+                        ", ".join(sorted(
+                            set(columns) - existing)), table)
+
+    # feature_version predates v3.8 and is not null=True, so it keeps its
+    # own call: it is long since present everywhere, and widening the
+    # rule for one legacy column would weaken the rule.
+    existing = {col.name for col in database.get_columns("track_analysis")}
+    if "feature_version" not in existing:
         run_migrate(migrator.add_column(
             "track_analysis", "feature_version",
             pw.IntegerField(default=1)))
-    except pw.OperationalError:
-        pass  # column already exists
+        logger.info("Migrated: added feature_version to track_analysis")
+
+    add_missing("track_analysis", _loudness_columns())
+    add_missing("track_analysis_snapshot", _loudness_columns())
 
 
 @contextmanager
@@ -607,7 +744,14 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
 
     Args:
         seed_track_ids: List of Track IDs to use as seeds.
-        limit: Maximum number of results.
+        limit: Maximum number of results. **None returns every scored
+            candidate**, which costs nothing extra: the loop below already
+            builds a dict for each one and only truncates at the end.
+            The v3.8 UI asks for all of them so its sliders can filter in
+            the tree and still restate Match % over a candidate set that
+            is genuinely complete — a percentile recomputed over a
+            truncated fetch would be on a different scale and quietly
+            wrong.
         volatility_max: If set, exclude tracks with volatility above this.
         blend: 0.0 = pure nearest-seed distance, 1.0 = pure consensus
                (how many seeds agree the candidate is close).
@@ -710,7 +854,230 @@ def find_similar(seed_track_ids: list[int], limit: int = 50,
             "volatility": round(a.volatility, 3) if a.volatility is not None else None,
             "seed_count": len(seed_vectors),
             "score": round(float(scores[i]), 3),
+            # v3.8. Carried on every result rather than fetched when a
+            # filter is switched on: the sliders filter in the tree, and
+            # a slider that has to hit the database to move is not a
+            # slider. These come from the join that is already happening,
+            # so they cost nothing.
+            #
+            # None throughout means "not measured", never "safe" — see
+            # quietness.playback_offset.
+            "startle_local": a.startle_local,
+            "lra": a.lra,
+            "head_level": a.head_level,
+            "tail_level": a.tail_level,
+            "loud_at_ms": a.loud_at_ms,
+            "integrated_lufs": a.integrated_lufs,
+            "loudness_version": a.loudness_version,
+            "playback_offset": playback_offset(
+                track.rg_track_gain, track.rg_album_gain),
         })
 
     results.sort(key=lambda r: r["score"])
     return results[:limit]
+
+
+# How many parallel ffmpeg processes a demand-driven measurement uses.
+# Not `default_worker_count()`, which is sized for librosa: that costs
+# 219 MB + 93 MB per audio-minute per worker and swaps at 18, while
+# ebur128 streams in a few MB. The limit here is read bandwidth off the
+# library share, and 8 is where the measured gain flattened.
+QUIETNESS_WORKERS = 8
+
+
+def tracks_needing_quietness(track_ids):
+    """Which of these tracks have no current quietness measurement.
+
+    Keyed on `loudness_version`, not on whether `startle_local` is null.
+    A digitally silent track measures successfully and legitimately has
+    no startle value; keying on the metric would put it back in the queue
+    on every pass, forever.
+    """
+    from music_manager.core.quietness import LOUDNESS_VERSION
+
+    rows = (TrackAnalysis
+            .select(TrackAnalysis.track, TrackAnalysis.loudness_version)
+            .where(TrackAnalysis.track.in_(list(track_ids))))
+    current = {r.track_id for r in rows
+               if r.loudness_version == LOUDNESS_VERSION}
+    return [tid for tid in track_ids if tid not in current]
+
+
+def measure_quietness(track_ids, progress_callback=None,
+                      workers=QUIETNESS_WORKERS, cancel_check=None):
+    """Measure these tracks and store the result. Demand-driven (C4).
+
+    There is no library-wide quietness pass anywhere in v3.8, and none is
+    needed: curation happens over 50-100 candidates at a time, so the
+    library fills in as it is used.
+
+    Measurement runs on a thread pool because it is subprocess work
+    waiting on I/O; the writes are done afterwards on one thread, because
+    a peewee connection is not something to share across threads.
+
+    Returns a stats dict. `silent` counts tracks that measured correctly
+    and have nothing to report — digital silence, or shorter than the 3 s
+    short-term window. Those are stamped with the version so they are not
+    re-queued, but their metrics stay null: unmeasurable is not quiet.
+    """
+    import concurrent.futures
+
+    from music_manager.core.quietness import (
+        LOUDNESS_VERSION, MeasurementError, find_ffmpeg, measure,
+    )
+
+    stats = {"measured": 0, "silent": 0, "failed": 0, "missing": 0}
+    if not track_ids:
+        return stats
+
+    binary = find_ffmpeg()          # raises MeasurementError if absent
+
+    # peewee keeps one connection per thread, so running this from the
+    # GUI's worker opens a new one — and nothing closed it, leaking a
+    # MariaDB connection on every Measure. Closed here, but only if this
+    # thread had none on entry: called from the main thread (or a test),
+    # the connection belongs to somebody else and closing it would be a
+    # rude surprise.
+    opened_here = database.is_closed()
+    try:
+        return _measure_quietness(track_ids, progress_callback, workers,
+                                  cancel_check, binary, stats)
+    finally:
+        if opened_here and not database.is_closed():
+            database.close()
+
+
+def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
+                       binary, stats):
+    """The body of measure_quietness, so the connection can be scoped."""
+    import concurrent.futures
+
+    from music_manager.core.quietness import LOUDNESS_VERSION, MeasurementError
+    from music_manager.core.quietness import measure
+
+    rows = list(Track.select(Track.id, Track.relative_path,
+                             SourceFolder.root_path)
+                .join(SourceFolder, on=(Track.folder == SourceFolder.id))
+                .where(Track.id.in_(list(track_ids)))
+                .objects())
+    total = len(rows)
+
+    def measure_one(row):
+        from pathlib import Path
+        path = Path(row.root_path) / row.relative_path
+        if not path.exists():
+            return row.id, None, "missing"
+        try:
+            return row.id, measure(path, binary=binary), None
+        except MeasurementError as exc:
+            logger.warning("Quietness measurement failed for %s: %s",
+                           path, exc)
+            return row.id, None, "failed"
+
+    updates = []
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for track_id, metrics, problem in pool.map(measure_one, rows):
+            done += 1
+            if cancel_check is not None and cancel_check():
+                raise AnalysisCancelled()
+            if problem:
+                stats[problem] += 1
+            elif metrics.silent:
+                stats["silent"] += 1
+                updates.append((track_id, None))
+            else:
+                stats["measured"] += 1
+                updates.append((track_id, metrics))
+            if progress_callback:
+                progress_callback(done, total, "")
+
+    with database.atomic():
+        for track_id, metrics in updates:
+            values = {"loudness_version": LOUDNESS_VERSION}
+            if metrics is not None:
+                for name in LOUDNESS_FIELDS:
+                    if name != "loudness_version":
+                        values[name] = getattr(metrics, name)
+            (TrackAnalysis.update(**values)
+             .where(TrackAnalysis.track == track_id).execute())
+    return stats
+
+
+def filter_by_quietness(results: list[dict], startle_max: float | None = None,
+                        level_max: float | None = None,
+                        volatility_max: float | None = None) -> tuple[list, dict]:
+    """Narrow results on the v3.8 axes, and say what was dropped and why.
+
+    Returns `(survivors, counts)`, where counts explains the losses:
+    `startle`, `level`, and — separately and importantly —
+    `startle_unmeasured` and `level_unmeasured`.
+
+    **An unmeasured track is excluded, not admitted.** It cannot be shown
+    to be quiet, and the whole point of the pool is that everything in it
+    has been checked; letting unknowns through would put precisely the
+    tracks nothing is known about into the pool. But the count is
+    reported separately from a genuine failure, because the two call for
+    different actions: one means "measure these" and the other means
+    "this track is loud".
+
+    The two axes are independent — measured at ρ = −0.05 over the library
+    — so a track can fail either without implying anything about the
+    other, and both are counted against the first test they fail.
+    """
+    counts = {"startle": 0, "level": 0, "volatility": 0,
+              "startle_unmeasured": 0, "level_unmeasured": 0}
+    survivors = []
+    for result in results:
+        # Dynamic range filters here too, rather than in the query. It
+        # predates the other two and was passed to find_similar, so it
+        # only took effect on Search while the v3.8 sliders re-rendered
+        # as they moved — three adjacent sliders, one behaving unlike the
+        # others for no reason a user could see. Every result already
+        # carries its volatility, so this costs nothing.
+        if volatility_max is not None:
+            value = result.get("volatility")
+            if value is not None and value > volatility_max:
+                counts["volatility"] += 1
+                continue
+        if startle_max is not None:
+            value = result.get("startle_local")
+            if value is None:
+                counts["startle_unmeasured"] += 1
+                continue
+            if value > startle_max:
+                counts["startle"] += 1
+                continue
+        if level_max is not None:
+            value = result.get("playback_offset")
+            if value is None:
+                counts["level_unmeasured"] += 1
+                continue
+            if value > level_max:
+                counts["level"] += 1
+                continue
+        survivors.append(result)
+    return survivors, counts
+
+
+def recompute_match_percentiles(results: list[dict]) -> list[dict]:
+    """Restate Match %, rank and count over the results given.
+
+    `find_similar` computes Match % as a percentile over the candidate
+    set it scored. The v3.8 sliders filter *after* scoring, in the tree,
+    so that a drag is instant — and that silently changes what the
+    number means unless it is restated. "Closer than 92% of candidates"
+    has to keep referring to the candidates on screen, or it is quietly
+    answering a question the user is no longer asking.
+
+    Mutates and returns the same dicts, sorted by score, so the caller's
+    result_map stays valid.
+    """
+    ordered = sorted(results, key=lambda r: r["score"])
+    total = len(ordered)
+    for position, result in enumerate(ordered):
+        result["rank"] = position + 1
+        result["candidate_count"] = total
+        result["match_pct"] = round(
+            100.0 * (1.0 - position / max(total - 1, 1)), 1)
+    return ordered

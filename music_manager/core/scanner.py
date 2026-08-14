@@ -6,6 +6,7 @@ heuristic → standalone), and populates the database.
 """
 
 import logging
+import math
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -65,6 +66,10 @@ class RawTags:
     genre: str = ""
     conductor: str = ""
     ensemble: str = ""
+    # ReplayGain, in dB (v3.8). None means untagged, which is not 0.0 —
+    # see Track.rg_track_gain.
+    rg_track_gain: float | None = None
+    rg_album_gain: float | None = None
     # Parsing metadata
     disc_from_tag: bool = False  # True if disc came from a real DISCNUMBER tag
 
@@ -153,10 +158,116 @@ def extract_tags(filepath: Path) -> RawTags | None:
         except Exception:
             pass
 
+    # ReplayGain is read from the container directly rather than inside
+    # the per-format branches above (v3.8).
+    try:
+        _extract_replaygain(audio, tags)
+    except Exception as exc:                     # noqa: BLE001 - reported
+        # A malformed gain tag must not cost the file its other metadata.
+        logger.debug("ReplayGain unreadable in %s: %s", filepath, exc)
+
     # Disc number derivation (§5.3)
     _derive_disc_number(tags, filepath.name)
 
     return tags
+
+
+_RG_TRACK_KEY = "replaygain_track_gain"
+_RG_ALBUM_KEY = "replaygain_album_gain"
+_R128_TRACK_KEY = "r128_track_gain"
+_R128_ALBUM_KEY = "r128_album_gain"
+
+
+def _parse_rg_db(raw) -> float | None:
+    """A ReplayGain tag value as dB, or None if it is absent or garbage.
+
+    Seen in the wild: "-7.24 dB", "-7.24dB", "+3.1", "-7,24 dB". A tag
+    that is present but unparseable returns None rather than 0.0 — a
+    fabricated zero would claim the track plays at exactly its work's
+    level, which is both a real value and the safest one.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return None
+        raw = raw[0]
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    text = str(raw).strip().lower().removesuffix("db").strip().replace(",", ".")
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _parse_rg_r128(raw) -> float | None:
+    """An R128_*_GAIN tag as dB. Q7.8 fixed point: 256 units per dB."""
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return None
+        raw = raw[0]
+    try:
+        return int(str(raw).strip()) / 256.0
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_replaygain(audio, tags: RawTags) -> None:
+    """Read ReplayGain from any format the scanner admits (v3.8).
+
+    One function rather than a branch in each of the five `_extract_*`
+    helpers: the tag names are the same everywhere, and only the
+    *container* differs. Spreading four lines of identical parsing across
+    five extractors would be five chances to write it differently.
+
+    Opus is checked first and separately. It is an Ogg container, so it
+    would otherwise match the Vorbis branch, find nothing, and be
+    recorded as untagged when it is in fact tagged in the other
+    convention — R128_*_GAIN, Q7.8 fixed point against -23 LUFS rather
+    than a "-7.24 dB" string against -18. The reference cancels in
+    ALBUM - TRACK, so the two conventions stay comparable.
+    """
+    from mutagen.oggopus import OggOpus     # not needed elsewhere
+
+    raw_tags = getattr(audio, "tags", None)
+    if raw_tags is None:
+        return
+
+    def lowered(items):
+        return {str(k).lower(): v for k, v in items}
+
+    if isinstance(audio, OggOpus):
+        flat = lowered(raw_tags.items())
+        track = _parse_rg_r128(flat.get(_R128_TRACK_KEY))
+        album = _parse_rg_r128(flat.get(_R128_ALBUM_KEY))
+        if track is None and album is None:
+            # Some taggers write the ordinary strings into Opus anyway.
+            track = _parse_rg_db(flat.get(_RG_TRACK_KEY))
+            album = _parse_rg_db(flat.get(_RG_ALBUM_KEY))
+        tags.rg_track_gain, tags.rg_album_gain = track, album
+        return
+
+    if isinstance(raw_tags, ID3):
+        # TXXX frames, keyed by description rather than by frame id, and
+        # written in whatever case the tagger felt like.
+        flat = lowered((f.desc, "".join(f.text))
+                       for f in raw_tags.getall("TXXX"))
+    elif isinstance(audio, MP4):
+        # Freeform atoms: "----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN".
+        flat = lowered((str(k).split(":")[-1], v)
+                       for k, v in raw_tags.items())
+    elif isinstance(raw_tags, APEv2) or hasattr(raw_tags, "items"):
+        # Vorbis comments (FLAC/OGG), APEv2, and the easy mappings. All
+        # of these are plain key/value and case-insensitive enough that
+        # lowering the keys is sufficient.
+        flat = lowered(raw_tags.items())
+    else:
+        return
+
+    tags.rg_track_gain = _parse_rg_db(flat.get(_RG_TRACK_KEY))
+    tags.rg_album_gain = _parse_rg_db(flat.get(_RG_ALBUM_KEY))
 
 
 def _extract_id3(id3_tags, tags: RawTags) -> None:
@@ -1020,7 +1131,9 @@ def _snapshot_analyses(library: Library) -> int:
     A failure here must abort the scan: proceeding to the delete without
     a snapshot would destroy the analyses.
     """
-    from music_manager.core.similarity import AnalysisSnapshot, TrackAnalysis
+    from music_manager.core.similarity import (
+        LOUDNESS_FIELDS, AnalysisSnapshot, TrackAnalysis,
+    )
 
     rows = []
     query = (
@@ -1030,7 +1143,7 @@ def _snapshot_analyses(library: Library) -> int:
     )
     for ta in query:
         t = ta.track
-        rows.append({
+        row = {
             "library": library,
             "folder_id": t.folder_id,
             "relative_path": t.relative_path,
@@ -1040,7 +1153,13 @@ def _snapshot_analyses(library: Library) -> int:
             "feature_version": ta.feature_version,
             "file_mtime": t.file_mtime,
             "file_size": t.file_size,
-        })
+        }
+        # Copied from the shared name list rather than spelled out, so a
+        # metric added to the model cannot be forgotten here and silently
+        # blank itself on the next full rescan.
+        for name in LOUDNESS_FIELDS:
+            row[name] = getattr(ta, name)
+        rows.append(row)
 
     if rows:
         from peewee import chunked
@@ -1062,7 +1181,9 @@ def _restore_analyses(library: Library) -> int:
 
     Returns the number of analyses restored.
     """
-    from music_manager.core.similarity import AnalysisSnapshot, TrackAnalysis
+    from music_manager.core.similarity import (
+        LOUDNESS_FIELDS, AnalysisSnapshot, TrackAnalysis,
+    )
 
     snap_rows = list(AnalysisSnapshot.select().where(
         AnalysisSnapshot.library == library))
@@ -1098,6 +1219,7 @@ def _restore_analyses(library: Library) -> int:
             volatility=old.volatility,
             analyzed_at=old.analyzed_at,
             feature_version=old.feature_version,
+            **{name: getattr(old, name) for name in LOUDNESS_FIELDS},
         ))
 
     with database.atomic():
@@ -1544,6 +1666,10 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
             old_track.mb_work_id = raw.mb_work_id or None
             old_track.file_mtime = f_mtime
             old_track.file_size = f_size
+            # No `or None` here, unlike the string fields above: 0.0 is a
+            # real gain, and a standalone work's is exactly that.
+            old_track.rg_track_gain = raw.rg_track_gain
+            old_track.rg_album_gain = raw.rg_album_gain
             old_track.save()
             stats.files_updated += 1
             if not raw.track_number:
@@ -1573,6 +1699,9 @@ def scan_incremental(library: Library, progress_callback=None) -> IncrementalSta
                 conductor=raw.conductor or None, ensemble=raw.ensemble or None,
                 work_tag=raw.work or None, mb_work_id=raw.mb_work_id or None,
                 file_mtime=f_mtime, file_size=f_size,
+                # Not `or None`: 0.0 is a real gain. See Track.rg_track_gain.
+                rg_track_gain=raw.rg_track_gain,
+                rg_album_gain=raw.rg_album_gain,
                 first_seen=scan_started,
             )
             stats.files_added += 1
@@ -1758,6 +1887,9 @@ def _process_album_group(
             mb_work_id=raw.mb_work_id or None,
             file_mtime=f_mtime,
             file_size=f_size,
+            # Not `or None`: 0.0 is a real gain. See Track.rg_track_gain.
+            rg_track_gain=raw.rg_track_gain,
+            rg_album_gain=raw.rg_album_gain,
             first_seen=first_seen_map.get(rel_path, scan_started),
         )
         stats.tracks_created += 1

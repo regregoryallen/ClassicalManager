@@ -523,3 +523,68 @@ def test_a_leading_silence_does_not_become_the_head_level(tmp_path):
 
     a, b = measure(clean), measure(padded)
     assert a.head_level == pytest.approx(b.head_level, abs=1.5)
+
+
+# ---------------------------------------------------------------------------
+# SIGTTIN — the freeze that was not a deadlock
+# ---------------------------------------------------------------------------
+
+def test_ffmpeg_never_inherits_the_terminal():
+    """ffmpeg reading stdin suspended the whole application.
+
+    ffmpeg watches stdin for interactive keys (`q` to quit), and
+    `capture_output=True` redirects stdout and stderr but leaves stdin
+    inherited. Start the GUI as a background job — `python main.py &`,
+    which is how it is launched from a terminal — and a background
+    process reading the controlling terminal takes SIGTTIN. SIGTTIN
+    suspends the entire process group.
+
+    The application then stops dead: no repaint, no response, windows
+    still draggable because that is the window manager. It presents
+    exactly as a deadlock, and `jobs` reports the truth — Stopped.
+
+    Both defences are asserted. `-nostdin` asks ffmpeg not to read the
+    terminal; `stdin=DEVNULL` makes it unable to. The failure mode is the
+    whole application freezing, which is worth two locks.
+    """
+    import pathlib
+    import re
+
+    source = pathlib.Path("music_manager/core/quietness.py").read_text()
+
+    for command_builder in ("build_command", "extract_excerpt"):
+        start = source.index(f"def {command_builder}")
+        body = source[start:start + 2000]
+        assert '"-nostdin"' in body, f"{command_builder} omits -nostdin"
+
+    calls = re.findall(r"subprocess\.run\((.*?)\)\n", source, re.S)
+    assert calls, "no subprocess calls found — has this module moved?"
+    for call in calls:
+        assert "stdin=subprocess.DEVNULL" in call, (
+            "subprocess.run without stdin=DEVNULL:\n" + call[:200])
+
+
+def test_the_measure_command_carries_nostdin(tmp_path):
+    """Asserted on the built command, not only on the source."""
+    from music_manager.core.quietness import build_command
+
+    assert "-nostdin" in build_command(tmp_path / "x.flac", "ffmpeg")
+
+
+def test_launching_a_player_does_not_inherit_the_terminal():
+    """Same defect, same consequence — and C5's audition uses this path.
+
+    A media player that reads stdin would suspend the GUI exactly as
+    ffmpeg did.
+    """
+    import pathlib
+
+    source = pathlib.Path(
+        "music_manager/interfaces/gui/app.py").read_text()
+    start = source.index("def _open_in_player")
+    body = source[start:start + 1600]
+
+    assert "stdin=subprocess.DEVNULL" in body
+    for launcher in ('"open"', '"xdg-open"'):
+        assert launcher in body
+        assert "**detached" in body

@@ -174,7 +174,8 @@ def find_ffmpeg():
 def ffmpeg_version(binary=None):
     """ffmpeg's version string, for a report header."""
     result = subprocess.run([binary or find_ffmpeg(), "-version"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL)
     first = (result.stdout or "").strip().split("\n")[0]
     return first or "unknown"
 
@@ -183,12 +184,24 @@ def build_command(path, binary="ffmpeg"):
     """One pass, every window, onto stdout.
 
     -nostats     the progress line would interleave with nothing useful
+    -nostdin     see below; this one is not cosmetic
     metadata=1   publish M/S/I/LRA as frame metadata
     ametadata    print that metadata; `file=-` means stdout
     -f null      decode and measure, write no audio anywhere
+
+    **-nostdin stops ffmpeg reading the terminal, which froze the whole
+    application.** ffmpeg watches stdin for interactive keys (`q` to
+    quit), and `capture_output=True` redirects stdout and stderr but
+    leaves stdin inherited. Launch the GUI as a background job —
+    `python main.py &`, which is how it gets started from a terminal —
+    and a background process reading the controlling terminal takes
+    SIGTTIN, which suspends the entire process group. The application
+    stops dead: no repaint, no response, windows still draggable because
+    that is the window manager rather than us. It looks exactly like a
+    deadlock and is nothing of the kind; `jobs` reports it as Stopped.
     """
     return [
-        binary, "-hide_banner", "-nostats", "-i", str(path),
+        binary, "-hide_banner", "-nostats", "-nostdin", "-i", str(path),
         "-af", "ebur128=metadata=1,ametadata=print:file=-",
         "-f", "null", "-",
     ]
@@ -551,14 +564,15 @@ def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
     target = out_dir / f"{stem}_{int(start)}s.wav"
 
     command = [
-        binary or find_ffmpeg(), "-hide_banner", "-nostats", "-y",
+        binary or find_ffmpeg(), "-hide_banner", "-nostats", "-nostdin", "-y",
         # Before -i: ffmpeg seeks rather than decoding from the start,
         # which matters on a ten-minute movement read over a share.
         "-ss", f"{start:.3f}", "-i", str(source),
         "-t", f"{length_s:.3f}", "-ac", "2", str(target),
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL)
     except OSError as exc:
         raise MeasurementError(f"cannot run ffmpeg: {exc}") from exc
     if result.returncode != 0 or not target.exists():
@@ -572,7 +586,11 @@ def measure(path, binary=None):
     """Measure one file. Raises MeasurementError if ffmpeg cannot."""
     command = build_command(path, binary or find_ffmpeg())
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        # stdin=DEVNULL as well as -nostdin: the flag asks ffmpeg not to
+        # read the terminal, this makes it unable to. Belt and braces,
+        # because the failure mode is the whole application freezing.
+        result = subprocess.run(command, capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL)
     except OSError as exc:
         raise MeasurementError(f"cannot run ffmpeg: {exc}") from exc
     if result.returncode != 0:

@@ -1359,6 +1359,39 @@ avoiding profiles.
 Larger or longer-horizon ideas. Nothing here is committed to a release;
 each needs its own design pass before work starts.
 
+- **Bundled ffmpeg for Windows — evaluated 2026-08-13, not wired in.**
+  v3.8's quietness metrics need ffmpeg, which is absent from a default
+  Windows PATH, so Measure and Audition grey themselves out there. The
+  tag-derived playback level needs only mutagen and still works — but it
+  is silent on 68.8% of the library, so a Windows install without ffmpeg
+  gets a filter blind to two thirds of its collection.
+
+  `imageio-ffmpeg` is a pip wheel with a bundled binary, which would keep
+  the Windows story's "every dependency is a pure-Python wheel, no build
+  tools" property literally true. **Tested rather than assumed:**
+
+  - Version 0.6.0 ships ffmpeg **7.0.2 on Linux and 7.1 on Windows** —
+    different builds per platform, so metric values could in principle
+    differ slightly between them. Worth checking if it is adopted.
+  - Both `ebur128` and `ametadata` are present. It also decodes ape,
+    which covers part of the 38-file untagged residue.
+  - On three synthetic signals it reproduced every metric identically to
+    the system ffmpeg, LRA included; the window-fill timing (2.9 s /
+    0.3 s) matched on 6.1.1 and 7.0.2 alike. The Windows binary could
+    only be string-checked for filter names, not run.
+  - Cost: ~80 MB unpacked on Linux, ~88 MB on Windows.
+
+  **Recommended shape:** `find_ffmpeg()` prefers a system binary, falls
+  back to `imageio_ffmpeg.get_ffmpeg_exe()` when the package is
+  importable, and raises the existing message otherwise — an optional
+  extra, so nobody pays 80 MB who does not need it. The same note is in
+  `find_ffmpeg()`'s docstring, which is where anyone asking "why does
+  this not work on Windows" will land.
+
+  Left unwired because the build is not frozen for Windows yet (see
+  *Before any freeze/installer*), and until it is, the graceful
+  degradation is the whole story.
+
 - **Banded shuffle — planned as v3.8 Stage D, deferred 2026-08-14 with
   the mechanism designed but unbuilt.** Split a pool into 3–4 bands on a
   key, order the bands, shuffle freely within each: downward drift across

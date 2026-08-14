@@ -163,6 +163,30 @@ def find_ffmpeg():
     catch this and disable the control rather than let it surface as a
     traceback: ffmpeg is not on the PATH of a default Windows install,
     and the tag-derived level works without it.
+
+    **The Windows answer, evaluated but not wired in (v3.8).** The
+    `imageio-ffmpeg` pip wheel bundles a binary, which would keep the
+    Windows story's "every dependency is a pure-Python wheel" property
+    literally true. It was tested rather than assumed:
+
+      - Version 0.6.0 ships ffmpeg 7.0.2 on Linux and **7.1** on Windows
+        — different builds per platform, so metric values could in
+        principle differ slightly between them.
+      - Both `ebur128` and `ametadata` are present, and it decodes ape,
+        which also covers part of the untagged residue.
+      - On three synthetic signals it reproduced every metric identically
+        to the system ffmpeg, LRA included, and the window-fill timing
+        (2.9 s / 0.3 s) matched on 6.1.1 and 7.0.2 alike. The Windows
+        binary could only be string-checked for the filter names, not
+        run.
+      - It costs ~80 MB unpacked on Linux, ~88 MB on Windows.
+
+    Recommended shape when the Windows packaging work resumes: prefer a
+    system binary, fall back to `imageio_ffmpeg.get_ffmpeg_exe()` when
+    that package is importable, raise FFMPEG_MISSING otherwise — an
+    optional extra, so nobody pays 80 MB who does not need it. Left
+    unwired because this build is not frozen for Windows yet, and until
+    it is the graceful degradation above is the whole story.
     """
     import shutil
     path = shutil.which("ffmpeg")

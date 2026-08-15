@@ -46,6 +46,10 @@
       "path_rules": []
     }
   },
+  "_media_access_comment": "Optional. Rewrites the library's stored (POSIX) paths to where the files actually live on THIS machine, for Play/Measure/analysis — e.g. a Windows install where the NAS the library was scanned on is now a drive letter. Leave path_rules empty on the machine that scanned the library. This is separate from targets.*.path_rules, which rewrite paths written INTO exported playlists. find/replace are front-of-path prefix matches; write both with forward slashes (e.g. find '/mnt/MediaLib', replace 'M:') and they are normalized to the local separator. Example: { \"find\": \"/mnt/MediaLib\", \"replace\": \"M:\" }.",
+  "media_access": {
+    "path_rules": []
+  },
   "cron": {
     "library": "My Collection",
     "mode": "plex",

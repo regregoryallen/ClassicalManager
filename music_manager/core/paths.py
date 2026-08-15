@@ -7,7 +7,8 @@ mixed separators in the output.
 """
 
 import logging
-from pathlib import PurePosixPath, PureWindowsPath
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from music_manager.core.engine import ResolvedTrack
 
@@ -21,6 +22,72 @@ def canonical_path(rt: ResolvedTrack) -> str:
         POSIX path string: root_path/relative_path
     """
     return str(PurePosixPath(rt.folder_root_path) / rt.relative_path)
+
+
+def _apply_prefix_rules(path: str, path_rules: list[dict[str, str]] | None) -> str:
+    """Apply ordered {find, replace} prefix-rewrite rules to a path string.
+
+    Rules are applied in order; a rule fires when the (already possibly
+    rewritten) path starts with its 'find'. Shared by export realization
+    and local media resolution so the two can never drift apart.
+    """
+    if not path_rules:
+        return path
+    for rule in path_rules:
+        find = rule.get("find", "")
+        replace = rule.get("replace", "")
+        if find and path.startswith(find):
+            path = replace + path[len(find):]
+    return path
+
+
+def resolve_local_path(
+    root_path: str,
+    relative_path: str,
+    path_rules: list[dict[str, str]] | None = None,
+) -> Path:
+    """Resolve a stored track path to a native Path on THIS machine.
+
+    The library stores canonical POSIX paths (SourceFolder.root_path is the
+    machine that scanned it). On another machine — notably a Windows install
+    where the NAS is a drive letter — media_access.path_rules rewrite that
+    prefix to the local mount. With no matching rule the canonical path is
+    returned unchanged, so the machine that scanned the library needs no
+    configuration at all.
+
+    Args:
+        root_path: SourceFolder.root_path (canonical POSIX).
+        relative_path: Track.relative_path (POSIX, relative to root_path).
+        path_rules: media_access.path_rules; loaded from config when omitted.
+                    Hot loops (analysis, Measure) should load once and pass
+                    it in rather than re-reading config per track.
+
+    Returns:
+        A native Path. Redundant separators are collapsed, so a rule may be
+        written with or without trailing slashes.
+    """
+    if path_rules is None:
+        path_rules = load_media_access_rules()
+
+    posix = str(PurePosixPath(root_path) / relative_path)
+    rewritten = _apply_prefix_rules(posix, path_rules)
+
+    # Normalize to the running OS. os.path.normpath collapses the doubled
+    # separator a trailing-slash-vs-none mismatch would otherwise leave
+    # (e.g. "M:/" + "/Bach/..." -> "M://Bach/..."). It runs on the machine
+    # the files live on, so the native rules apply.
+    native = rewritten.replace("/", os.sep)
+    return Path(os.path.normpath(native))
+
+
+def load_media_access_rules() -> list[dict[str, str]]:
+    """Read media_access.path_rules from the active config (never raises)."""
+    from music_manager.core.config import load_config
+    try:
+        return load_config().get("media_access", {}).get("path_rules", []) or []
+    except Exception:
+        logger.warning("could not load media_access.path_rules", exc_info=True)
+        return []
 
 
 def safe_profile_filename(name: str) -> str:
@@ -70,15 +137,7 @@ def realize_path(
     Returns:
         The realized path string for the target.
     """
-    path = canonical_path(rt)
-
-    # Apply prefix-rewrite rules in order
-    if path_rules:
-        for rule in path_rules:
-            find = rule.get("find", "")
-            replace = rule.get("replace", "")
-            if find and path.startswith(find):
-                path = replace + path[len(find):]
+    path = _apply_prefix_rules(canonical_path(rt), path_rules)
 
     # Normalize separators last — ensures no mixed separators
     if os_separator != "/":

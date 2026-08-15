@@ -597,9 +597,11 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     def _play_track(self, track_id):
         """Open a track's audio file in the system default player."""
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         try:
             track = Track.get_by_id(track_id)
-            file_path = Path(track.folder.root_path) / track.relative_path
+            file_path = resolve_local_path(
+                track.folder.root_path, track.relative_path)
             if not file_path.exists():
                 messagebox.showerror("File Not Found", f"File not found:\n{file_path}")
                 return

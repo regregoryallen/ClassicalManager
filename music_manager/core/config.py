@@ -272,6 +272,18 @@ def _validate(config: dict[str, Any], path: Path) -> list[str]:
     if "m3u" in targets:
         warnings += _validate_m3u(targets["m3u"], "targets.m3u", path)
 
+    # -- media_access (optional) ----------------------------------------------
+    # Rewrites the library's stored (canonical POSIX) paths to where the files
+    # actually live on THIS machine, for playback/measurement/analysis. Distinct
+    # from targets.*.path_rules, which rewrite paths written INTO exported
+    # playlists for a downstream player. Empty/absent = no rewriting.
+    if "media_access" in config:
+        media_access = config["media_access"]
+        if not isinstance(media_access, dict):
+            raise ConfigError(f"{path}: 'media_access' must be a JSON object")
+        _validate_path_rules(
+            media_access.get("path_rules", []), "media_access.path_rules", path)
+
     # -- similarity_weights (optional) ----------------------------------------
     if "similarity_weights" in config:
         weights = config["similarity_weights"]

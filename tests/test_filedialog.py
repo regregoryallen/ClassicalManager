@@ -7,8 +7,18 @@ leaving the Name field empty and opening in the process CWD (/tmp).
 """
 
 import os
+import sys
+
+import pytest
 
 from music_manager.interfaces.filedialog import _save_start_path
+
+# _save_start_path builds an absolute path for zenity/kdialog, which only run
+# on Linux (Windows/macOS use tkinter's native dialog and never call it). The
+# assertions here are POSIX by nature; scope the module to Linux.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="_save_start_path serves zenity/kdialog, which are Linux-only")
 
 
 def test_dir_and_file_join_absolute():

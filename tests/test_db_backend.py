@@ -6,6 +6,7 @@ coverage arrives with the test matrix in a later phase.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -42,7 +43,9 @@ def test_no_database_section_uses_sqlite_db_path(tmp_path):
     _write(tmp_path, {**BASE, "db_path": "/music/lib.db"})
     s = resolve_db_settings()
     assert s.backend == "sqlite"
-    assert str(s.path) == "/music/lib.db"
+    # str(Path(...)) so the expectation is the platform's own separator: a
+    # sqlite file path is opened natively, backslashes and all, on Windows.
+    assert str(s.path) == str(Path("/music/lib.db"))
 
 
 def test_no_database_section_and_no_db_path_uses_default(tmp_path):
@@ -55,7 +58,7 @@ def test_no_database_section_and_no_db_path_uses_default(tmp_path):
 def test_explicit_sqlite_backend_honours_its_own_path(tmp_path):
     _write(tmp_path, {**BASE, "db_path": "/old/ignored.db",
                       "database": {"backend": "sqlite", "path": "/new/lib.db"}})
-    assert str(resolve_db_settings().path) == "/new/lib.db"
+    assert str(resolve_db_settings().path) == str(Path("/new/lib.db"))
 
 
 # ---------------------------------------------------------------------------

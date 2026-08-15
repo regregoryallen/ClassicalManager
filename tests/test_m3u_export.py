@@ -10,6 +10,7 @@ name each file, and the M3U half of config validation.
 """
 
 import json
+import sys
 
 import pytest
 
@@ -167,6 +168,12 @@ def test_relative_paths_are_relative_to_the_playlist(tmp_path):
     assert paths_in(lines) == ["../Bach/Cantatas/01.flac"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX single-root scenario: the track and playlist look like "
+           "different drives on Windows, so _relative_path correctly falls "
+           "back to an absolute path. Cross-platform relative_to_playlist "
+           "output is a separate, open code question (see notes).")
 def test_a_track_outside_the_playlist_root_still_resolves(tmp_path):
     # The relative_to failure branch: no shared prefix, so a computed ../
     # chain rather than an absolute path.

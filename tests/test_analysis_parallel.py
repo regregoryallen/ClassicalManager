@@ -237,7 +237,7 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
     offenders = []
     root = pathlib.Path(__file__).resolve().parent.parent / "music_manager"
     for path in (root / "interfaces").rglob("*.py"):
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if ".grab_set()" not in line:
                 continue

@@ -80,7 +80,8 @@ FFMPEG_MISSING = (
     "ffmpeg is not installed.\n"
     "  The quietness metrics need it; the tag-derived playback level does\n"
     "  not, and still works without it.\n"
-    "    sudo apt install ffmpeg\n"
+    "    sudo apt install ffmpeg           (Linux)\n"
+    "    pip install imageio-ffmpeg        (any platform; bundles a binary)\n"
     "  or see https://ffmpeg.org/download.html"
 )
 
@@ -165,35 +166,32 @@ def find_ffmpeg():
     traceback: ffmpeg is not on the PATH of a default Windows install,
     and the tag-derived level works without it.
 
-    **The Windows answer, evaluated but not wired in (v3.8).** The
-    `imageio-ffmpeg` pip wheel bundles a binary, which would keep the
-    Windows story's "every dependency is a pure-Python wheel" property
-    literally true. It was tested rather than assumed:
+    Resolution order: a system ffmpeg on PATH first, then the binary
+    bundled by the optional `imageio-ffmpeg` wheel when that package is
+    importable, else raise FFMPEG_MISSING. Preferring the system binary
+    keeps behaviour identical where one exists (notably every Linux dev
+    box); imageio-ffmpeg is the Windows answer, an optional extra so
+    nobody pays ~88 MB who does not need it — it is listed in
+    requirements-windows.txt, not the base requirements.
 
-      - Version 0.6.0 ships ffmpeg 7.0.2 on Linux and **7.1** on Windows
-        — different builds per platform, so metric values could in
-        principle differ slightly between them.
-      - Both `ebur128` and `ametadata` are present, and it decodes ape,
-        which also covers part of the untagged residue.
-      - On three synthetic signals it reproduced every metric identically
-        to the system ffmpeg, LRA included, and the window-fill timing
-        (2.9 s / 0.3 s) matched on 6.1.1 and 7.0.2 alike. The Windows
-        binary could only be string-checked for the filter names, not
-        run.
-      - It costs ~80 MB unpacked on Linux, ~88 MB on Windows.
-
-    Recommended shape when the Windows packaging work resumes: prefer a
-    system binary, fall back to `imageio_ffmpeg.get_ffmpeg_exe()` when
-    that package is importable, raise FFMPEG_MISSING otherwise — an
-    optional extra, so nobody pays 80 MB who does not need it. Left
-    unwired because this build is not frozen for Windows yet, and until
-    it is the graceful degradation above is the whole story.
+    Why imageio-ffmpeg: its wheel bundles a binary, keeping the Windows
+    story's "every dependency is a pure-Python wheel" property literally
+    true. It was tested rather than assumed (v3.8): version 0.6.0 ships
+    ffmpeg 7.0.2 on Linux and 7.1 on Windows, both carry `ebur128` and
+    `ametadata` and decode ape, and on three synthetic signals it
+    reproduced every metric — LRA included — identically to the system
+    ffmpeg, with the window-fill timing (2.9 s / 0.3 s) matching on 6.1.1
+    and 7.0.2 alike.
     """
     import shutil
     path = shutil.which("ffmpeg")
-    if path is None:
+    if path:
+        return path
+    try:
+        import imageio_ffmpeg
+    except ImportError:
         raise MeasurementError(FFMPEG_MISSING)
-    return path
+    return imageio_ffmpeg.get_ffmpeg_exe()
 
 
 def ffmpeg_version(binary=None):

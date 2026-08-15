@@ -335,6 +335,7 @@ def test_restore_grab_tolerates_a_destroyed_window():
     SimilarityUIMixin._restore_grab(Gone())
 
 
+@pytest.mark.needs_display
 def test_help_is_usable_when_opened_from_a_grabbing_window():
     """The help window is non-modal, which fails under a grab.
 
@@ -378,6 +379,7 @@ def test_help_is_usable_when_opened_from_a_grabbing_window():
         root.destroy()
 
 
+@pytest.mark.needs_display
 def test_closing_help_does_not_grab_a_window_that_has_gone():
     """The owner can be closed while help is still open."""
     tk = pytest.importorskip("tkinter")

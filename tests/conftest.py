@@ -43,6 +43,43 @@ def pytest_configure(config):
         "markers",
         "sqlite_only: test depends on SQLite specifics (schema introspection, "
         "file-level behaviour) and is skipped on a server backend.")
+    config.addinivalue_line(
+        "markers",
+        "needs_display: test maps a real window (wait_visibility); skipped where "
+        "none can be mapped — e.g. a headless/Session-0 Windows SSH session.")
+
+
+# A Toplevel's wait_visibility() blocks until the window maps, which never
+# happens in a non-interactive session (a Windows sshd logon has no window
+# station). Probe it once, in a subprocess with a hard timeout so the probe
+# itself cannot hang the run; tests marked needs_display skip when it fails.
+_WINDOW_PROBE = (
+    "import tkinter as tk\n"
+    "r = tk.Tk(); r.withdraw()\n"
+    "t = tk.Toplevel(r); t.wait_visibility(); r.destroy()\n"
+)
+
+
+def _window_mapping_works():
+    import subprocess
+    import sys
+    cached = getattr(_window_mapping_works, "_cached", None)
+    if cached is not None:
+        return cached
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _WINDOW_PROBE],
+            timeout=8, capture_output=True)
+        result = proc.returncode == 0
+    except Exception:
+        result = False
+    _window_mapping_works._cached = result
+    return result
+
+
+def pytest_runtest_setup(item):
+    if item.get_closest_marker("needs_display") and not _window_mapping_works():
+        pytest.skip("no window can be mapped (headless/Session-0 session)")
 
 
 @pytest.fixture(scope="session")

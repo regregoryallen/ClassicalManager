@@ -278,6 +278,10 @@ class SimilarityUIMixin:
         popup.resizable(False, False)
         self._center_on_main(popup, 400, 120)
         popup.wait_visibility()
+        # Whoever holds the grab now — the Find Similar popup, or nothing at
+        # all for the main-window Analyze — must get it back when this popup
+        # closes; _done referenced an `owner` that was never captured.
+        owner = self.root.grab_current()
         popup.grab_set()
 
         ctk = self.ctk
@@ -339,9 +343,11 @@ class SimilarityUIMixin:
 
         def _cancelled():
             popup.destroy()
+            self._restore_grab(owner)
 
         def _error(exc):
             popup.destroy()
+            self._restore_grab(owner)
             messagebox.showerror("Analysis Error", str(exc))
 
         threading.Thread(target=worker, daemon=True).start()

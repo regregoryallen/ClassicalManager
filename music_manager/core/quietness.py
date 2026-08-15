@@ -197,7 +197,7 @@ def find_ffmpeg():
 def ffmpeg_version(binary=None):
     """ffmpeg's version string, for a report header."""
     result = subprocess.run([binary or find_ffmpeg(), "-version"],
-                            capture_output=True, text=True,
+                            capture_output=True, text=True, encoding="utf-8",
                             stdin=subprocess.DEVNULL)
     first = (result.stdout or "").strip().split("\n")[0]
     return first or "unknown"
@@ -610,7 +610,7 @@ def extract_excerpt(source, at_ms, binary=None, lead_s=AUDITION_LEAD_S,
     command.append(str(target))
     try:
         result = subprocess.run(command, capture_output=True, text=True,
-                                stdin=subprocess.DEVNULL)
+                                encoding="utf-8", stdin=subprocess.DEVNULL)
     except OSError as exc:
         raise MeasurementError(f"cannot run ffmpeg: {exc}") from exc
     if result.returncode != 0 or not target.exists():
@@ -628,7 +628,7 @@ def measure(path, binary=None):
         # read the terminal, this makes it unable to. Belt and braces,
         # because the failure mode is the whole application freezing.
         result = subprocess.run(command, capture_output=True, text=True,
-                                stdin=subprocess.DEVNULL)
+                                encoding="utf-8", stdin=subprocess.DEVNULL)
     except OSError as exc:
         raise MeasurementError(f"cannot run ffmpeg: {exc}") from exc
     if result.returncode != 0:

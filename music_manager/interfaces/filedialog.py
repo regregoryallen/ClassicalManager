@@ -41,7 +41,8 @@ def _run(cmd, parent=None):
             holder = None
 
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", timeout=300)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:

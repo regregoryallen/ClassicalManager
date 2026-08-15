@@ -159,7 +159,7 @@ def main():
         # Read without importing the package, so --version works even
         # from an interpreter that has none of the dependencies.
         source = (Path(__file__).resolve().parent / "music_manager"
-                  / "__init__.py").read_text()
+                  / "__init__.py").read_text(encoding="utf-8")
         version = source.split('__version__ = "')[1].split('"')[0]
         print(f"Classical Manager ReplayGain tagger {version}")
         return

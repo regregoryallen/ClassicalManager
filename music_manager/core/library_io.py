@@ -183,7 +183,8 @@ def export_library(lib, path: Path) -> dict:
             "feature_version": a.feature_version,
         })
 
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
     return data
 
 

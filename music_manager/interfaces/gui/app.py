@@ -236,9 +236,10 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         try:
             desktop_dir.mkdir(parents=True, exist_ok=True)
             # Only write if content changed
-            if desktop_file.exists() and desktop_file.read_text() == entry:
+            if desktop_file.exists() and \
+                    desktop_file.read_text(encoding="utf-8") == entry:
                 return
-            desktop_file.write_text(entry)
+            desktop_file.write_text(entry, encoding="utf-8")
         except OSError as exc:
             logger.debug("Could not install .desktop file: %s", exc)
 

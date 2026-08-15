@@ -720,7 +720,7 @@ def import_library_cmd(
     from music_manager.core.library_io import import_library
 
     try:
-        data = json_mod.loads(Path(input).read_text())
+        data = json_mod.loads(Path(input).read_text(encoding="utf-8"))
     except Exception as exc:
         typer.echo(f"Error reading file: {exc}", err=True)
         raise typer.Exit(1)

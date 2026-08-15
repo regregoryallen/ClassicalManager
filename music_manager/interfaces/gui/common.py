@@ -14,14 +14,14 @@ _PREFS_PATH = PROJECT_ROOT / "gui_prefs.json"
 def _load_prefs() -> dict:
     """Load GUI preferences from disk."""
     try:
-        return json.loads(_PREFS_PATH.read_text())
+        return json.loads(_PREFS_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 def _save_prefs(prefs: dict) -> None:
     """Persist GUI preferences to disk."""
     try:
-        _PREFS_PATH.write_text(json.dumps(prefs, indent=2))
+        _PREFS_PATH.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
     except Exception:
         logger.debug("Could not save GUI prefs", exc_info=True)
 

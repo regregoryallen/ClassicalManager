@@ -687,6 +687,18 @@ def _run_pool(jobs, workers, record) -> None:
                         for pending_future in futures:
                             pending_future.cancel()
                         break
+            except cf.process.BrokenProcessPool as exc:
+                # A worker died without returning — _worker catches every
+                # Python exception, so this is the OS killing it, and on the
+                # memory-hungry librosa load that means out of memory. Each
+                # worker needs ~200 MB plus ~90 MB per minute of audio, so a
+                # long movement is over a gigabyte; too many at once exhausts
+                # RAM. Say so, with the lever to pull.
+                raise MemoryError(
+                    f"An analysis worker was terminated, most likely out of "
+                    f"memory (running {workers} workers). Long tracks need "
+                    f"~1-2 GB each. Lower 'analysis_workers' in config.json "
+                    f"and try again.") from exc
             finally:
                 # Without this a cancel waits for every queued job to run.
                 pool.shutdown(wait=False, cancel_futures=True)

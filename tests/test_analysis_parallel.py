@@ -10,6 +10,7 @@ internal/active/V3-PLAN.md.
 """
 
 import json
+import sys
 
 import pytest
 
@@ -253,3 +254,21 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
                 offenders.append(f"{path.name}:{i + 1}")
     assert offenders == [], (
         "grab_set() without a preceding wait_visibility(): " + ", ".join(offenders))
+
+
+def _worker_suicide(path):
+    """A worker that dies without returning, like an OOM kill would."""
+    import os
+    os._exit(1)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="relies on fork so the patched worker reaches the child process")
+def test_a_killed_worker_becomes_a_helpful_memory_error(monkeypatch):
+    """A worker terminated by the OS (the OOM case on long tracks) must not
+    surface as a bare BrokenProcessPool — it should name the memory cause and
+    the analysis_workers lever."""
+    monkeypatch.setattr(sim, "analyze_file", _worker_suicide)
+    with pytest.raises(MemoryError, match="analysis_workers"):
+        sim._run_pool([(1, "a.flac"), (2, "b.flac")], 2, lambda r: True)

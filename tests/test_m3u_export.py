@@ -10,6 +10,7 @@ name each file, and the M3U half of config validation.
 """
 
 import json
+import os
 import sys
 
 import pytest
@@ -47,6 +48,12 @@ def write(playlist, output_path, **target_config):
 
 def paths_in(lines):
     return [line for line in lines if not line.startswith("#")]
+
+
+def native(posix_path):
+    """Expected path with the local separator: absolute and relative M3U paths
+    default to os.sep, so '/' here becomes '\\' on Windows."""
+    return posix_path.replace("/", os.sep)
 
 
 def base_config(**targets):
@@ -144,7 +151,7 @@ def test_the_output_directory_is_created_if_absent(tmp_path):
 def test_absolute_is_the_default_style(tmp_path):
     lines = write([make_track(root="/music", rel="Bach/01.flac")],
                   tmp_path / "p.m3u")
-    assert paths_in(lines) == ["/music/Bach/01.flac"]
+    assert paths_in(lines) == [native("/music/Bach/01.flac")]
 
 
 def test_path_rules_rewrite_the_prefix(tmp_path):
@@ -154,7 +161,7 @@ def test_path_rules_rewrite_the_prefix(tmp_path):
                   tmp_path / "p.m3u",
                   path_rules=[{"find": "/mnt/MediaLib",
                                "replace": "/media/MediaLib"}])
-    assert paths_in(lines) == ["/media/MediaLib/Albums/Bach/01.flac"]
+    assert paths_in(lines) == [native("/media/MediaLib/Albums/Bach/01.flac")]
 
 
 def test_relative_paths_are_relative_to_the_playlist(tmp_path):
@@ -165,7 +172,7 @@ def test_relative_paths_are_relative_to_the_playlist(tmp_path):
     lines = write([track], playlist_dir / "p.m3u",
                   path_style="relative_to_playlist")
 
-    assert paths_in(lines) == ["../Bach/Cantatas/01.flac"]
+    assert paths_in(lines) == [native("../Bach/Cantatas/01.flac")]
 
 
 @pytest.mark.skipif(
@@ -191,7 +198,7 @@ def test_relative_mode_ignores_path_rules(tmp_path):
     lines = write([make_track(root=str(tmp_path), rel="Bach/01.flac")],
                   tmp_path / "p.m3u", path_style="relative_to_playlist",
                   path_rules=[{"find": str(tmp_path), "replace": "/nowhere"}])
-    assert paths_in(lines) == ["Bach/01.flac"]
+    assert paths_in(lines) == [native("Bach/01.flac")]
 
 
 def test_base_path_is_no_longer_applied(tmp_path):
@@ -200,7 +207,7 @@ def test_base_path_is_no_longer_applied(tmp_path):
     # change the paths written.
     lines = write([make_track(root="/music", rel="Bach/01.flac")],
                   tmp_path / "p.m3u", base_path="/media/MediaLib")
-    assert paths_in(lines) == ["/music/Bach/01.flac"]
+    assert paths_in(lines) == [native("/music/Bach/01.flac")]
 
 
 # --- Display text -------------------------------------------------------------

@@ -11,6 +11,7 @@ Extended M3U, UTF-8, extension .m3u.
 """
 
 import logging
+import os
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -31,7 +32,11 @@ class M3USerializer(Serializer):
             output_path (str): Required. Path to write the .m3u file.
             path_style (str): 'absolute' (default) or 'relative_to_playlist'.
             path_rules (list): Prefix-rewrite rules for path realization.
-            os_separator (str): Target OS separator, default '/'.
+            os_separator (str): Target OS separator. Defaults to the local
+                separator (os.sep), so an absolute playlist for a local player
+                gets '\\' on Windows and '/' on POSIX. Set it explicitly to
+                target a player on the other OS. (relative_to_playlist always
+                emits '/', which is what Music Assistant and most players want.)
             display_template (str): Optional. 'classical' (default) or 'simple'.
 
         Returns:
@@ -40,7 +45,7 @@ class M3USerializer(Serializer):
         output_path = Path(target_config["output_path"])
         path_style = target_config.get("path_style", "absolute")
         path_rules = target_config.get("path_rules", [])
-        os_separator = target_config.get("os_separator", "/")
+        os_separator = target_config.get("os_separator", os.sep)
         display_template = target_config.get("display_template", "classical")
 
         lines = ["#EXTM3U"]
@@ -54,7 +59,7 @@ class M3USerializer(Serializer):
 
             # Path
             if path_style == "relative_to_playlist":
-                track_path = _relative_path(rt, output_path)
+                track_path = _relative_path(rt, output_path, os_separator)
             else:
                 track_path = realize_path(rt, path_rules, os_separator)
 
@@ -90,23 +95,26 @@ def _format_display(rt: ResolvedTrack, template: str = "classical") -> str:
         return rt.title
 
 
-def _relative_path(rt: ResolvedTrack, playlist_path: Path) -> str:
-    """Compute a path relative to the playlist file's directory."""
+def _relative_path(rt: ResolvedTrack, playlist_path: Path,
+                   os_separator: str = "/") -> str:
+    """Compute a path relative to the playlist file's directory.
+
+    The result is normalized to os_separator last, so a Windows playlist for a
+    local player gets '\\' and a Linux one (Music Assistant's) gets '/'. The
+    computation happens in POSIX form regardless.
+    """
     track_abs = Path(canonical_path(rt))
     playlist_dir = playlist_path.parent.resolve()
 
     try:
         # Try to make a relative path
-        rel = track_abs.relative_to(playlist_dir)
-        return str(PurePosixPath(rel))
+        rel = str(PurePosixPath(track_abs.relative_to(playlist_dir)))
     except ValueError:
         # Not under the same root — compute with ../ components
+        from os.path import relpath
         try:
-            # Use os.path.relpath logic via PurePosixPath
-            from os.path import relpath
-            rel = relpath(str(track_abs), str(playlist_dir))
-            # Normalize to POSIX separators
-            return rel.replace("\\", "/")
+            rel = relpath(str(track_abs), str(playlist_dir)).replace("\\", "/")
         except ValueError:
             # Different drives on Windows, fall back to absolute
-            return str(PurePosixPath(track_abs))
+            rel = str(PurePosixPath(track_abs))
+    return rel.replace("/", os_separator) if os_separator != "/" else rel

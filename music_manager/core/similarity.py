@@ -440,11 +440,15 @@ def compute_volatility(file_path: str) -> float:
 # Per-track analysis
 # ---------------------------------------------------------------------------
 
-def _track_file_path(track: Track) -> str:
-    """Resolve a track's absolute file path."""
-    from pathlib import Path
-    folder = track.folder
-    return str(Path(folder.root_path) / track.relative_path)
+def _track_file_path(track: Track, rules=None) -> str:
+    """Resolve a track's absolute file path on this machine.
+
+    *rules* are media_access.path_rules; pass them in from batch callers
+    (which load once) so this is not a per-track config read.
+    """
+    from music_manager.core.paths import resolve_local_path
+    return str(resolve_local_path(
+        track.folder.root_path, track.relative_path, rules))
 
 
 def analyze_file(path: str) -> tuple[list[float], float]:
@@ -529,6 +533,49 @@ def expected_speedup(workers: int) -> float:
     return 1.0
 
 
+# Each worker decodes whole files into memory: ~200 MB of libraries plus
+# ~90 MB per minute of audio, so a long orchestral movement is over a
+# gigabyte. This budget caps the automatic worker count against available
+# RAM so a big library on a small machine does not OOM a worker mid-run.
+_MEMORY_PER_WORKER_GB = 2.0
+
+
+def _available_memory_bytes():
+    """Best-effort available physical memory, or None if it cannot be read.
+
+    stdlib only — no psutil dependency: sysconf on POSIX (Linux, and most
+    Unixes), GlobalMemoryStatusEx via ctypes on Windows. macOS lacks
+    SC_AVPHYS_PAGES and has no Windows API, so it returns None there and the
+    count falls back to being bounded by cores alone.
+    """
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+    except (ValueError, AttributeError, OSError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            stat = _MemStatus()
+            stat.dwLength = ctypes.sizeof(stat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullAvailPhys)
+        except Exception:      # noqa: BLE001 - best-effort probe
+            pass
+    return None
+
+
 def default_worker_count() -> int:
     """Processes to analyse with, leaving the machine usable.
 
@@ -538,16 +585,39 @@ def default_worker_count() -> int:
     doing something else. Reading the files is not the constraint — one
     stream already saturates the share (~100 MB/s against ~114 MB/s for
     sixteen), so extra workers buy CPU, not I/O.
+
+    The automatic count is also capped against available memory, because
+    workers are memory-hungry and oversubscribing RAM gets a worker killed
+    (a BrokenProcessPool) rather than merely slow. An explicit
+    `analysis_workers` is honoured as given — the user's machine, the user's
+    call — bounded only by the core count.
     """
+    from music_manager.core.config import ConfigError, load_config
+
     cores = os.cpu_count() or 2
     try:
-        from music_manager.core.config import load_config
         configured = load_config().get("analysis_workers")
-        if configured:
-            return max(1, min(int(configured), cores))
-    except Exception:
-        pass          # no config, unreadable, or not set — use the default
-    return max(1, cores * 3 // 4)
+    except ConfigError as exc:
+        # A malformed or unreadable config used to fall through silently, so a
+        # typo (a missing comma) quietly reverted to the memory-hungry default.
+        # Say so; the automatic count below is still a safe answer.
+        logger.warning("Could not read the worker count from config (%s); "
+                       "using an automatic default.", exc)
+        configured = None
+
+    if configured:
+        return max(1, min(int(configured), cores))
+
+    default = max(1, cores * 3 // 4)
+    mem = _available_memory_bytes()
+    if mem is not None:
+        mem_cap = max(1, int(mem / (_MEMORY_PER_WORKER_GB * 1024 ** 3)))
+        if mem_cap < default:
+            logger.info("Limiting analysis to %d worker(s) for the available "
+                        "memory (%.1f GB); each needs about %.1f GB.",
+                        mem_cap, mem / 1024 ** 3, _MEMORY_PER_WORKER_GB)
+        default = min(default, mem_cap)
+    return default
 
 
 def _worker(job: tuple[int, str]) -> tuple:
@@ -620,7 +690,9 @@ def analyze_library(library, progress_callback=None, workers=None):
     workers = max(1, min(workers, total))
     stats["workers"] = workers
 
-    jobs = [(t.id, _track_file_path(t)) for t in to_analyze]
+    from music_manager.core.paths import load_media_access_rules
+    rules = load_media_access_rules()
+    jobs = [(t.id, _track_file_path(t, rules)) for t in to_analyze]
     titles = {t.id: t.title for t in to_analyze}
     pending: list = []
     done = 0
@@ -681,6 +753,18 @@ def _run_pool(jobs, workers, record) -> None:
                         for pending_future in futures:
                             pending_future.cancel()
                         break
+            except cf.process.BrokenProcessPool as exc:
+                # A worker died without returning — _worker catches every
+                # Python exception, so this is the OS killing it, and on the
+                # memory-hungry librosa load that means out of memory. Each
+                # worker needs ~200 MB plus ~90 MB per minute of audio, so a
+                # long movement is over a gigabyte; too many at once exhausts
+                # RAM. Say so, with the lever to pull.
+                raise MemoryError(
+                    f"An analysis worker was terminated, most likely out of "
+                    f"memory (running {workers} workers). Long tracks need "
+                    f"~1-2 GB each. Lower 'analysis_workers' in config.json "
+                    f"and try again.") from exc
             finally:
                 # Without this a cancel waits for every queued job to run.
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -955,6 +1039,10 @@ def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
     from music_manager.core.quietness import LOUDNESS_VERSION, MeasurementError
     from music_manager.core.quietness import measure
 
+    from music_manager.core.paths import (
+        load_media_access_rules, resolve_local_path)
+    rules = load_media_access_rules()
+
     rows = list(Track.select(Track.id, Track.relative_path,
                              SourceFolder.root_path)
                 .join(SourceFolder, on=(Track.folder == SourceFolder.id))
@@ -963,8 +1051,7 @@ def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
     total = len(rows)
 
     def measure_one(row):
-        from pathlib import Path
-        path = Path(row.root_path) / row.relative_path
+        path = resolve_local_path(row.root_path, row.relative_path, rules)
         if not path.exists():
             return row.id, None, "missing"
         try:

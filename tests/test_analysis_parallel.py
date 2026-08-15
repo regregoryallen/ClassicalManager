@@ -10,6 +10,7 @@ internal/active/V3-PLAN.md.
 """
 
 import json
+import sys
 
 import pytest
 
@@ -178,6 +179,61 @@ def test_a_bad_worker_count_is_rejected_by_validation(tmp_path):
         cfg._config_path_override = None
 
 
+def _point_at(tmp_path, monkeypatch, config):
+    import music_manager.core.config as cfg
+    path = tmp_path / "config.json"
+    path.write_text(config)
+    monkeypatch.setattr(cfg, "_config_path_override", path)
+
+
+def test_a_malformed_config_warns_rather_than_silently_defaulting(
+        tmp_path, monkeypatch, caplog):
+    """A missing comma used to be swallowed and revert to the full worker
+    count with no signal. Now it warns and returns a safe automatic count."""
+    import os
+    _point_at(tmp_path, monkeypatch, '{"active_library": 1 "targets": {}}')
+    monkeypatch.setattr(sim, "_available_memory_bytes", lambda: 512 * 1024 ** 3)
+
+    with caplog.at_level("WARNING"):
+        result = default_worker_count()
+
+    assert result == max(1, (os.cpu_count() or 2) * 3 // 4)
+    assert "config" in caplog.text.lower()
+
+
+def test_worker_count_is_capped_by_available_memory(tmp_path, monkeypatch):
+    _point_at(tmp_path, monkeypatch, '{"active_library": 1, "targets": {}}')
+    # 2 GB available / 2 GB per worker leaves room for exactly one.
+    monkeypatch.setattr(sim, "_available_memory_bytes", lambda: 2 * 1024 ** 3)
+    assert default_worker_count() == 1
+
+
+def test_ample_memory_leaves_the_core_based_default(tmp_path, monkeypatch):
+    import os
+    _point_at(tmp_path, monkeypatch, '{"active_library": 1, "targets": {}}')
+    monkeypatch.setattr(sim, "_available_memory_bytes", lambda: 1024 * 1024 ** 3)
+    assert default_worker_count() == max(1, (os.cpu_count() or 2) * 3 // 4)
+
+
+def test_an_explicit_worker_count_ignores_the_memory_cap(tmp_path, monkeypatch):
+    """The user's explicit choice stands even on a small machine — it is
+    bounded by cores, not memory."""
+    import os
+    _point_at(tmp_path, monkeypatch,
+              '{"active_library": 1, "targets": {}, "analysis_workers": 2}')
+    monkeypatch.setattr(sim, "_available_memory_bytes", lambda: 1 * 1024 ** 3)
+    assert default_worker_count() == min(2, os.cpu_count() or 2)
+
+
+def test_unreadable_memory_falls_back_to_cores(tmp_path, monkeypatch):
+    """Where the memory probe returns nothing (e.g. macOS), the count is
+    bounded by cores alone rather than erroring."""
+    import os
+    _point_at(tmp_path, monkeypatch, '{"active_library": 1, "targets": {}}')
+    monkeypatch.setattr(sim, "_available_memory_bytes", lambda: None)
+    assert default_worker_count() == max(1, (os.cpu_count() or 2) * 3 // 4)
+
+
 def test_estimates_never_promise_linear_speedup():
     """The GUI shows this before a multi-hour job; it must not flatter."""
     from music_manager.core.similarity import expected_speedup
@@ -237,7 +293,7 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
     offenders = []
     root = pathlib.Path(__file__).resolve().parent.parent / "music_manager"
     for path in (root / "interfaces").rglob("*.py"):
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if ".grab_set()" not in line:
                 continue
@@ -253,3 +309,21 @@ def test_every_modal_grabs_only_after_the_window_is_visible():
                 offenders.append(f"{path.name}:{i + 1}")
     assert offenders == [], (
         "grab_set() without a preceding wait_visibility(): " + ", ".join(offenders))
+
+
+def _worker_suicide(path):
+    """A worker that dies without returning, like an OOM kill would."""
+    import os
+    os._exit(1)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="relies on fork so the patched worker reaches the child process")
+def test_a_killed_worker_becomes_a_helpful_memory_error(monkeypatch):
+    """A worker terminated by the OS (the OOM case on long tracks) must not
+    surface as a bare BrokenProcessPool — it should name the memory cause and
+    the analysis_workers lever."""
+    monkeypatch.setattr(sim, "analyze_file", _worker_suicide)
+    with pytest.raises(MemoryError, match="analysis_workers"):
+        sim._run_pool([(1, "a.flac"), (2, "b.flac")], 2, lambda r: True)

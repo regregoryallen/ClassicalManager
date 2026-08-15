@@ -20,6 +20,8 @@ def _empty_result():
 
 def _fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # os.path.expanduser("~") reads USERPROFILE on Windows, not HOME.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     home_dir = tmp_path / "Playlists"
     home_dir.mkdir()

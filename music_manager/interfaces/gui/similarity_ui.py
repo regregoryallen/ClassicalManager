@@ -278,6 +278,10 @@ class SimilarityUIMixin:
         popup.resizable(False, False)
         self._center_on_main(popup, 400, 120)
         popup.wait_visibility()
+        # Whoever holds the grab now — the Find Similar popup, or nothing at
+        # all for the main-window Analyze — must get it back when this popup
+        # closes; _done referenced an `owner` that was never captured.
+        owner = self.root.grab_current()
         popup.grab_set()
 
         ctk = self.ctk
@@ -339,9 +343,11 @@ class SimilarityUIMixin:
 
         def _cancelled():
             popup.destroy()
+            self._restore_grab(owner)
 
         def _error(exc):
             popup.destroy()
+            self._restore_grab(owner)
             messagebox.showerror("Analysis Error", str(exc))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1284,12 +1290,13 @@ class SimilarityUIMixin:
         import threading
 
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         from music_manager.core.quietness import (
             MeasurementError, extract_excerpt, prune_auditions,
         )
 
         track = Track.get_by_id(track_id)
-        source = Path(track.folder.root_path) / track.relative_path
+        source = resolve_local_path(track.folder.root_path, track.relative_path)
         if not source.exists():
             messagebox.showerror("File Not Found",
                                  f"File not found:\n{source}", parent=owner)

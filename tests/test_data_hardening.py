@@ -11,6 +11,7 @@ snapshot was lost to a suspend mid-rescan (2026-07-20).
 """
 
 import json
+import sys
 from datetime import datetime, timezone
 
 import pytest
@@ -266,6 +267,10 @@ def test_scan_counts_skipped_non_audio_extensions(lib, tmp_path):
     assert stats.tracks_no_track_number == 0
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the fixture builds a >260-char path, which Windows MAX_PATH cannot "
+           "create; scan's long-path handling on Windows is untested (see notes)")
 def test_scan_skips_and_reports_over_long_paths(lib, tmp_path):
     """A path longer than the indexed-column cap cannot live on a server
     backend. SQLite would store it happily (it ignores column widths), so

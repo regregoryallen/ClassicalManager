@@ -1,0 +1,9 @@
+# Windows extras, on top of the base requirements.
+#
+# imageio-ffmpeg bundles an ffmpeg binary in its wheel, so a Windows install
+# gets the quietness metrics and audition without a separate ffmpeg download,
+# keeping the "every dependency is a pure-Python wheel" property true.
+# find_ffmpeg() prefers a system ffmpeg and falls back to this; it is kept out
+# of the base requirements so Linux boxes with system ffmpeg don't pay ~88 MB.
+-r requirements.txt
+imageio-ffmpeg==0.6.0

@@ -948,7 +948,7 @@ class DialogsMixin:
         _save_prefs(self._prefs)
 
         try:
-            data = json.loads(Path(path).read_text())
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
         except Exception as exc:
             messagebox.showerror("Import Error", f"Cannot read file: {exc}")
             return
@@ -1008,7 +1008,8 @@ class DialogsMixin:
         results = []
         for filepath in paths:
             try:
-                lines = Path(filepath).read_text().strip().splitlines()
+                lines = Path(filepath).read_text(
+                    encoding="utf-8").strip().splitlines()
             except Exception as exc:
                 results.append(f"Error reading {filepath}: {exc}")
                 continue

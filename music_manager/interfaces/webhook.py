@@ -148,6 +148,7 @@ class JobManager:
                     args,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     cwd=os.path.dirname(self._main),
                 )
                 combined = (result.stdout + result.stderr).strip()

@@ -236,9 +236,10 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         try:
             desktop_dir.mkdir(parents=True, exist_ok=True)
             # Only write if content changed
-            if desktop_file.exists() and desktop_file.read_text() == entry:
+            if desktop_file.exists() and \
+                    desktop_file.read_text(encoding="utf-8") == entry:
                 return
-            desktop_file.write_text(entry)
+            desktop_file.write_text(entry, encoding="utf-8")
         except OSError as exc:
             logger.debug("Could not install .desktop file: %s", exc)
 
@@ -597,9 +598,11 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     def _play_track(self, track_id):
         """Open a track's audio file in the system default player."""
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         try:
             track = Track.get_by_id(track_id)
-            file_path = Path(track.folder.root_path) / track.relative_path
+            file_path = resolve_local_path(
+                track.folder.root_path, track.relative_path)
             if not file_path.exists():
                 messagebox.showerror("File Not Found", f"File not found:\n{file_path}")
                 return
@@ -682,12 +685,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     def _show_track_in_folder(self, track_id):
         """Reveal a track's file."""
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         try:
             track = Track.get_by_id(track_id)
         except Track.DoesNotExist:
             return
         self._show_in_folder(
-            Path(track.folder.root_path) / track.relative_path)
+            resolve_local_path(track.folder.root_path, track.relative_path))
 
     def _show_album_in_folder(self, album_id):
         """Reveal an album's folder.
@@ -696,11 +700,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         containing directory is derivable without touching a track.
         """
         from music_manager.core.database import Album
+        from music_manager.core.paths import resolve_local_path
         try:
             album = Album.get_by_id(album_id)
         except Album.DoesNotExist:
             return
-        self._show_in_folder(Path(album.folder.root_path) / album.album_key)
+        self._show_in_folder(
+            resolve_local_path(album.folder.root_path, album.album_key))
 
     def _show_work_in_folder(self, work_id):
         """Reveal a work by way of its first track's file."""
@@ -772,8 +778,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         # the virtual event <<SelectAll>> which on X11 maps to Ctrl+/ —
         # not Ctrl+A. Teaching the virtual event the expected keys is the
         # supported route and covers Text widgets too.
-        for seq in ("<Control-a>", "<Control-A>",
-                    "<Command-a>", "<Command-A>"):
+        #
+        # Command is bound ONLY on macOS. On Windows Tk maps the "Command"
+        # modifier to Mod1, and some environments (a VirtualBox Windows guest,
+        # and at least one Win11 laptop) hold Mod1 permanently set, so a bare
+        # "a" satisfies <Command-a> — select-all fires and eats the keystroke
+        # (a typed "a" vanishes, or highlights-then-overwrites existing text).
+        # Proven from the modifier bits: normal keys arrive with state=0x8
+        # (Mod1) and Control (0x4) absent, so only <Command-a> could match.
+        seqs = ["<Control-a>", "<Control-A>"]
+        if self.root.tk.call("tk", "windowingsystem") == "aqua":
+            seqs += ["<Command-a>", "<Command-A>"]
+
+        for seq in seqs:
             try:
                 self.root.event_add("<<SelectAll>>", seq)
             except tk.TclError:
@@ -791,10 +808,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             return "break"
 
         for cls in ("Entry", "TEntry"):
-            self.root.bind_class(cls, "<Control-a>", select_all)
-            self.root.bind_class(cls, "<Control-A>", select_all)
-            self.root.bind_class(cls, "<Command-a>", select_all)
-            self.root.bind_class(cls, "<Command-A>", select_all)
+            for seq in seqs:
+                self.root.bind_class(cls, seq, select_all)
 
     @staticmethod
     def _select_on_focus(entry):

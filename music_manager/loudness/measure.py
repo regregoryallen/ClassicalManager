@@ -107,7 +107,7 @@ def rsgain_version(binary=None):
     colour codes it is wrapped in.
     """
     result = subprocess.run([binary or find_rsgain(), "--version"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, encoding="utf-8")
     first = (result.stdout or "").strip().split("\n")[0]
     first = re.sub(r"\x1b\[[0-9;]*m", "", first).split(" - ")[0].strip()
     return first or "unknown"
@@ -203,7 +203,7 @@ def measure_work(paths, reference=REFERENCE_LUFS, binary="rsgain"):
         # failure rather than as the interruption it was. A work in
         # flight now finishes or is abandoned whole.
         result = subprocess.run(command, capture_output=True, text=True,
-                                start_new_session=True)
+                                encoding="utf-8", start_new_session=True)
     except OSError as exc:
         raise MeasurementError(f"could not run rsgain: {exc}") from exc
 

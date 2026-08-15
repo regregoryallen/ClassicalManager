@@ -517,9 +517,15 @@ class BuilderTabMixin:
         # -- Main area: library pane | buttons | playlist pane --
         main_pane = ctk.CTkFrame(tab, fg_color="transparent")
         main_pane.pack(fill="both", expand=True, padx=5, pady=5)
-        main_pane.columnconfigure(0, weight=1)
+        # uniform="panes" ties the two list columns to the SAME width
+        # regardless of their content's requested size. Without it, Tk gives
+        # each column its natural width first and splits only the leftover by
+        # weight, so the busier Library tree stays permanently wider than the
+        # Playlist tree by a fixed amount — larger under Windows' wider default
+        # fonts, where it read as ~1.5x. The buttons column is left un-uniform.
+        main_pane.columnconfigure(0, weight=1, uniform="panes")
         main_pane.columnconfigure(1, weight=0)
-        main_pane.columnconfigure(2, weight=1)
+        main_pane.columnconfigure(2, weight=1, uniform="panes")
         main_pane.rowconfigure(0, weight=1)
 
         # ---- Left: Library pane ----

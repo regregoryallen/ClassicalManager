@@ -13,7 +13,19 @@ import subprocess
 
 import pytest
 
-HAVE_FFMPEG = shutil.which("ffmpeg") is not None
+def _have_ffmpeg():
+    """True when find_ffmpeg() would succeed — a system binary OR the
+    imageio-ffmpeg wheel. Mirroring production means these tests run on a
+    Windows box that has only the wheel, not just where ffmpeg is on PATH."""
+    from music_manager.core.quietness import MeasurementError, find_ffmpeg
+    try:
+        find_ffmpeg()
+        return True
+    except MeasurementError:
+        return False
+
+
+HAVE_FFMPEG = _have_ffmpeg()
 HAVE_RSGAIN = shutil.which("rsgain") is not None
 
 needs_ffmpeg = pytest.mark.skipif(
@@ -83,11 +95,15 @@ def make_audio(path, *, level_db=-6.0, seconds=2.0, freq=440, silent=False):
     better, but a tone is deterministic across ffmpeg builds, which
     matters more for a test that asserts on tag *values*.
     """
+    from music_manager.core.quietness import find_ffmpeg
+
     amplitude = 10.0 ** (level_db / 20.0)
     channel = f"{amplitude:.6f}*sin(2*PI*{freq}*t)"
     source = ("anullsrc=r=44100:cl=stereo" if silent
               else f"aevalsrc={channel}|{channel}:s=44100:d={seconds}")
-    command = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", source,
+    # find_ffmpeg() rather than a bare "ffmpeg": on Windows the binary comes
+    # from the imageio-ffmpeg wheel and is not on PATH.
+    command = [find_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", source,
                "-t", str(seconds), "-ac", "2"]
     if str(path).endswith(".mp3"):
         command += ["-c:a", "libmp3lame", "-b:a", "128k"]

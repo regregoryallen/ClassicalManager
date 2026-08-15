@@ -1,4 +1,4 @@
-"""media_access.path_rules: resolving stored paths to this machine's mount.
+"""v3.10: media_access.path_rules — resolving stored paths to this machine's mount.
 
 The library stores canonical POSIX paths from the machine that scanned it.
 On another machine — a Windows install where the NAS is a drive letter — the

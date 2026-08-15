@@ -1,4 +1,4 @@
-"""find_ffmpeg resolution order: system PATH, then the imageio-ffmpeg wheel.
+"""v3.10: find_ffmpeg resolution order — system PATH, then the imageio-ffmpeg wheel.
 
 The imageio-ffmpeg fallback is the Windows answer (its wheel bundles a
 binary), kept optional so a Linux box with system ffmpeg pays nothing. These

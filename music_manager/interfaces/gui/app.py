@@ -772,8 +772,19 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         # the virtual event <<SelectAll>> which on X11 maps to Ctrl+/ —
         # not Ctrl+A. Teaching the virtual event the expected keys is the
         # supported route and covers Text widgets too.
-        for seq in ("<Control-a>", "<Control-A>",
-                    "<Command-a>", "<Command-A>"):
+        #
+        # Command is bound ONLY on macOS. On Windows Tk maps the "Command"
+        # modifier to Mod1, and some environments (a VirtualBox Windows guest,
+        # and at least one Win11 laptop) hold Mod1 permanently set, so a bare
+        # "a" satisfies <Command-a> — select-all fires and eats the keystroke
+        # (a typed "a" vanishes, or highlights-then-overwrites existing text).
+        # Proven from the modifier bits: normal keys arrive with state=0x8
+        # (Mod1) and Control (0x4) absent, so only <Command-a> could match.
+        seqs = ["<Control-a>", "<Control-A>"]
+        if self.root.tk.call("tk", "windowingsystem") == "aqua":
+            seqs += ["<Command-a>", "<Command-A>"]
+
+        for seq in seqs:
             try:
                 self.root.event_add("<<SelectAll>>", seq)
             except tk.TclError:
@@ -791,10 +802,8 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             return "break"
 
         for cls in ("Entry", "TEntry"):
-            self.root.bind_class(cls, "<Control-a>", select_all)
-            self.root.bind_class(cls, "<Control-A>", select_all)
-            self.root.bind_class(cls, "<Command-a>", select_all)
-            self.root.bind_class(cls, "<Command-A>", select_all)
+            for seq in seqs:
+                self.root.bind_class(cls, seq, select_all)
 
     @staticmethod
     def _select_on_focus(entry):

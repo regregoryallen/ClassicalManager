@@ -533,6 +533,49 @@ def expected_speedup(workers: int) -> float:
     return 1.0
 
 
+# Each worker decodes whole files into memory: ~200 MB of libraries plus
+# ~90 MB per minute of audio, so a long orchestral movement is over a
+# gigabyte. This budget caps the automatic worker count against available
+# RAM so a big library on a small machine does not OOM a worker mid-run.
+_MEMORY_PER_WORKER_GB = 2.0
+
+
+def _available_memory_bytes():
+    """Best-effort available physical memory, or None if it cannot be read.
+
+    stdlib only — no psutil dependency: sysconf on POSIX (Linux, and most
+    Unixes), GlobalMemoryStatusEx via ctypes on Windows. macOS lacks
+    SC_AVPHYS_PAGES and has no Windows API, so it returns None there and the
+    count falls back to being bounded by cores alone.
+    """
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+    except (ValueError, AttributeError, OSError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            stat = _MemStatus()
+            stat.dwLength = ctypes.sizeof(stat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullAvailPhys)
+        except Exception:      # noqa: BLE001 - best-effort probe
+            pass
+    return None
+
+
 def default_worker_count() -> int:
     """Processes to analyse with, leaving the machine usable.
 
@@ -542,16 +585,39 @@ def default_worker_count() -> int:
     doing something else. Reading the files is not the constraint — one
     stream already saturates the share (~100 MB/s against ~114 MB/s for
     sixteen), so extra workers buy CPU, not I/O.
+
+    The automatic count is also capped against available memory, because
+    workers are memory-hungry and oversubscribing RAM gets a worker killed
+    (a BrokenProcessPool) rather than merely slow. An explicit
+    `analysis_workers` is honoured as given — the user's machine, the user's
+    call — bounded only by the core count.
     """
+    from music_manager.core.config import ConfigError, load_config
+
     cores = os.cpu_count() or 2
     try:
-        from music_manager.core.config import load_config
         configured = load_config().get("analysis_workers")
-        if configured:
-            return max(1, min(int(configured), cores))
-    except Exception:
-        pass          # no config, unreadable, or not set — use the default
-    return max(1, cores * 3 // 4)
+    except ConfigError as exc:
+        # A malformed or unreadable config used to fall through silently, so a
+        # typo (a missing comma) quietly reverted to the memory-hungry default.
+        # Say so; the automatic count below is still a safe answer.
+        logger.warning("Could not read the worker count from config (%s); "
+                       "using an automatic default.", exc)
+        configured = None
+
+    if configured:
+        return max(1, min(int(configured), cores))
+
+    default = max(1, cores * 3 // 4)
+    mem = _available_memory_bytes()
+    if mem is not None:
+        mem_cap = max(1, int(mem / (_MEMORY_PER_WORKER_GB * 1024 ** 3)))
+        if mem_cap < default:
+            logger.info("Limiting analysis to %d worker(s) for the available "
+                        "memory (%.1f GB); each needs about %.1f GB.",
+                        mem_cap, mem / 1024 ** 3, _MEMORY_PER_WORKER_GB)
+        default = min(default, mem_cap)
+    return default
 
 
 def _worker(job: tuple[int, str]) -> tuple:

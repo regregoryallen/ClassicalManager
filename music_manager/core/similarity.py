@@ -440,11 +440,15 @@ def compute_volatility(file_path: str) -> float:
 # Per-track analysis
 # ---------------------------------------------------------------------------
 
-def _track_file_path(track: Track) -> str:
-    """Resolve a track's absolute file path."""
-    from pathlib import Path
-    folder = track.folder
-    return str(Path(folder.root_path) / track.relative_path)
+def _track_file_path(track: Track, rules=None) -> str:
+    """Resolve a track's absolute file path on this machine.
+
+    *rules* are media_access.path_rules; pass them in from batch callers
+    (which load once) so this is not a per-track config read.
+    """
+    from music_manager.core.paths import resolve_local_path
+    return str(resolve_local_path(
+        track.folder.root_path, track.relative_path, rules))
 
 
 def analyze_file(path: str) -> tuple[list[float], float]:
@@ -620,7 +624,9 @@ def analyze_library(library, progress_callback=None, workers=None):
     workers = max(1, min(workers, total))
     stats["workers"] = workers
 
-    jobs = [(t.id, _track_file_path(t)) for t in to_analyze]
+    from music_manager.core.paths import load_media_access_rules
+    rules = load_media_access_rules()
+    jobs = [(t.id, _track_file_path(t, rules)) for t in to_analyze]
     titles = {t.id: t.title for t in to_analyze}
     pending: list = []
     done = 0
@@ -955,6 +961,10 @@ def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
     from music_manager.core.quietness import LOUDNESS_VERSION, MeasurementError
     from music_manager.core.quietness import measure
 
+    from music_manager.core.paths import (
+        load_media_access_rules, resolve_local_path)
+    rules = load_media_access_rules()
+
     rows = list(Track.select(Track.id, Track.relative_path,
                              SourceFolder.root_path)
                 .join(SourceFolder, on=(Track.folder == SourceFolder.id))
@@ -963,8 +973,7 @@ def _measure_quietness(track_ids, progress_callback, workers, cancel_check,
     total = len(rows)
 
     def measure_one(row):
-        from pathlib import Path
-        path = Path(row.root_path) / row.relative_path
+        path = resolve_local_path(row.root_path, row.relative_path, rules)
         if not path.exists():
             return row.id, None, "missing"
         try:

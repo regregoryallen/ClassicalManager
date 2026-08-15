@@ -684,12 +684,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
     def _show_track_in_folder(self, track_id):
         """Reveal a track's file."""
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         try:
             track = Track.get_by_id(track_id)
         except Track.DoesNotExist:
             return
         self._show_in_folder(
-            Path(track.folder.root_path) / track.relative_path)
+            resolve_local_path(track.folder.root_path, track.relative_path))
 
     def _show_album_in_folder(self, album_id):
         """Reveal an album's folder.
@@ -698,11 +699,13 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         containing directory is derivable without touching a track.
         """
         from music_manager.core.database import Album
+        from music_manager.core.paths import resolve_local_path
         try:
             album = Album.get_by_id(album_id)
         except Album.DoesNotExist:
             return
-        self._show_in_folder(Path(album.folder.root_path) / album.album_key)
+        self._show_in_folder(
+            resolve_local_path(album.folder.root_path, album.album_key))
 
     def _show_work_in_folder(self, work_id):
         """Reveal a work by way of its first track's file."""

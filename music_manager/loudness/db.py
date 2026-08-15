@@ -120,6 +120,9 @@ def collect_works(library_name=None, work_ids=None, include_guessed=False,
     been looking at.
     """
     from music_manager.core.database import Album, Library, SourceFolder, Track
+    from music_manager.core.paths import (
+        load_media_access_rules, resolve_local_path)
+    media_rules = load_media_access_rules()
 
     query = (Track
              .select(Track, Album, SourceFolder)
@@ -184,7 +187,8 @@ def collect_works(library_name=None, work_ids=None, include_guessed=False,
             skip(SKIP_MIXED, ", ".join(sorted(suffixes)))
             continue
 
-        paths = [os.path.join(t.folder.root_path, t.relative_path)
+        paths = [str(resolve_local_path(t.folder.root_path, t.relative_path,
+                                        media_rules))
                  for t in members]
         missing = [p for p in paths if not os.path.exists(p)]
         if missing:

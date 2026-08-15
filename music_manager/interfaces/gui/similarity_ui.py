@@ -1284,12 +1284,13 @@ class SimilarityUIMixin:
         import threading
 
         from music_manager.core.database import Track
+        from music_manager.core.paths import resolve_local_path
         from music_manager.core.quietness import (
             MeasurementError, extract_excerpt, prune_auditions,
         )
 
         track = Track.get_by_id(track_id)
-        source = Path(track.folder.root_path) / track.relative_path
+        source = resolve_local_path(track.folder.root_path, track.relative_path)
         if not source.exists():
             messagebox.showerror("File Not Found",
                                  f"File not found:\n{source}", parent=owner)

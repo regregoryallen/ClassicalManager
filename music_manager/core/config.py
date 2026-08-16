@@ -377,16 +377,6 @@ def _validate_m3u(m3u: dict, context: str, path: Path) -> list[str]:
 
     warnings: list[str] = []
 
-    # Relative mode takes a different branch in m3u.py and never calls
-    # realize_path, so path_rules are silently ignored.
-    if path_style == "relative_to_playlist" and m3u.get("path_rules"):
-        warnings.append(
-            f"'{context}' sets path_rules together with path_style "
-            f"'relative_to_playlist', which ignores them. Relative paths "
-            f"need no rewriting; remove path_rules or switch to path_style "
-            f"'absolute'."
-        )
-
     # base_path was removed in v3.6.1: it prepended a prefix to absolute
     # paths, was inert in relative mode, and was mistaken for an output
     # directory. Left as a warning rather than an error so a config that

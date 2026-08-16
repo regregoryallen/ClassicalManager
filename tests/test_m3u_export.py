@@ -11,7 +11,6 @@ name each file, and the M3U half of config validation.
 
 import json
 import os
-import sys
 
 import pytest
 
@@ -166,7 +165,9 @@ def test_path_rules_rewrite_the_prefix(tmp_path):
 
 def test_relative_paths_are_relative_to_the_playlist(tmp_path):
     playlist_dir = tmp_path / "Albums" / "Playlists"
-    track = make_track(root=str(tmp_path / "Albums"),
+    # Stored roots are always forward-slash (see paths.py canonical_path),
+    # so the fixture matches that rather than tmp_path's native form.
+    track = make_track(root=str(tmp_path / "Albums").replace(os.sep, "/"),
                        rel="Bach/Cantatas/01.flac")
 
     lines = write([track], playlist_dir / "p.m3u",
@@ -175,30 +176,49 @@ def test_relative_paths_are_relative_to_the_playlist(tmp_path):
     assert paths_in(lines) == [native("../Bach/Cantatas/01.flac")]
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX single-root scenario: the track and playlist look like "
-           "different drives on Windows, so _relative_path correctly falls "
-           "back to an absolute path. Cross-platform relative_to_playlist "
-           "output is a separate, open code question (see notes).")
 def test_a_track_outside_the_playlist_root_still_resolves(tmp_path):
-    # The relative_to failure branch: no shared prefix, so a computed ../
-    # chain rather than an absolute path.
-    lines = write([make_track(root="/elsewhere", rel="Bach/01.flac")],
+    # Both paths share tmp_path's anchor (its drive on Windows, '/' on
+    # POSIX) but no prefix beyond that, so this is a computed ../ chain
+    # rather than an absolute-path fallback.
+    root = str(tmp_path / "elsewhere").replace(os.sep, "/")
+    lines = write([make_track(root=root, rel="Bach/01.flac")],
                   tmp_path / "Albums" / "Playlists" / "p.m3u",
                   path_style="relative_to_playlist")
 
     line = paths_in(lines)[0]
-    assert line.startswith("../")
-    assert line.endswith("/elsewhere/Bach/01.flac")
+    assert line.startswith(native("../"))
+    assert line.endswith(native("elsewhere/Bach/01.flac"))
 
 
-def test_relative_mode_ignores_path_rules(tmp_path):
-    # Documented behaviour, and the reason config warns about the pair.
-    lines = write([make_track(root=str(tmp_path), rel="Bach/01.flac")],
-                  tmp_path / "p.m3u", path_style="relative_to_playlist",
-                  path_rules=[{"find": str(tmp_path), "replace": "/nowhere"}])
-    assert paths_in(lines) == [native("Bach/01.flac")]
+def test_relative_mode_applies_path_rules_before_computing_the_offset(tmp_path):
+    # v3.10.1: a library scanned on the other OS stores its root in that
+    # OS's style (e.g. a Windows scan keeps the drive letter: 'M:/Albums').
+    # path_rules bring that into this machine's namespace *before* the
+    # offset is computed -- without this, relative_to_playlist had no way
+    # to relate the two paths and silently fell back to an absolute one.
+    playlist_dir = tmp_path / "Albums" / "Playlists"
+    track = make_track(root="M:/Albums", rel="Bach/01.flac")
+    replacement = str(tmp_path / "Albums").replace(os.sep, "/")
+
+    lines = write([track], playlist_dir / "p.m3u",
+                  path_style="relative_to_playlist",
+                  path_rules=[{"find": "M:/Albums", "replace": replacement}])
+
+    assert paths_in(lines) == [native("../Bach/01.flac")]
+
+
+def test_relative_mode_falls_back_to_absolute_on_a_root_mismatch(tmp_path):
+    # No path_rule bridges the stored root's style to the playlist's: the
+    # track path ends up unrooted ('M:/...') while the playlist path is
+    # rooted ('/...'), so there's no sound offset between them. Writing an
+    # absolute path is safer than guessing one.
+    playlist_dir = tmp_path / "Albums" / "Playlists"
+    track = make_track(root="M:/Albums", rel="Bach/01.flac")
+
+    lines = write([track], playlist_dir / "p.m3u",
+                  path_style="relative_to_playlist")
+
+    assert paths_in(lines) == [native("M:/Albums/Bach/01.flac")]
 
 
 def test_base_path_is_no_longer_applied(tmp_path):
@@ -244,13 +264,14 @@ def test_an_invalid_path_style_is_rejected(tmp_path):
         _validate(config, tmp_path / "config.json")
 
 
-def test_path_rules_with_relative_paths_warns(tmp_path):
+def test_path_rules_with_relative_paths_do_not_warn(tmp_path):
+    # v3.10.1: path_rules apply in relative mode too (see m3u.py
+    # _relative_path), so pairing them with relative_to_playlist is no
+    # longer inert and no longer warned about.
     config = base_config(m3u={
         "path_style": "relative_to_playlist",
         "path_rules": [{"find": "/music", "replace": "/media"}]})
-    warnings = _validate(config, tmp_path / "config.json")
-    assert len(warnings) == 1
-    assert "path_rules" in warnings[0] and "ignores them" in warnings[0]
+    assert _validate(config, tmp_path / "config.json") == []
 
 
 def test_path_rules_with_absolute_paths_do_not_warn(tmp_path):

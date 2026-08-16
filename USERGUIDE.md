@@ -978,9 +978,12 @@ C:/Users/jane/Music -> /volume1/Music
 - **Path Style**: `absolute` for full paths, `relative_to_playlist` for paths
   relative to the M3U file's location
 - **Path Rules**: Same find/replace format as Plex, applied to M3U output paths.
-  Use forward slashes on all platforms. They are ignored in
-  `relative_to_playlist` mode, which needs no rewriting; the app warns if both
-  are set.
+  Use forward slashes on all platforms. In `relative_to_playlist` mode they run
+  before the relative offset is computed — needed when the library was scanned
+  on the other OS and its stored root is in that OS's style (e.g. a
+  Windows-scanned root keeps its drive letter, `M:/Music/...`); without a rule
+  to bring that into this machine's namespace there is no correct offset to
+  compute, and the app falls back to an absolute path.
 
 `base_path` was removed in v3.6.1. It prepended a prefix to absolute paths, did
 nothing at all in relative mode, and was easily mistaken for an output folder.
@@ -1217,6 +1220,57 @@ If source folders are at different paths on each machine (e.g., `/mnt/Music` on
 Linux vs. `M:/Music` on Windows), scan from only one machine. The other machine
 can generate playlists using path rules to translate paths for its target.
 
+**Worked example — a library scanned on one OS, used from the other.** Say the
+library was scanned on Linux, so every source folder's stored root looks like
+`/mnt/MediaLib/...`. A Windows machine sharing that database sees those same
+rows — to *it*, the stored root is foreign, and reading it needs a rule
+translating `/mnt/MediaLib` to wherever Windows mounts the share (`M:`, say). The
+reverse holds too: a library scanned on Windows stores `M:/...` roots, and a Linux
+machine reading it needs a rule the other way.
+
+Two separate settings need that same rule, because they do different jobs:
+
+- **`media_access.path_rules`** — lets *this* machine find the actual files, for
+  Play, Show in Folder, Measure, and analysis.
+- **`targets.m3u.path_rules`** — controls what gets written into *exported*
+  playlists. Set independently per target; leave it pointed at wherever the
+  playlist's eventual player expects to find the files (which may not be this
+  machine at all — see [Feeding Playlists to Another Music
+  System](#feeding-playlists-to-another-music-system)).
+
+Setting only one leaves the other half broken — Play works but exports point at
+the wrong machine, or vice versa. Windows reading a Linux-scanned library:
+
+```json
+"media_access": {
+  "path_rules": [{"find": "/mnt/MediaLib", "replace": "M:"}]
+},
+"targets": {
+  "m3u": {
+    "path_style": "absolute",
+    "path_rules": [{"find": "/mnt/MediaLib", "replace": "M:"}]
+  }
+}
+```
+
+Linux reading a Windows-scanned library, same rule reversed:
+
+```json
+"media_access": {
+  "path_rules": [{"find": "M:", "replace": "/mnt/MediaLib"}]
+},
+"targets": {
+  "m3u": {
+    "path_style": "absolute",
+    "path_rules": [{"find": "M:", "replace": "/mnt/MediaLib"}]
+  }
+}
+```
+
+Both `path_style` values work with these rules — `relative_to_playlist` applies
+them before computing the offset between the track and the playlist file, so a
+foreign-OS-styled root gets translated the same way absolute mode does.
+
 ### Feeding Playlists to Another Music System
 
 Plex is not the only destination. Any system that can import M3U files can take
@@ -1253,8 +1307,15 @@ elsewhere, a different drive letter. Two ways to handle that:
 - **Absolute paths with a path rule.** Keep **Path Style** as `absolute` and add
   a **Path Rule** rewriting your path to theirs — for example find
   `/mnt/MediaLib` and replace with `/media/MediaLib`. Use this when the playlist
-  folder has to live outside the music tree. Path rules are ignored in relative
-  mode, so the two approaches are alternatives, not a combination.
+  folder has to live outside the music tree.
+
+A path rule can also be needed *with* relative mode, in one specific case: the
+library was scanned on a different OS than the one generating the playlist, so
+the stored root is in that OS's style (a Windows scan keeps its drive letter,
+`M:/Music/...`). Add a rule translating that root to this machine's — the same
+rule you'd use for `media_access.path_rules` to make Play/Measure work locally
+— and the relative offset is computed correctly. With no such mismatch, plain
+relative mode needs no path rules at all.
 
 **Triggering the import** is the other system's job, and how depends on it. Most
 pick playlists up on their next library scan, so scheduling CM's export ahead of

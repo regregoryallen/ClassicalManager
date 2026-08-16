@@ -7,6 +7,7 @@ its full V2 surface; tab/dialog/tree methods live in mixins.
 import json
 import io
 import logging
+import os
 import platform
 import re
 import sys
@@ -1103,7 +1104,14 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
             for sf in SourceFolder.select().where(
                 SourceFolder.library == self.active_library
             ):
-                self.folders_listbox.insert("end", sf.root_path)
+                # root_path is always stored forward-slash (see
+                # canonical_path), so this is display-only -- normalizing
+                # here (rather than translating via media_access.path_rules,
+                # which resolve_local_path does for Play/Measure/etc.) keeps
+                # the shown prefix matching what a path_rule's 'find' needs
+                # to match, just spelled in this machine's separator.
+                display_path = sf.root_path.replace("/", os.sep)
+                self.folders_listbox.insert("end", display_path)
                 self._folder_ids.append(sf.id)
 
     def _save_plex_section(self, event=None):

@@ -12,11 +12,12 @@ Extended M3U, UTF-8, extension .m3u.
 
 import logging
 import os
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from music_manager.core.engine import ResolvedTrack
-from music_manager.core.paths import realize_path, canonical_path
+from music_manager.core.paths import realize_path, canonical_path, _apply_prefix_rules
 from music_manager.core.serializers import Serializer
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ class M3USerializer(Serializer):
             output_path (str): Required. Path to write the .m3u file.
             path_style (str): 'absolute' (default) or 'relative_to_playlist'.
             path_rules (list): Prefix-rewrite rules for path realization.
+                Applied in relative_to_playlist mode too, before the offset
+                is computed -- needed when the library was scanned on the
+                other OS and its stored root is in that OS's style (e.g. a
+                Windows-scanned root keeps its drive letter: 'M:/Music/...').
             os_separator (str): Target OS separator. Defaults to the local
                 separator (os.sep), so an absolute playlist for a local player
                 gets '\\' on Windows and '/' on POSIX. Set it explicitly to
@@ -59,7 +64,7 @@ class M3USerializer(Serializer):
 
             # Path
             if path_style == "relative_to_playlist":
-                track_path = _relative_path(rt, output_path, os_separator)
+                track_path = _relative_path(rt, output_path, path_rules, os_separator)
             else:
                 track_path = realize_path(rt, path_rules, os_separator)
 
@@ -95,26 +100,68 @@ def _format_display(rt: ResolvedTrack, template: str = "classical") -> str:
         return rt.title
 
 
-def _relative_path(rt: ResolvedTrack, playlist_path: Path,
+_DRIVE_ANCHOR_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _path_anchor(path: str) -> str | None:
+    """The root a '/'-separated path string is anchored to.
+
+    '/' for a POSIX-absolute path, an upper-cased drive token (e.g. 'M:')
+    for a Windows-style drive-rooted path, or None for a plain relative
+    path with no anchor at all. Two paths only have a sound '../' offset
+    between them when they share an anchor -- 'M:/Music' and 'C:/Users'
+    are as unrelated as '/music' and a driveless relative path, even
+    though a naive "starts with '/'" check would call both "unrooted" and
+    miss it.
+    """
+    if path.startswith("/"):
+        return "/"
+    m = _DRIVE_ANCHOR_RE.match(path)
+    return m.group(0).upper() if m else None
+
+
+def _relative_path(rt: ResolvedTrack, output_path: Path,
+                   path_rules: list[dict[str, str]] | None = None,
                    os_separator: str = "/") -> str:
     """Compute a path relative to the playlist file's directory.
 
-    The result is normalized to os_separator last, so a Windows playlist for a
-    local player gets '\\' and a Linux one (Music Assistant's) gets '/'. The
-    computation happens in POSIX form regardless.
-    """
-    track_abs = Path(canonical_path(rt))
-    playlist_dir = playlist_path.parent.resolve()
+    path_rules run first, exactly as in absolute mode (see realize_path) --
+    a library scanned on the other OS stores its root in that OS's style
+    (e.g. Windows keeps the drive letter: 'M:/Music/...'), and without a
+    rule to bring that into this machine's namespace the offset below has
+    no correct answer. The comparison itself stays in '/'-separated
+    strings throughout rather than going through the host's native
+    pathlib.Path: POSIX and Windows disagree about what counts as rooted
+    (a bare 'M:/...' is absolute on Windows, relative on POSIX), so the
+    native class silently produced a wrong -- or wrongly-absolute -- answer
+    depending only on which OS happened to be running the export.
 
-    try:
-        # Try to make a relative path
-        rel = str(PurePosixPath(track_abs.relative_to(playlist_dir)))
-    except ValueError:
-        # Not under the same root — compute with ../ components
-        from os.path import relpath
-        try:
-            rel = relpath(str(track_abs), str(playlist_dir)).replace("\\", "/")
-        except ValueError:
-            # Different drives on Windows, fall back to absolute
-            rel = str(PurePosixPath(track_abs))
+    An anchor mismatch between the two -- different drive letters, or one
+    side rewritten to a rooted path and the other not -- is the one case
+    this can't resolve on its own; it falls back to an absolute realized
+    path with a logged warning rather than guess.
+
+    The result is normalized to os_separator last, so a Windows playlist for a
+    local player gets '\\' and a Linux one (Music Assistant's) gets '/'.
+    """
+    track = _apply_prefix_rules(canonical_path(rt), path_rules)
+    playlist_dir = str(output_path.parent.resolve()).replace(os.sep, "/")
+
+    if _path_anchor(track) != _path_anchor(playlist_dir):
+        logger.warning(
+            "Cannot compute a path relative to %r for track path %r -- "
+            "they're anchored to different roots, so there's no sound "
+            "offset between them. Writing an absolute path instead; "
+            "check path_rules.", playlist_dir, track)
+        return realize_path(rt, path_rules, os_separator)
+
+    track_parts = PurePosixPath(track).parts
+    dir_parts = PurePosixPath(playlist_dir).parts
+    i = 0
+    while (i < len(track_parts) and i < len(dir_parts)
+           and track_parts[i] == dir_parts[i]):
+        i += 1
+    rel_parts = [".."] * (len(dir_parts) - i) + list(track_parts[i:])
+    rel = "/".join(rel_parts)
+
     return rel.replace("/", os_separator) if os_separator != "/" else rel

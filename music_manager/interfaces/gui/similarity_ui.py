@@ -640,8 +640,11 @@ class SimilarityUIMixin:
         # real decision rather than a side effect of how many columns a
         # group happens to have. Timbre used to take 42% of every comparison
         # purely for having 13 of 31 columns.
+        # resolve_group_weights is no longer called here: the starting
+        # values come from sim_params_from_prefs, which consults it (and
+        # config.json) on the way through.
         from music_manager.core.similarity import (
-            DEFAULT_GROUP_WEIGHTS, GROUP_DESCRIPTIONS, resolve_group_weights)
+            DEFAULT_GROUP_WEIGHTS, GROUP_DESCRIPTIONS)
 
         weight_vars = {}
         weights_frame = ctk.CTkFrame(popup)

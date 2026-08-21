@@ -37,6 +37,144 @@ def pw_fn_avg():
 _LARGE_ANALYSIS_GAP = 100
 
 
+# ---------------------------------------------------------------------------
+# Remembered Find Similar parameters (v3.11)
+#
+# Retuning the sliders on every open, to the same values as last time,
+# was the cost of a window that always started from scratch. These are
+# kept in gui_prefs.json beside the window geometry.
+#
+# The text filter is deliberately NOT among them. A restored slider says
+# what it is doing in the label beside it; a restored text filter would
+# silently hide most of the results with nothing on screen to explain
+# why, which reads as a broken search rather than a remembered setting.
+#
+# Everything here is plain dict-in, dict-out so it can be tested without
+# a window, and every value is re-validated on the way in: gui_prefs.json
+# is hand-editable and shared between the Linux and Windows sides.
+# ---------------------------------------------------------------------------
+
+_SIM_PREFS_KEY = "find_similar_params"
+
+
+def _clamp(value, low, high, fallback):
+    """A number inside [low, high], or *fallback* if it is neither."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if number != number:                     # NaN fails every comparison
+        return fallback
+    return min(max(number, low), high)
+
+
+def sim_param_defaults():
+    """The values the window opens with when nothing has been saved."""
+    from music_manager.core.similarity import (
+        MAX_DYNAMIC_RANGE_DB, resolve_group_weights)
+    from music_manager.core.quietness import MAX_LEVEL_OFFSET_DB, MAX_STARTLE_LU
+
+    weights = resolve_group_weights(None)
+    return {
+        "limit": 50,
+        "dyn_range": {"on": False, "value": MAX_DYNAMIC_RANGE_DB},
+        "startle": {"on": False, "value": MAX_STARTLE_LU},
+        "level": {"on": False, "value": MAX_LEVEL_OFFSET_DB},
+        "blend": 0.5,
+        "weights": dict(weights),
+        "weights_shown": False,
+        # What config.json's similarity_weights resolved to when these
+        # were saved. See sim_params_from_prefs for what it is guarding.
+        "weights_baseline": dict(weights),
+    }
+
+
+def sim_params_from_prefs(prefs):
+    """Validated Find Similar parameters from a gui_prefs dict.
+
+    Anything missing, out of range, or the wrong type falls back to the
+    default for that field alone — one bad value must not discard the
+    rest of the settings.
+
+    Saved weights are dropped when config.json's `similarity_weights`
+    has changed since they were stored. Without that, editing the config
+    would appear to do nothing forever after the first time the sliders
+    were touched, because the saved copy would always win.
+    """
+    from music_manager.core.quietness import MIN_LEVEL_OFFSET_DB
+    from music_manager.core.similarity import (
+        DEFAULT_GROUP_WEIGHTS, MAX_DYNAMIC_RANGE_DB)
+    from music_manager.core.quietness import MAX_LEVEL_OFFSET_DB, MAX_STARTLE_LU
+
+    defaults = sim_param_defaults()
+    saved = prefs.get(_SIM_PREFS_KEY)
+    if not isinstance(saved, dict):
+        return defaults
+
+    result = dict(defaults)
+    result["limit"] = int(_clamp(saved.get("limit"), 1, 5000,
+                                 defaults["limit"]))
+    result["blend"] = _clamp(saved.get("blend"), 0.0, 1.0, defaults["blend"])
+    result["weights_shown"] = bool(saved.get("weights_shown", False))
+
+    for name, low, high in (("dyn_range", 0.0, MAX_DYNAMIC_RANGE_DB),
+                            ("startle", 0.0, MAX_STARTLE_LU),
+                            ("level", MIN_LEVEL_OFFSET_DB,
+                             MAX_LEVEL_OFFSET_DB)):
+        entry = saved.get(name)
+        if not isinstance(entry, dict):
+            continue
+        result[name] = {
+            "on": bool(entry.get("on", False)),
+            "value": _clamp(entry.get("value"), low, high,
+                            defaults[name]["value"]),
+        }
+
+    saved_weights = saved.get("weights")
+    baseline = saved.get("weights_baseline")
+    config_changed = (isinstance(baseline, dict)
+                      and not _weights_match(baseline, defaults["weights"]))
+    if isinstance(saved_weights, dict) and not config_changed:
+        result["weights"] = {
+            group: _clamp(saved_weights.get(group), 0.0, 2.0,
+                          defaults["weights"][group])
+            for group in DEFAULT_GROUP_WEIGHTS
+        }
+    return result
+
+
+def _weights_match(left, right):
+    """True when two weight dicts agree, within float noise."""
+    from music_manager.core.similarity import DEFAULT_GROUP_WEIGHTS
+
+    for group in DEFAULT_GROUP_WEIGHTS:
+        a, b = left.get(group), right.get(group)
+        try:
+            if abs(float(a) - float(b)) > 1e-9:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def sim_params_to_prefs(params):
+    """The storable form of the current parameters."""
+    from music_manager.core.similarity import (
+        DEFAULT_GROUP_WEIGHTS, resolve_group_weights)
+
+    return {
+        "limit": int(params["limit"]),
+        "dyn_range": dict(params["dyn_range"]),
+        "startle": dict(params["startle"]),
+        "level": dict(params["level"]),
+        "blend": float(params["blend"]),
+        "weights": {group: float(params["weights"][group])
+                    for group in DEFAULT_GROUP_WEIGHTS},
+        "weights_shown": bool(params["weights_shown"]),
+        "weights_baseline": resolve_group_weights(None),
+    }
+
+
 class SimilarityUIMixin:
     def _analysis_gap(self):
         """(unanalyzed_count, total_tracks) for the active library."""
@@ -362,6 +500,7 @@ class SimilarityUIMixin:
         popup.grab_set()
 
         ctk = self.ctk
+        saved_params = sim_params_from_prefs(self._prefs)
 
         # -- Parameter controls --
         # Two rows. One row held max-results, three slider-and-checkbox
@@ -376,7 +515,7 @@ class SimilarityUIMixin:
 
         ctk.CTkLabel(param_frame, text="Max results:").pack(
             side="left", padx=(0, 4))
-        limit_var = tk.StringVar(value="50")
+        limit_var = tk.StringVar(value=str(saved_params["limit"]))
         ctk.CTkEntry(param_frame, textvariable=limit_var, width=55).pack(
             side="left", padx=(0, 12))
 
@@ -394,7 +533,7 @@ class SimilarityUIMixin:
         # than 1 dB. Typical values: under 10 dB even, over 25 dB very wide.
         ctk.CTkLabel(param_frame, text="Max dyn range:").pack(
             side="left", padx=(0, 4))
-        vol_var = tk.DoubleVar(value=MAX_DYNAMIC_RANGE_DB)
+        vol_var = tk.DoubleVar(value=saved_params["dyn_range"]["value"])
         vol_slider = ctk.CTkSlider(
             param_frame, from_=0.0, to=MAX_DYNAMIC_RANGE_DB, variable=vol_var,
             width=110,
@@ -405,7 +544,7 @@ class SimilarityUIMixin:
         vol_slider.pack(side="left", padx=(0, 2))
         vol_label = ctk.CTkLabel(param_frame, text="Off", width=44)
         vol_label.pack(side="left", padx=(0, 2))
-        vol_enabled = tk.BooleanVar(value=False)
+        vol_enabled = tk.BooleanVar(value=saved_params["dyn_range"]["on"])
         ctk.CTkCheckBox(
             param_frame, text="", variable=vol_enabled, width=20,
             command=lambda: vol_label.configure(
@@ -429,8 +568,8 @@ class SimilarityUIMixin:
 
         ctk.CTkLabel(param_frame, text="Max startle:").pack(
             side="left", padx=(0, 4))
-        startle_var = tk.DoubleVar(value=MAX_STARTLE_LU)
-        startle_enabled = tk.BooleanVar(value=False)
+        startle_var = tk.DoubleVar(value=saved_params["startle"]["value"])
+        startle_enabled = tk.BooleanVar(value=saved_params["startle"]["on"])
         startle_label = ctk.CTkLabel(param_frame, text="Off", width=48)
 
         def _startle_text():
@@ -447,8 +586,8 @@ class SimilarityUIMixin:
 
         ctk.CTkLabel(param_frame, text="Max level vs work:").pack(
             side="left", padx=(0, 4))
-        level_var = tk.DoubleVar(value=MAX_LEVEL_OFFSET_DB)
-        level_enabled = tk.BooleanVar(value=False)
+        level_var = tk.DoubleVar(value=saved_params["level"]["value"])
+        level_enabled = tk.BooleanVar(value=saved_params["level"]["on"])
         level_label = ctk.CTkLabel(param_frame, text="Off", width=48)
 
         def _level_text():
@@ -474,7 +613,7 @@ class SimilarityUIMixin:
 
         ctk.CTkLabel(param_row2, text="Blend:").pack(
             side="left", padx=(0, 4))
-        blend_var = tk.DoubleVar(value=0.5)
+        blend_var = tk.DoubleVar(value=saved_params["blend"])
         ctk.CTkSlider(param_row2, from_=0.0, to=1.0,
                       variable=blend_var, width=110).pack(
             side="left", padx=(0, 4))
@@ -506,7 +645,7 @@ class SimilarityUIMixin:
 
         weight_vars = {}
         weights_frame = ctk.CTkFrame(popup)
-        weights_shown = tk.BooleanVar(value=False)
+        weights_shown = tk.BooleanVar(value=False)  # set below, once built
 
         def toggle_weights():
             if weights_shown.get():
@@ -523,7 +662,7 @@ class SimilarityUIMixin:
             fg_color="gray30", hover_color="gray40", command=toggle_weights)
         weights_btn.pack(side="left", padx=(8, 0))
 
-        start_weights = resolve_group_weights(None)
+        start_weights = saved_params["weights"]
         grid = ctk.CTkFrame(weights_frame, fg_color="transparent")
         grid.pack(fill="x", padx=8, pady=6)
         for row, group in enumerate(DEFAULT_GROUP_WEIGHTS):
@@ -702,6 +841,8 @@ class SimilarityUIMixin:
         # not re-run the search. Wired after sim_state exists because the
         # callbacks close over it.
         def _on_quietness_change(*_args):
+            vol_label.configure(
+                text=f"{vol_var.get():.0f} dB" if vol_enabled.get() else "Off")
             startle_label.configure(text=_startle_text())
             level_label.configure(text=_level_text())
             if sim_state["all_results"]:
@@ -715,10 +856,43 @@ class SimilarityUIMixin:
         vol_enabled.trace_add("write", _on_quietness_change)
         vol_change_hook["fn"] = _on_quietness_change
 
+        # The three labels are built reading "Off"; restored settings have
+        # to be shown, or a filter would be on with nothing saying so.
+        _on_quietness_change()
+        if saved_params["weights_shown"]:
+            toggle_weights()
+
+        def _current_params():
+            return {
+                "limit": _clamp(limit_var.get(), 1, 5000, 50),
+                "dyn_range": {"on": vol_enabled.get(),
+                              "value": vol_var.get()},
+                "startle": {"on": startle_enabled.get(),
+                            "value": startle_var.get()},
+                "level": {"on": level_enabled.get(), "value": level_var.get()},
+                "blend": blend_var.get(),
+                "weights": {group: var.get()
+                            for group, var in weight_vars.items()},
+                "weights_shown": weights_shown.get(),
+            }
+
+        def _save_params(*_args):
+            self._prefs[_SIM_PREFS_KEY] = sim_params_to_prefs(_current_params())
+            _save_prefs(self._prefs)
+
+        # Saved on close for the settings changed and never searched, and
+        # on each search so a crash does not lose the tuning that led to
+        # it. <Destroy> fires for every child, so filter to the toplevel.
+        popup.bind("<Destroy>",
+                   lambda e: e.widget is popup and _save_params(), add="+")
+
         # Wire up search button
-        search_btn.configure(command=lambda: self._do_sim_search(
-            result_tree, sim_state, limit_var, vol_var,
-            vol_enabled, blend_var, weight_vars))
+        def _search():
+            _save_params()
+            self._do_sim_search(result_tree, sim_state, limit_var, vol_var,
+                                vol_enabled, blend_var, weight_vars)
+
+        search_btn.configure(command=_search)
 
         # Run initial search
         self._do_sim_search(result_tree, sim_state, limit_var, vol_var,

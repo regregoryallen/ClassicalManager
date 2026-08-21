@@ -82,6 +82,9 @@ def set_override(
         library, scope, field, match_mb_id, match_relative_path
     )
 
+    if field == "work_name":
+        _mark_works_dirty(library)
+
     if existing:
         existing.value = value
         existing.updated_at = now
@@ -107,6 +110,24 @@ def set_override(
     )
     logger.info("Created override: %s.%s = %r", scope, field, value)
     return override
+
+
+def _mark_works_dirty(library: Library) -> None:
+    """Record that work grouping has changed and needs a regroup.
+
+    Only work_name does this. It is the one override field detect_works
+    consults — MB work id, work tag and the title heuristic all come from
+    the file, and composer never enters grouping at all — so it is the
+    only one whose change leaves the stored Works out of date.
+
+    Hung here rather than on the GUI buttons so that the CLI and an
+    overrides import raise the flag too, and set on the library row so it
+    survives a restart. Cleared in scanner.redetect_works.
+    """
+    from music_manager.core.database import Library as _Library
+
+    _Library.update(works_dirty=True).where(
+        _Library.id == library.id).execute()
 
 
 def _find_existing_override(
@@ -540,6 +561,13 @@ def import_overrides(library: Library, input_path: Path) -> dict[str, int]:
             except (KeyError, ValueError) as exc:
                 logger.warning("Error importing override: %s — %s", rec, exc)
                 counts["errors"] += 1
+
+    # This path writes Override rows directly rather than going through
+    # set_override, so it has to raise the regroup flag itself — an
+    # imported work_name is exactly as much a grouping change as a typed
+    # one, and arrives in bulk.
+    if any(rec.get("field") == "work_name" for rec in records):
+        _mark_works_dirty(library)
 
     logger.info("Import complete: %s", counts)
     return counts

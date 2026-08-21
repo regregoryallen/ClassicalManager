@@ -941,7 +941,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._build_sidebar()
 
         # Content area with tabs
-        self.tabview = ctk.CTkTabview(self.root)
+        self.tabview = ctk.CTkTabview(self.root, command=self._on_tab_changed)
         self.tabview.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
         self.tab_builder = self.tabview.add("Playlist Builder")
@@ -1018,9 +1018,9 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                                         anchor="w", justify="left")
         self.scan_status.pack(padx=15, anchor="w")
 
-        ctk.CTkButton(self.sidebar, text="Regroup Works",
-                      command=self._redetect_works).pack(
-            padx=15, pady=(3, 0), fill="x")
+        # Regroup Works used to sit here. It moved to the Cleanup tab in
+        # v3.11, next to the corrections that make it necessary — the
+        # help text already told people to go there and then come back.
 
         ctk.CTkButton(self.sidebar, text="Library Integrity Check",
                       command=self._run_integrity_check).pack(
@@ -1725,6 +1725,38 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 self._show_scan_report(result["stats"], "quick")
 
         self.root.after(0, finish)
+
+    # Names the tabview reports; kept here so the prompt below is not
+    # matching on a string spelled out in three places.
+    _CLEANUP_TAB = "Cleanup / Overlay"
+
+    def _on_tab_changed(self):
+        """Offer the pending regroup on the way out of the Cleanup tab.
+
+        Corrections do not regroup on their own, and the consequence of
+        forgetting shows up somewhere else entirely — a playlist built
+        from works that no longer match what the Works browser shows. The
+        moment of leaving is the last point where the connection is still
+        obvious.
+
+        Offered, not forced: the flag lives on the library row, so
+        declining costs nothing and the notice is still there next time.
+        """
+        try:
+            leaving_cleanup = self.tabview.get() != self._CLEANUP_TAB
+        except Exception:
+            return
+        if not leaving_cleanup or not self._works_regroup_pending():
+            return
+        if messagebox.askyesno(
+                "Regroup Works?",
+                "Corrections on the Cleanup tab have changed how tracks "
+                "group into works, but the works have not been rebuilt "
+                "yet.\n\nUntil they are, the Works browser and any "
+                "playlist built from works will disagree.\n\n"
+                "Regroup now?"):
+            self.tabview.set(self._CLEANUP_TAB)
+            self._redetect_works()
 
     def _redetect_works(self):
         """Re-run all work detection steps using tag data in the database."""

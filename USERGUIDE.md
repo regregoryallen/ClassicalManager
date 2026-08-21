@@ -473,20 +473,8 @@ unreadable files.
 
 ### Regroup Works
 
-Re-runs work detection from stored tag data and overrides, without reading
-files. Use it when a correction changes **which tracks belong together** — for
-example setting the same work name across tracks that currently sit in two
-different works. Renaming alone cannot merge them; regrouping can.
-
-It rebuilds every work, so playlist rules that point at works are remapped
-automatically where possible, and the summary reports how many were remapped or
-orphaned.
-
-> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
-> tracks form a work). **Apply Corrections**, on the Cleanup tab, re-applies
-> stored overrides that change *details* (composer, titles, numbering).
-> Individual edits already apply themselves, so you rarely need either button —
-> Apply Corrections is mainly for after importing an overrides JSON.
+Moved to the **Cleanup / Overlay** tab in v3.11, next to the corrections that
+make it necessary. See [Applying Corrections](#applying-corrections).
 
 ### Source Folders
 
@@ -920,6 +908,35 @@ Supported override fields:
 Use **Export Overrides JSON** and **Import Overrides JSON** to back up or share
 your corrections.
 
+### Applying Corrections
+
+Edits made on this tab take effect immediately. Two buttons in the top bar cover
+the cases that need more:
+
+**Apply Corrections** re-applies every stored override to the scanned data. It is
+mainly for after importing an overrides JSON, or if scanned data has drifted from
+your corrections.
+
+**Regroup Works** re-runs work detection from stored tag data and overrides,
+without reading files. Use it when a correction changes **which tracks belong
+together** — for example setting the same work name across tracks that currently
+sit in two different works. Renaming alone cannot merge them; regrouping can.
+
+It rebuilds every work, so playlist rules that point at works are remapped
+automatically where possible, and the summary reports how many were remapped or
+orphaned.
+
+> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
+> tracks form a work). Apply Corrections changes *details* (composer, titles,
+> numbering). Individual edits already apply themselves, so you rarely need
+> either button.
+
+When an edit has changed grouping, an amber **⚠ Changes pending since last
+regroup** notice appears beside the button, and leaving the tab offers to run it.
+The reminder is stored with the library, so it survives closing the application,
+and a regroup clears it whether it was run from the GUI or from
+`main.py --cli redetect`.
+
 ---
 
 ## Settings
@@ -1141,7 +1158,7 @@ If the scanner grouped tracks incorrectly:
 3. Find the work and right-click > **Show Album** to see the full album context
 4. To merge tracks into one work: select tracks, set the same **Group Key** for all
 5. To split an incorrect grouping: select the work(s) and click **Make Standalone**
-6. Click **Regroup Works** in the sidebar to apply
+6. Click **Regroup Works** in the tab's top bar to apply
 
 ### Suppressing Erroneous Work Tags
 

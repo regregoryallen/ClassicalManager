@@ -64,11 +64,24 @@ class CleanupTabMixin:
                       command=self._import_overrides).pack(side="left", padx=5)
         ctk.CTkButton(top, text="Apply Corrections", width=150,
                       command=self._apply_overrides_now).pack(side="left", padx=5)
+        # Moved here from the sidebar in v3.11. Every operation that makes
+        # a regroup necessary is on this tab, and the help text already
+        # said "then Regroup Works" while the button lived elsewhere.
+        ctk.CTkButton(top, text="Regroup Works", width=150,
+                      command=self._redetect_works).pack(side="left", padx=5)
         ctk.CTkButton(top, text="?", width=28, height=28,
                       font=ctk.CTkFont(size=14, weight="bold"),
                       fg_color="gray30", hover_color="gray40",
                       command=lambda: self._show_help("cleanup"),
                       ).pack(side="right", padx=5)
+
+        # Says what the flag on the library row means, without a modal.
+        # Kept beside the button that clears it so the fix is one glance
+        # away from the notice.
+        self.regroup_pending_label = ctk.CTkLabel(
+            top, text="", text_color="#e8a33d",
+            font=ctk.CTkFont(size=12, weight="bold"))
+        self.regroup_pending_label.pack(side="left", padx=(10, 0))
 
         # Works browser with source filter + search
         filter_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -258,6 +271,30 @@ class CleanupTabMixin:
         self._refresh_scope_choices()
         self._refresh_works_list()
         self._refresh_overrides_list()
+        self._refresh_regroup_pending()
+
+    def _works_regroup_pending(self):
+        """True when overrides have changed grouping since the last regroup.
+
+        Re-read rather than taken from self.active_library, which is a
+        row loaded at selection time and does not see a flag raised since.
+        """
+        if not self.active_library:
+            return False
+        from music_manager.core.database import Library
+        try:
+            return bool(Library.get_by_id(self.active_library.id).works_dirty)
+        except Exception:
+            return False
+
+    def _refresh_regroup_pending(self):
+        """Show or hide the pending-regroup notice."""
+        label = getattr(self, "regroup_pending_label", None)
+        if label is None:
+            return          # tab not built yet (startup ordering)
+        label.configure(
+            text=("⚠ Changes pending since last regroup"
+                  if self._works_regroup_pending() else ""))
 
     def _refresh_works_list(self):
         """Reload the works treeview based on source filter and search."""
@@ -914,6 +951,7 @@ class CleanupTabMixin:
                 parent=popup)
             self._refresh_overrides_list()
             self._refresh_works_list()
+            self._refresh_regroup_pending()
             # Refresh the popup tree
             _refresh_popup_tree()
 
@@ -936,9 +974,11 @@ class CleanupTabMixin:
             messagebox.showinfo(
                 "Done",
                 f"Marked {len(tracks)} track(s) as standalone.\n"
-                f"Use Regroup Works (sidebar) to apply the new grouping.",
+                f"Use Regroup Works on the Cleanup tab to apply the new "
+                f"grouping.",
                 parent=popup)
             self._refresh_overrides_list()
+            self._refresh_regroup_pending()
 
         ctk.CTkButton(row_w, text="Make Standalone", width=130,
                       command=_make_standalone).pack(side="left", padx=5)
@@ -1063,7 +1103,7 @@ class CleanupTabMixin:
 
         messagebox.showinfo("Done", f"Marked {total} tracks across "
                            f"{len(work_ids)} work(s) as standalone. "
-                           f"Use Regroup Works in the sidebar to apply.")
+                           f"Use Regroup Works above to apply.")
         self._refresh_cleanup()
 
     def _set_composer_override(self):

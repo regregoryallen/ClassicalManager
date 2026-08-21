@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Entry point for the Classical Music Playlist Manager.
 
 Routes to the CLI when invoked with the explicit --cli flag (or any subcommand);
@@ -107,6 +108,11 @@ def main():
         print(f"Classical Music Playlist Manager {__version__}")
         return
 
+    # Snapshot before routing: _route strips --cli and --config out of
+    # sys.argv for typer's benefit, so a re-exec that read sys.argv
+    # afterwards would relaunch with a different command than was typed.
+    original_argv = sys.argv[1:]
+
     # Extract --config before routing so both CLI and GUI can use it
     config_path = None
     if "--config" in sys.argv:
@@ -116,6 +122,25 @@ def main():
             sys.argv.pop(idx)  # remove --config
             sys.argv.pop(idx)  # remove the path value
 
+    try:
+        _route(config_path)
+    except ModuleNotFoundError:
+        # Started under an interpreter without the dependencies — most
+        # often a plain `python main.py` in a checkout, where the venv is
+        # right there unactivated. Re-run in it rather than failing on an
+        # import whose cause is two steps away from the fix.
+        from pathlib import Path
+
+        from music_manager._venv import in_venv, reexec
+
+        root = Path(__file__).resolve().parent
+        if in_venv(root):
+            raise           # already there: this is a real import error
+        reexec(root, __file__, argv=original_argv)
+
+
+def _route(config_path):
+    """Hand off to the CLI or the GUI."""
     if "--cli" in sys.argv:
         sys.argv.remove("--cli")
         if config_path:

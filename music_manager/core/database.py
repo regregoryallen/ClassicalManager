@@ -203,6 +203,11 @@ class Library(BaseModel):
 
     name = pw.TextField()
     plex_section = pw.TextField(default="")  # Plex library section name
+    # Set when a work_name override changes what tracks form a work, and
+    # cleared by redetect_works. Overrides do not regroup on their own,
+    # so without this the library sits in a state where the Works browser
+    # and the playlists disagree with no sign that anything is pending.
+    works_dirty = pw.BooleanField(null=True, default=False)
 
     class Meta:
         table_name = "libraries"
@@ -442,7 +447,9 @@ class Override(BaseModel):
 #
 #   2 — v3.8: tracks.rg_track_gain / rg_album_gain, and the quietness
 #       columns on track_analysis and track_analysis_snapshot.
-SCHEMA_VERSION = 2
+#   3 — v3.11: libraries.works_dirty, flagging overrides that have changed
+#       work grouping but have not been regrouped yet.
+SCHEMA_VERSION = 3
 
 
 def _schema_is_current() -> bool:
@@ -496,6 +503,11 @@ def _create_and_migrate(settings) -> None:
         run_migrate(migrator.add_column("libraries", "plex_section",
                                         pw.TextField(null=True, default="")))
         logger.info("Migrated: added plex_section to libraries")
+    if "works_dirty" not in columns:
+        run_migrate(migrator.add_column("libraries", "works_dirty",
+                                        pw.BooleanField(null=True,
+                                                        default=False)))
+        logger.info("Migrated: added works_dirty to libraries")
 
     track_cols = {col.name for col in database.get_columns("tracks")}
     if "work_tag" not in track_cols:

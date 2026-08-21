@@ -30,6 +30,29 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 
 ## Quick Start
 
+### Quick install
+
+One small file that fetches the current source, runs the installer, and cleans
+up after itself. No Git needed.
+
+| | Download | Then |
+|---|---|---|
+| **Linux / macOS** | [install-classical-manager.sh](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.sh) | `bash install-classical-manager.sh` |
+| **Windows** | [install-classical-manager.bat](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.bat) and [install-classical-manager.ps1](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.ps1), into the same folder | double-click the `.bat` |
+
+Add `--ref v3.11` (Linux) or `-Ref v3.11` (Windows) to install a specific
+release rather than the current master.
+
+Neither bootstrap installs Python — that is a system-wide change they should
+not make unasked. If Python 3.12+ is missing they say so, name the command for
+your platform, and stop.
+
+> These are ordinary scripts: read them before running them. That is also why
+> there is no `curl | bash` one-liner here — piping a download straight into a
+> shell is a habit worth not building.
+
+### Manual install
+
 Download and extract the [latest zip](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip) (extracts as `ClassicalManager-master`), or clone with Git:
 
 ```bash
@@ -54,13 +77,18 @@ The installer will:
 - Deploy to `~/.local/share/classical-manager` (local) or `/opt/classical-manager` (system-wide)
 - Create a Python virtual environment and install dependencies
 - Walk you through configuring Plex, M3U export, and database location
-- Install a desktop launcher (under Sound & Video) and a `classical-manager` CLI command
+- Install a desktop launcher (under Sound & Video) and the `classical-manager`
+  and `classical-manager-rgtag` commands
 - Copy the cron companion script for scheduled automation
 
 After installation:
 - **GUI:** Launch from the app menu, or run `classical-manager`
 - **CLI:** `classical-manager --cli scan --library "My Collection"`
+- **Tagger:** `classical-manager-rgtag --help`
 - **Uninstall:** `bash install.sh --uninstall`
+
+Both commands run inside the installed virtual environment, so there is
+nothing to activate first.
 
 ### Cron automation
 
@@ -199,6 +227,11 @@ sudo apt install rsgain
 ```
 
 **Dry-run is the default — nothing is written without `--write`.**
+
+The examples below use `./rgtag.py`, which re-runs itself inside the project's
+virtual environment — the form to use from a source checkout. After running the
+installer the command is `classical-manager-rgtag` instead, and on Windows from
+a checkout it is `rgtag.bat`. The arguments are identical in all three.
 
 ```bash
 # See what would happen across the whole library, including which

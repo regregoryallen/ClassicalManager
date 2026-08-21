@@ -12,6 +12,7 @@ These pin CURRENT behavior, including known oddities flagged in the plan:
 from music_manager.core.selection import (
     COMPOSITE_SEP, key_for_work, parse_work_key, resolve_selections,
     resolve_key_to_track_ids, display_name_for_selection,
+    visible_profile_names,
 )
 
 from tests.conftest import (
@@ -145,3 +146,34 @@ def test_display_name_fallback_for_orphaned_keys(lib):
         lib, "track", "Z/Missing/01.flac")
     assert display_name_for_selection(
         lib, "work", work_key("Z/Missing", "Ghost Work", 1)) == "Ghost Work"
+
+
+# ---------------------------------------------------------------------------
+# Profile name listing (v3.11)
+# ---------------------------------------------------------------------------
+
+def test_visible_profile_names_sorts_case_insensitively(lib):
+    for name in ("Sunday", "evening", "Baroque"):
+        make_profile(lib, name=name)
+
+    assert visible_profile_names(lib) == ["Baroque", "evening", "Sunday"]
+
+
+def test_visible_profile_names_deduplicates_and_hides_internal(lib):
+    make_profile(lib, name="Sunday")
+    make_profile(lib, name="Sunday")     # saving over a profile writes a row
+    make_profile(lib, name="__autosave__")
+    make_profile(lib, name="__temp_1")
+
+    assert visible_profile_names(lib) == ["Sunday"]
+
+
+def test_visible_profile_names_is_scoped_to_one_library(lib):
+    from music_manager.core.database import Library
+
+    other = Library.create(name="Other")
+    make_profile(lib, name="Mine")
+    make_profile(other, name="Theirs")
+
+    assert visible_profile_names(lib) == ["Mine"]
+    assert visible_profile_names(other) == ["Theirs"]

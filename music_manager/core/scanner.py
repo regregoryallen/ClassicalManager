@@ -1301,6 +1301,11 @@ def redetect_works(library: Library,
         logger.info("Redetect reconciliation: %d remapped, %d orphaned",
                     recon["remapped"], recon["orphaned"])
 
+    # The stored Works now match the overrides again. Cleared here rather
+    # than in the GUI so that `--cli redetect` clears it too.
+    Library.update(works_dirty=False).where(
+        Library.id == library.id).execute()
+
     return result
 
 

@@ -25,6 +25,17 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 
+def _integrity_suffix(result):
+    """The work-integrity note as a message tail, blank when there is none.
+
+    Kept next to the callers rather than in the engine so the blank
+    line before it belongs to the dialog that shows it.
+    """
+    from music_manager.core.engine import integrity_note
+    note = integrity_note(result)
+    return f"\n\n{note}" if note else ""
+
+
 class _SelectionView:
     """Dict views over the selection list, kept current across a batch.
 
@@ -1419,6 +1430,11 @@ class BuilderTabMixin:
         status_text = (f"{result.track_count} tracks, "
                        f"{total_s // 3600}h {(total_s % 3600) // 60}m "
                        f"{total_s % 60}s total")
+        # Better noticed here than after the export has been written.
+        from music_manager.core.engine import integrity_note
+        note = integrity_note(result)
+        if note:
+            status_text += f"  —  {note}"
 
         bot = tk.Frame(popup, bg="#2b2b2b")
         bot.pack(side="bottom", fill="x", padx=10, pady=5)
@@ -1563,7 +1579,10 @@ class BuilderTabMixin:
 
             serializer = M3USerializer()
             serializer.serialize(result.playlist, m3u_config)
-            messagebox.showinfo("Export", f"Wrote {result.track_count} tracks to:\n{path}")
+            messagebox.showinfo(
+                "Export",
+                f"Wrote {result.track_count} tracks to:\n{path}"
+                + _integrity_suffix(result))
         except Exception as exc:
             messagebox.showerror("Export Error", str(exc))
         finally:
@@ -1597,7 +1616,10 @@ class BuilderTabMixin:
 
             result = generate_playlist(profile)
             serialize_engine_result(result, output_path=Path(path))
-            messagebox.showinfo("Export", f"Wrote {result.track_count} tracks to:\n{path}")
+            messagebox.showinfo(
+                "Export",
+                f"Wrote {result.track_count} tracks to:\n{path}"
+                + _integrity_suffix(result))
         except Exception as exc:
             messagebox.showerror("Export Error", str(exc))
         finally:
@@ -1631,8 +1653,11 @@ class BuilderTabMixin:
                 serializer = PlexSerializer()
                 serializer.serialize(result.playlist, plex_config)
                 display_name = plex_config["playlist_name"]
-                messagebox.showinfo("Plex", f"Pushed '{display_name}' to Plex "
-                                   f"({result.track_count} tracks)")
+                messagebox.showinfo(
+                    "Plex",
+                    f"Pushed '{display_name}' to Plex "
+                    f"({result.track_count} tracks)"
+                    + _integrity_suffix(result))
             except (PlexConnectionError, PlexPushError) as exc:
                 messagebox.showerror("Plex Error", str(exc))
             except Exception as exc:
@@ -1800,23 +1825,13 @@ class BuilderTabMixin:
         self._profile_picker_open = True
 
         from music_manager.core.database import PlaylistProfile
+        from music_manager.core.selection import visible_profile_names
 
-        profiles = list(PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__"))))
-        if not profiles:
+        names = visible_profile_names(self.active_library)
+        if not names:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
-
-        # Deduplicate names (keep latest)
-        seen = set()
-        names = []
-        for p in reversed(profiles):
-            if p.name not in seen:
-                seen.add(p.name)
-                names.append(p.name)
-        names.reverse()
 
         picker = tk.Toplevel(self.root)
         picker.title("Delete Profile")
@@ -1830,7 +1845,6 @@ class BuilderTabMixin:
                         selectmode="extended")
         for n in names:
             lb.insert("end", n)
-        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
         def on_delete():
             sel = lb.curselection()
@@ -1864,8 +1878,12 @@ class BuilderTabMixin:
 
         picker.protocol("WM_DELETE_WINDOW", on_close)
         ctk = self.ctk
+        # Button first, list second: see _export_library for why packing
+        # a fixed-height control last leaves it to absorb the shortfall.
         ctk.CTkButton(picker, text="Delete", command=on_delete,
-                      fg_color="#c0392b", hover_color="#e74c3c").pack(pady=5)
+                      fg_color="#c0392b", hover_color="#e74c3c").pack(
+            side="bottom", pady=5)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
     def _load_profile(self):
         """Always show a profile picker dialog, then load the selected profile."""
@@ -1878,23 +1896,13 @@ class BuilderTabMixin:
             return
         self._profile_picker_open = True
 
-        from music_manager.core.database import PlaylistProfile
-        profiles = list(PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__"))))
-        if not profiles:
+        from music_manager.core.selection import visible_profile_names
+
+        names = visible_profile_names(self.active_library)
+        if not names:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
-
-        # Deduplicate names (keep latest)
-        seen = set()
-        names = []
-        for p in reversed(profiles):
-            if p.name not in seen:
-                seen.add(p.name)
-                names.append(p.name)
-        names.reverse()
 
         picker = tk.Toplevel(self.root)
         picker.title("Select Profile")
@@ -1907,7 +1915,6 @@ class BuilderTabMixin:
                        selectbackground="#1f6aa5", font=("Segoe UI", 11))
         for n in names:
             lb.insert("end", n)
-        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
         def on_select():
             sel = lb.curselection()
@@ -1924,7 +1931,11 @@ class BuilderTabMixin:
 
         picker.protocol("WM_DELETE_WINDOW", on_close)
         ctk = self.ctk
-        ctk.CTkButton(picker, text="Load", command=on_select).pack(pady=5)
+        # Button first, list second: see _export_library for why packing
+        # a fixed-height control last leaves it to absorb the shortfall.
+        ctk.CTkButton(picker, text="Load", command=on_select).pack(
+            side="bottom", pady=5)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
         lb.bind("<Double-1>", lambda e: on_select())
 
     def _apply_profile(self, name):

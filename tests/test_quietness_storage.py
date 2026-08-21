@@ -520,6 +520,7 @@ def test_schema_version_is_recorded_after_migrating(tmp_path):
 # would help with.
 MODEL_SHAPE = {
     2: "ef30476cec06b0b5",   # v3.8: rg gains on tracks, quietness columns
+    3: "d24afe77dda8d3db",   # v3.11: libraries.works_dirty
 }
 
 

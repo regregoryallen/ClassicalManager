@@ -82,6 +82,75 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     return config
 
 
+@dataclass(frozen=True)
+class ConfigStatus:
+    """What a preflight read of config.json found.
+
+    Distinguishes the three cases the entry points must treat
+    differently: a file that is fine, a file that is not there, and a
+    file that is there and wrong.
+    """
+
+    path: Path
+    missing: bool = False
+    error: str | None = None
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        """True when the config can be used as-is (warnings and all).
+
+        A missing file is ok: the app has always started without one,
+        and that is what a first run looks like.
+        """
+        return self.error is None
+
+
+def check_config(path: Path | None = None) -> ConfigStatus:
+    """Read config.json and report what is wrong with it, without raising.
+
+    load_config raises on a bad file and logs its warnings, which is the
+    right shape for callers doing work but not for a startup check that
+    has to decide what to tell the user. This answers the same questions
+    without either.
+
+    A malformed config used to be silent at startup: resolve_db_settings
+    swallows ConfigError and falls back to the default SQLite file, so a
+    typo opened a *different database* with nothing said about it.
+    """
+    config_path = path or _config_path_override or DEFAULT_CONFIG_PATH
+
+    if not config_path.exists():
+        return ConfigStatus(path=config_path, missing=True)
+
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return ConfigStatus(path=config_path,
+                            error=f"Cannot read configuration file: {exc}")
+
+    try:
+        config = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return ConfigStatus(
+            path=config_path,
+            error=(f"Invalid JSON: {exc.msg} "
+                   f"(line {exc.lineno}, column {exc.colno})"))
+
+    try:
+        warnings = _validate(config, config_path)
+    except ConfigError as exc:
+        # _validate prefixes its messages with the path; callers show the
+        # path themselves, so strip it rather than name the file twice.
+        message = str(exc)
+        prefix = f"{config_path}: "
+        if message.startswith(prefix):
+            message = message[len(prefix):]
+        return ConfigStatus(path=config_path, error=message)
+
+    return ConfigStatus(path=config_path, warnings=tuple(warnings))
+
+
 def validate_config(config: dict[str, Any],
                     path: Path | None = None) -> list[str]:
     """Validate a config dict that has not been read from disk.

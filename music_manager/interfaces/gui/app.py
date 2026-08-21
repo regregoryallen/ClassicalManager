@@ -34,6 +34,79 @@ from music_manager.interfaces.gui.similarity_ui import SimilarityUIMixin
 from music_manager.interfaces.gui.cleanup_tab import CleanupTabMixin
 
 
+def _config_preflight(prefs):
+    """Check config.json before startup. False means do not start.
+
+    A file that is simply absent is a first run, not a problem, and is
+    passed straight through.
+
+    A file that is present and broken stops here. Quit is the default
+    answer because the fallback is a *different database*: carrying on
+    means editing a local SQLite file while believing you are on the
+    server, and the damage from that is discovered much later. Carrying
+    on stays available, but has to be chosen.
+    """
+    import tkinter as _tk
+    from tkinter import messagebox as _mb
+
+    from music_manager.core.config import check_config
+
+    status = check_config()
+    if status.missing:
+        return True
+
+    if status.error:
+        root = _tk.Tk()
+        root.withdraw()
+        proceed = _mb.askyesno(
+            "Configuration Error",
+            f"{status.path}\n\n"
+            f"{status.error}\n\n"
+            f"This file cannot be used. Starting anyway falls back to "
+            f"the built-in defaults — which means a DIFFERENT database "
+            f"than the one configured here, so any work done will not be "
+            f"where you expect it.\n\n"
+            f"Start anyway on the built-in defaults?",
+            default=_mb.NO,
+        )
+        root.destroy()
+        return proceed
+
+    if status.warnings:
+        _warn_once(prefs, status)
+    return True
+
+
+def _warn_once(prefs, status):
+    """Show configuration warnings, but only until they are acknowledged.
+
+    Warnings cover settings that read as active and do nothing, so they
+    are worth interrupting for once. Nagging on every start for
+    something deliberate is how a warning gets ignored, so the
+    acknowledgement is remembered — keyed on the warnings themselves, so
+    a config that develops a NEW problem speaks up again.
+    """
+    import tkinter as _tk
+    from tkinter import messagebox as _mb
+
+    signature = [str(status.path), *sorted(status.warnings)]
+    if prefs.get("config_warnings_ack") == signature:
+        return
+
+    body = "\n\n".join(f"• {w}" for w in status.warnings)
+    root = _tk.Tk()
+    root.withdraw()
+    _mb.showwarning(
+        "Configuration Warnings",
+        f"{status.path}\n\n{body}\n\n"
+        f"The application will start normally. These settings look "
+        f"active but have no effect.")
+    root.destroy()
+
+    prefs["config_warnings_ack"] = signature
+    _save_prefs(prefs)
+
+
 def launch_gui():
     """Launch the main GUI window."""
     try:
@@ -46,6 +119,13 @@ def launch_gui():
     from music_manager.core.database import initialize_database
     from music_manager.core.config import resolve_db_settings
     prefs = _load_prefs()
+
+    # Before anything touches the database. A broken config.json used to
+    # be silent here: resolve_db_settings falls back to the default
+    # SQLite file when the config will not load, so a typo opened a
+    # different database and said nothing about it.
+    if not _config_preflight(prefs):
+        return
 
     # Migrate db_path from gui_prefs.json to config.json (one-time)
     if "db_path" in prefs:
@@ -861,7 +941,7 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
         self._build_sidebar()
 
         # Content area with tabs
-        self.tabview = ctk.CTkTabview(self.root)
+        self.tabview = ctk.CTkTabview(self.root, command=self._on_tab_changed)
         self.tabview.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
         self.tab_builder = self.tabview.add("Playlist Builder")
@@ -938,9 +1018,9 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                                         anchor="w", justify="left")
         self.scan_status.pack(padx=15, anchor="w")
 
-        ctk.CTkButton(self.sidebar, text="Regroup Works",
-                      command=self._redetect_works).pack(
-            padx=15, pady=(3, 0), fill="x")
+        # Regroup Works used to sit here. It moved to the Cleanup tab in
+        # v3.11, next to the corrections that make it necessary — the
+        # help text already told people to go there and then come back.
 
         ctk.CTkButton(self.sidebar, text="Library Integrity Check",
                       command=self._run_integrity_check).pack(
@@ -1645,6 +1725,38 @@ class App(DialogsMixin, RulesWindowMixin, BuilderTabMixin, TreeUtilMixin, Simila
                 self._show_scan_report(result["stats"], "quick")
 
         self.root.after(0, finish)
+
+    # Names the tabview reports; kept here so the prompt below is not
+    # matching on a string spelled out in three places.
+    _CLEANUP_TAB = "Cleanup / Overlay"
+
+    def _on_tab_changed(self):
+        """Offer the pending regroup on the way out of the Cleanup tab.
+
+        Corrections do not regroup on their own, and the consequence of
+        forgetting shows up somewhere else entirely — a playlist built
+        from works that no longer match what the Works browser shows. The
+        moment of leaving is the last point where the connection is still
+        obvious.
+
+        Offered, not forced: the flag lives on the library row, so
+        declining costs nothing and the notice is still there next time.
+        """
+        try:
+            leaving_cleanup = self.tabview.get() != self._CLEANUP_TAB
+        except Exception:
+            return
+        if not leaving_cleanup or not self._works_regroup_pending():
+            return
+        if messagebox.askyesno(
+                "Regroup Works?",
+                "Corrections on the Cleanup tab have changed how tracks "
+                "group into works, but the works have not been rebuilt "
+                "yet.\n\nUntil they are, the Works browser and any "
+                "playlist built from works will disagree.\n\n"
+                "Regroup now?"):
+            self.tabview.set(self._CLEANUP_TAB)
+            self._redetect_works()
 
     def _redetect_works(self):
         """Re-run all work detection steps using tag data in the database."""

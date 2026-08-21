@@ -50,6 +50,40 @@ The application works with locally stored audio files — ripped CDs, purchased 
 - Tkinter (ships with the python.org installer; on Ubuntu/Debian: `sudo apt install python3-tk`)
 - Optional on Linux: `zenity` (GNOME) or `kdialog` (KDE) for native file dialogs
 
+### Quick install (recommended)
+
+One small file downloads the current source, runs the full installer, and
+deletes what it downloaded. Nothing to extract, and Git is not required.
+
+**Linux / macOS** — download
+[install-classical-manager.sh](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.sh),
+then in a terminal in the folder you saved it to:
+
+```bash
+bash install-classical-manager.sh
+```
+
+**Windows** — download both
+[install-classical-manager.bat](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.bat)
+and
+[install-classical-manager.ps1](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.ps1)
+into the same folder, then double-click the `.bat`. (Two files because a `.ps1`
+cannot be started by double-clicking; the `.bat` is only there to launch it.)
+
+To install a specific release instead of the current master, add `--ref v3.11`
+on Linux or `-Ref v3.11` on Windows.
+
+Neither script installs Python. That is a system-wide change a bootstrap should
+not make on your behalf — if Python 3.12+ is missing, it tells you the command
+for your platform and stops. Run it again once Python is in place.
+
+Both are ordinary text files. Open them in an editor before running them if you
+want to see what they do; that is also why this guide does not give you a
+`curl | bash` one-liner.
+
+The rest of this section covers installing by hand, which does exactly what the
+bootstrap automates.
+
 ### Download
 
 Download and extract the
@@ -125,16 +159,23 @@ python main.py
 On Windows the activate line is `venv\Scripts\activate` instead.
 
 This applies to every `python main.py` in this guide — the GUI, each CLI
-command, the webhook server — and to `rgtag.py`. Running `python main.py`
-without activating uses the system Python, which does not have the
-dependencies and fails with `ModuleNotFoundError`.
+command, the webhook server — and to `rgtag.py`.
 
-Two shortcuts avoid the activation step. On Windows, `run.bat` activates
-the environment and starts the GUI in one go. On Linux and macOS,
-`venv/bin/python main.py` works from anywhere without activating —
-naming the interpreter inside the environment is equivalent to
-activating it. `./rgtag.py` re-runs itself inside `venv/` for the same
-reason.
+Several shortcuts avoid the activation step:
+
+| | Application | ReplayGain tagger |
+|---|---|---|
+| **Installed** | `classical-manager` | `classical-manager-rgtag` |
+| **Checkout, Linux/macOS** | `./main.py` or `venv/bin/python main.py` | `./rgtag.py` |
+| **Checkout, Windows** | `run.bat` | `rgtag.bat` |
+
+The installed commands are wrappers that name the interpreter inside the
+virtual environment, so there is nothing to activate. In a checkout,
+`main.py` and `rgtag.py` re-run themselves inside `venv/` when started by
+an interpreter that lacks the dependencies, rather than failing with a
+`ModuleNotFoundError` whose cause is two steps from the fix. Every form
+takes the same arguments, and `--help` and `--version` work under any
+interpreter at all.
 
 ### Dependencies
 
@@ -473,20 +514,8 @@ unreadable files.
 
 ### Regroup Works
 
-Re-runs work detection from stored tag data and overrides, without reading
-files. Use it when a correction changes **which tracks belong together** — for
-example setting the same work name across tracks that currently sit in two
-different works. Renaming alone cannot merge them; regrouping can.
-
-It rebuilds every work, so playlist rules that point at works are remapped
-automatically where possible, and the summary reports how many were remapped or
-orphaned.
-
-> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
-> tracks form a work). **Apply Corrections**, on the Cleanup tab, re-applies
-> stored overrides that change *details* (composer, titles, numbering).
-> Individual edits already apply themselves, so you rarely need either button —
-> Apply Corrections is mainly for after importing an overrides JSON.
+Moved to the **Cleanup / Overlay** tab in v3.11, next to the corrections that
+make it necessary. See [Applying Corrections](#applying-corrections).
 
 ### Source Folders
 
@@ -920,6 +949,35 @@ Supported override fields:
 Use **Export Overrides JSON** and **Import Overrides JSON** to back up or share
 your corrections.
 
+### Applying Corrections
+
+Edits made on this tab take effect immediately. Two buttons in the top bar cover
+the cases that need more:
+
+**Apply Corrections** re-applies every stored override to the scanned data. It is
+mainly for after importing an overrides JSON, or if scanned data has drifted from
+your corrections.
+
+**Regroup Works** re-runs work detection from stored tag data and overrides,
+without reading files. Use it when a correction changes **which tracks belong
+together** — for example setting the same work name across tracks that currently
+sit in two different works. Renaming alone cannot merge them; regrouping can.
+
+It rebuilds every work, so playlist rules that point at works are remapped
+automatically where possible, and the summary reports how many were remapped or
+orphaned.
+
+> **Regroup Works vs Apply Corrections.** Regroup changes *structure* (which
+> tracks form a work). Apply Corrections changes *details* (composer, titles,
+> numbering). Individual edits already apply themselves, so you rarely need
+> either button.
+
+When an edit has changed grouping, an amber **⚠ Changes pending since last
+regroup** notice appears beside the button, and leaving the tab offers to run it.
+The reminder is stored with the library, so it survives closing the application,
+and a regroup clears it whether it was run from the GUI or from
+`main.py --cli redetect`.
+
 ---
 
 ## Settings
@@ -1141,7 +1199,7 @@ If the scanner grouped tracks incorrectly:
 3. Find the work and right-click > **Show Album** to see the full album context
 4. To merge tracks into one work: select tracks, set the same **Group Key** for all
 5. To split an incorrect grouping: select the work(s) and click **Make Standalone**
-6. Click **Regroup Works** in the sidebar to apply
+6. Click **Regroup Works** in the tab's top bar to apply
 
 ### Suppressing Erroneous Work Tags
 

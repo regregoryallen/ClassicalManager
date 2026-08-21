@@ -99,6 +99,80 @@ def test_respect_selection_emits_exactly_what_was_selected(lib):
 
 
 # ---------------------------------------------------------------------------
+# Reporting what work integrity added (v3.11)
+# ---------------------------------------------------------------------------
+
+def test_integrity_counts_report_the_expansion(lib):
+    make_album(lib, "A/Alb1", [("Work One", 4)])
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "track", "A/Alb1/02.flac")
+
+    result = generate_playlist(p)
+    assert result.integrity_added_tracks == 3
+    assert result.integrity_added_works == 1
+
+
+def test_integrity_counts_span_works(lib):
+    make_album(lib, "A/Alb1", [("Work One", 3), ("Work Two", 3)])
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "track", "A/Alb1/01.flac")
+    add_sel(p, "track", "A/Alb1/04.flac")
+
+    result = generate_playlist(p)
+    assert result.integrity_added_tracks == 4
+    assert result.integrity_added_works == 2
+
+
+def test_integrity_counts_are_zero_for_respect_selection(lib):
+    make_album(lib, "A/Alb1", [("Work One", 4)])
+    p = make_profile(lib, work_integrity="respect_selection")
+    add_sel(p, "track", "A/Alb1/02.flac")
+
+    result = generate_playlist(p)
+    assert result.integrity_added_tracks == 0
+    assert result.integrity_added_works == 0
+
+
+def test_integrity_counts_describe_the_trimmed_playlist(lib):
+    """A stop condition that cuts expanded tracks must lower the count.
+
+    The number is there to explain the file that was written, so it has
+    to be taken after the trim rather than at expansion time.
+    """
+    make_album(lib, "A/Alb1", [("Work One", 4)])
+    p = make_profile(lib, work_integrity="enforce",
+                     length_mode="count", length_value=2)
+    add_sel(p, "track", "A/Alb1/02.flac")
+
+    result = generate_playlist(p)
+    assert result.track_count == 2
+    assert result.integrity_added_tracks < 3
+
+
+def test_integrity_note_is_empty_when_nothing_was_added(lib):
+    from music_manager.core.engine import integrity_note
+
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "album", "A/Alb1")
+
+    result = generate_playlist(p)
+    assert result.integrity_added_tracks == 0
+    assert integrity_note(result) == ""
+
+
+def test_integrity_note_singular_and_plural(lib):
+    from music_manager.core.engine import integrity_note
+
+    make_album(lib, "A/Alb1", [("Work One", 2)])
+    p = make_profile(lib, work_integrity="enforce")
+    add_sel(p, "track", "A/Alb1/01.flac")
+
+    note = integrity_note(generate_playlist(p))
+    assert "1 track in 1 work was added" in note
+
+
+# ---------------------------------------------------------------------------
 # Stop conditions
 # ---------------------------------------------------------------------------
 

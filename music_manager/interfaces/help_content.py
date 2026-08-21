@@ -176,18 +176,8 @@ def build_help_content(text: tk.Text) -> None:
     )
     bold("Regroup Works")
     body(
-        " \u2014 re-runs work detection from stored tag data and "
-        "overrides, without reading files. Use it when you have changed "
-        "which tracks belong together (e.g. set a work name across "
-        "tracks from two different works). It rebuilds every work, so "
-        "playlist rules that point at works are remapped automatically "
-        "where possible \u2014 the summary reports how many.\n"
-    )
-    body(
-        "Regroup Works changes STRUCTURE (which tracks form a work). "
-        "Apply Corrections on the Cleanup tab changes DETAILS (composer, "
-        "titles, numbering). Individual edits already apply themselves; "
-        "you rarely need either button.\n"
+        " \u2014 moved to the Cleanup tab in v3.11, beside the "
+        "corrections that make it necessary. See that tab's help.\n"
     )
 
     subheading("Other Controls")
@@ -487,15 +477,30 @@ def build_help_content(text: tk.Text) -> None:
     subheading("Applying Corrections")
     body(
         "Edits you make here (work name, composer, Make Standalone) take "
-        "effect immediately. Two sidebar/tab actions exist for the cases "
+        "effect immediately. Two actions on this tab exist for the cases "
         "that need more:\n"
     )
     bullet("Apply Corrections (this tab) \u2014 re-applies every stored "
            "override to the scanned data. Mainly needed after importing "
            "an overrides JSON, or if data has drifted")
-    bullet("Regroup Works (sidebar) \u2014 rebuilds work grouping. Needed "
+    bullet("Regroup Works (this tab) \u2014 re-runs work detection from "
+           "stored tag data and overrides, without reading files. Needed "
            "when a correction changes which tracks belong together, "
-           "which renaming alone cannot do")
+           "which renaming alone cannot do. It rebuilds every work, so "
+           "playlist rules pointing at works are remapped automatically "
+           "where possible \u2014 the summary reports how many")
+    body(
+        "\nRegroup Works changes STRUCTURE (which tracks form a work). "
+        "Apply Corrections changes DETAILS (composer, titles, "
+        "numbering). Individual edits already apply themselves.\n"
+    )
+    body(
+        "When an edit has changed grouping, an amber \"Changes pending "
+        "since last regroup\" notice appears beside the button, and "
+        "leaving the tab offers to run it. The reminder is stored with "
+        "the library, so it survives closing the application and is "
+        "cleared by a regroup from either the GUI or the CLI.\n"
+    )
 
     subheading("Imported Music")
     body(
@@ -750,7 +755,7 @@ def build_help_content(text: tk.Text) -> None:
         "On the Cleanup tab, use the Source dropdown to filter by detection "
         "method. Right-click \u2192 Show Album for full context. To merge "
         "tracks: set the same Group Key. To split: click Make Standalone. "
-        "Then Regroup Works in the sidebar.\n"
+        "Then Regroup Works, on the same tab.\n"
     )
 
     subheading("Suppressing Erroneous Work Tags")

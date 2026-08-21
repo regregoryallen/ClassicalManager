@@ -30,6 +30,29 @@ This tool works with music files you own — ripped CDs, purchased downloads, or
 
 ## Quick Start
 
+### Quick install
+
+One small file that fetches the current source, runs the installer, and cleans
+up after itself. No Git needed.
+
+| | Download | Then |
+|---|---|---|
+| **Linux / macOS** | [install-classical-manager.sh](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.sh) | `bash install-classical-manager.sh` |
+| **Windows** | [install-classical-manager.bat](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.bat) and [install-classical-manager.ps1](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.ps1), into the same folder | double-click the `.bat` |
+
+Add `--ref v3.11` (Linux) or `-Ref v3.11` (Windows) to install a specific
+release rather than the current master.
+
+Neither bootstrap installs Python — that is a system-wide change they should
+not make unasked. If Python 3.12+ is missing they say so, name the command for
+your platform, and stop.
+
+> These are ordinary scripts: read them before running them. That is also why
+> there is no `curl | bash` one-liner here — piping a download straight into a
+> shell is a habit worth not building.
+
+### Manual install
+
 Download and extract the [latest zip](https://github.com/regregoryallen/ClassicalManager/archive/refs/heads/master.zip) (extracts as `ClassicalManager-master`), or clone with Git:
 
 ```bash

@@ -50,6 +50,40 @@ The application works with locally stored audio files — ripped CDs, purchased 
 - Tkinter (ships with the python.org installer; on Ubuntu/Debian: `sudo apt install python3-tk`)
 - Optional on Linux: `zenity` (GNOME) or `kdialog` (KDE) for native file dialogs
 
+### Quick install (recommended)
+
+One small file downloads the current source, runs the full installer, and
+deletes what it downloaded. Nothing to extract, and Git is not required.
+
+**Linux / macOS** — download
+[install-classical-manager.sh](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.sh),
+then in a terminal in the folder you saved it to:
+
+```bash
+bash install-classical-manager.sh
+```
+
+**Windows** — download both
+[install-classical-manager.bat](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.bat)
+and
+[install-classical-manager.ps1](https://raw.githubusercontent.com/regregoryallen/ClassicalManager/master/bootstrap/install-classical-manager.ps1)
+into the same folder, then double-click the `.bat`. (Two files because a `.ps1`
+cannot be started by double-clicking; the `.bat` is only there to launch it.)
+
+To install a specific release instead of the current master, add `--ref v3.11`
+on Linux or `-Ref v3.11` on Windows.
+
+Neither script installs Python. That is a system-wide change a bootstrap should
+not make on your behalf — if Python 3.12+ is missing, it tells you the command
+for your platform and stops. Run it again once Python is in place.
+
+Both are ordinary text files. Open them in an editor before running them if you
+want to see what they do; that is also why this guide does not give you a
+`curl | bash` one-liner.
+
+The rest of this section covers installing by hand, which does exactly what the
+bootstrap automates.
+
 ### Download
 
 Download and extract the

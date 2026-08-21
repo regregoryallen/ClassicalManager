@@ -165,6 +165,9 @@ REM =====================================================================
 REM File deployment
 REM =====================================================================
 
+REM internal\ is a separate private repository nested in the checkout, and
+REM robocopy does not read .gitignore - without the /XD entry a source
+REM install deploys the whole thing into the installed copy.
 echo  Deploying files to !INSTALL_DIR!...
 
 if not exist "!INSTALL_DIR!\" mkdir "!INSTALL_DIR!"
@@ -173,7 +176,7 @@ robocopy "!SCRIPT_DIR!" "!INSTALL_DIR!" /MIR /NFL /NDL /NJH /NJS /NP ^
     /XF config.json gui_prefs.json *.db *.db-wal *.db-shm *.pyc ^
         install.sh classical-manager-cron.sh .gitignore cron.log ^
         music_manager.save-db ^
-    /XD venv TestData .git __pycache__ music_manager.save-db >NUL 2>&1
+    /XD venv TestData internal .git __pycache__ music_manager.save-db >NUL 2>&1
 
 if errorlevel 8 (
     echo  ERROR: File deployment failed.

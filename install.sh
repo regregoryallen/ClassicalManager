@@ -402,6 +402,10 @@ offer_git_pull() {
 # =============================================================================
 
 deploy_files() {
+    # `internal/` is a separate private repository nested in the checkout.
+    # rsync does not read .gitignore, so without an explicit exclude a
+    # source install deploys the whole thing — notes, tooling and its own
+    # .git — into the installed copy, where it has no business being.
     info "Deploying files to $INSTALL_DIR..."
 
     maybe_sudo mkdir -p "$INSTALL_DIR"
@@ -417,6 +421,7 @@ deploy_files() {
             --exclude='*.db-wal' \
             --exclude='*.db-shm' \
             --exclude='TestData/' \
+            --exclude='internal/' \
             --exclude='.git/' \
             --exclude='.gitignore' \
             --exclude='setup.bat' \
@@ -434,6 +439,7 @@ deploy_files() {
         maybe_sudo rm -rf "$INSTALL_DIR/__pycache__" \
             "$INSTALL_DIR/venv" \
             "$INSTALL_DIR/TestData" \
+            "$INSTALL_DIR/internal" \
             "$INSTALL_DIR/.git" \
             "$INSTALL_DIR/.gitignore" \
             "$INSTALL_DIR/setup.bat" \

@@ -41,7 +41,24 @@ def _setup_logging(verbose: bool = False) -> None:
 def _init_database():
     """Initialize the database, with a clear error if it fails."""
     from music_manager.core.database import initialize_database
-    from music_manager.core.config import resolve_db_settings, ConfigError
+    from music_manager.core.config import (
+        check_config, resolve_db_settings, ConfigError)
+
+    # A malformed config.json is fatal here rather than silently falling
+    # back to the default SQLite file, which is what resolve_db_settings
+    # does on its own — an unattended cron or webhook run would otherwise
+    # report success against a database nobody meant to touch. A config
+    # that is simply absent is still fine; the app has never needed one.
+    # Warnings are left to load_config, which logs them through the
+    # handler already attached to stderr and deduplicates them; echoing
+    # them here as well printed every one of them twice.
+    status = check_config()
+    if status.error:
+        typer.echo(f"Error: {status.path}: {status.error}", err=True)
+        typer.echo("Fix the file, or pass --config to use another one.",
+                   err=True)
+        raise typer.Exit(1)
+
     try:
         settings = resolve_db_settings()
     except ConfigError as exc:

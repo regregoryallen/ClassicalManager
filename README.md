@@ -54,13 +54,18 @@ The installer will:
 - Deploy to `~/.local/share/classical-manager` (local) or `/opt/classical-manager` (system-wide)
 - Create a Python virtual environment and install dependencies
 - Walk you through configuring Plex, M3U export, and database location
-- Install a desktop launcher (under Sound & Video) and a `classical-manager` CLI command
+- Install a desktop launcher (under Sound & Video) and the `classical-manager`
+  and `classical-manager-rgtag` commands
 - Copy the cron companion script for scheduled automation
 
 After installation:
 - **GUI:** Launch from the app menu, or run `classical-manager`
 - **CLI:** `classical-manager --cli scan --library "My Collection"`
+- **Tagger:** `classical-manager-rgtag --help`
 - **Uninstall:** `bash install.sh --uninstall`
+
+Both commands run inside the installed virtual environment, so there is
+nothing to activate first.
 
 ### Cron automation
 
@@ -199,6 +204,11 @@ sudo apt install rsgain
 ```
 
 **Dry-run is the default — nothing is written without `--write`.**
+
+The examples below use `./rgtag.py`, which re-runs itself inside the project's
+virtual environment — the form to use from a source checkout. After running the
+installer the command is `classical-manager-rgtag` instead, and on Windows from
+a checkout it is `rgtag.bat`. The arguments are identical in all three.
 
 ```bash
 # See what would happen across the whole library, including which

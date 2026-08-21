@@ -18,7 +18,6 @@ which is binding: internal/reference/CM-MA-findings.md; what shipped:
 internal/active/V3-PLAN.md §v3.7.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -114,39 +113,21 @@ Examples:
   ./rgtag.py --library MainMusic --limit 5 --write
 """
 
-_NO_VENV = """\
-Error: this tool needs the project's virtual environment.
-
-  No interpreter found at {venv}
-
-Create it, or run the tool with whichever interpreter has the
-dependencies installed:
-
-  python3 -m venv venv && venv/bin/pip install -r requirements.txt
-  venv/bin/python rgtag.py --help
-"""
-
 
 def _reexec_in_venv():
-    """Re-run this script under venv/bin/python.
+    """Re-run this script under the project's venv interpreter.
 
     Running `./rgtag.py` picks up the system interpreter, which does not
     have typer or peewee. Failing with a bare ModuleNotFoundError puts
     the cause several steps away from the fix, so the venv is used when
     it is there and named plainly when it is not.
     """
-    venv_dir = Path(__file__).resolve().parent / "venv"
-    venv_python = venv_dir / "bin" / "python"
-    if not venv_python.exists():
-        sys.stderr.write(_NO_VENV.format(venv=venv_python))
-        raise SystemExit(1)
-    # Compare prefixes, not executables: venv/bin/python is a symlink to
-    # the system interpreter, so resolving the two paths makes them equal
-    # and the guard would fire on the first attempt instead of the second.
-    if Path(sys.prefix) == venv_dir:
+    root = Path(__file__).resolve().parent
+    from music_manager._venv import in_venv, reexec
+
+    if in_venv(root):
         raise                       # already there: the real import error
-    os.execv(str(venv_python), [str(venv_python), os.path.abspath(__file__)]
-             + sys.argv[1:])
+    reexec(root, __file__)
 
 
 def main():

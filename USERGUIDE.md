@@ -125,16 +125,23 @@ python main.py
 On Windows the activate line is `venv\Scripts\activate` instead.
 
 This applies to every `python main.py` in this guide — the GUI, each CLI
-command, the webhook server — and to `rgtag.py`. Running `python main.py`
-without activating uses the system Python, which does not have the
-dependencies and fails with `ModuleNotFoundError`.
+command, the webhook server — and to `rgtag.py`.
 
-Two shortcuts avoid the activation step. On Windows, `run.bat` activates
-the environment and starts the GUI in one go. On Linux and macOS,
-`venv/bin/python main.py` works from anywhere without activating —
-naming the interpreter inside the environment is equivalent to
-activating it. `./rgtag.py` re-runs itself inside `venv/` for the same
-reason.
+Several shortcuts avoid the activation step:
+
+| | Application | ReplayGain tagger |
+|---|---|---|
+| **Installed** | `classical-manager` | `classical-manager-rgtag` |
+| **Checkout, Linux/macOS** | `./main.py` or `venv/bin/python main.py` | `./rgtag.py` |
+| **Checkout, Windows** | `run.bat` | `rgtag.bat` |
+
+The installed commands are wrappers that name the interpreter inside the
+virtual environment, so there is nothing to activate. In a checkout,
+`main.py` and `rgtag.py` re-run themselves inside `venv/` when started by
+an interpreter that lacks the dependencies, rather than failing with a
+`ModuleNotFoundError` whose cause is two steps from the fix. Every form
+takes the same arguments, and `--help` and `--version` work under any
+interpreter at all.
 
 ### Dependencies
 

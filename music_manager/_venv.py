@@ -45,7 +45,8 @@ def reexec(project_root, script, argv=None):
     """
     venv_python = venv_python_path(project_root)
     if not venv_python.exists():
-        sys.stderr.write(NO_VENV.format(venv=venv_python))
+        sys.stderr.write(NO_VENV.format(venv=venv_python,
+                                        create=_create_hint()))
         raise SystemExit(1)
 
     args = [str(venv_python), os.path.abspath(script)] + list(
@@ -60,6 +61,19 @@ def reexec(project_root, script, argv=None):
     os.execv(str(venv_python), args)
 
 
+def _create_hint():
+    """The commands that create the venv, for the platform in hand.
+
+    Printing the POSIX form to a Windows user sends them to a pip that
+    is not there — the exact class of mistake this module exists to fix.
+    """
+    if sys.platform == "win32":
+        return ("  python -m venv venv\n"
+                "  venv\\Scripts\\pip install -r requirements.txt")
+    return ("  python3 -m venv venv\n"
+            "  venv/bin/pip install -r requirements.txt")
+
+
 NO_VENV = """\
 Error: this tool needs the project's virtual environment.
 
@@ -67,7 +81,7 @@ Error: this tool needs the project's virtual environment.
 
 Create it with:
 
-  python3 -m venv venv && venv/bin/pip install -r requirements.txt
+{create}
 
 or run the tool with whichever interpreter already has the
 dependencies installed.

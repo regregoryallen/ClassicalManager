@@ -113,3 +113,23 @@ def test_explicit_argv_overrides_sys_argv(monkeypatch, tmp_path):
                argv=["--cli", "scan", "--library", "X"])
 
     assert calls[0][2:] == ["--cli", "scan", "--library", "X"]
+
+
+def test_the_remedy_matches_the_platform(monkeypatch, tmp_path, capsys):
+    """A POSIX pip path sends a Windows user to a file that is not there.
+
+    That is the same class of mistake as the hardcoded venv/bin/python
+    this module was written to fix, so it is worth pinning.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(SystemExit):
+        reexec(tmp_path, tmp_path / "main.py")
+    err = capsys.readouterr().err
+    assert r"venv\Scripts\pip" in err
+    assert "venv/bin/pip" not in err
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    with pytest.raises(SystemExit):
+        reexec(tmp_path, tmp_path / "main.py")
+    err = capsys.readouterr().err
+    assert "venv/bin/pip" in err

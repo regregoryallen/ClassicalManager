@@ -840,7 +840,8 @@ class DialogsMixin:
         picker = tk.Toplevel(self.root)
         picker.title("Export Libraries")
         picker.transient(self.root)
-        self._center_on_main(picker, 350, 320)
+        self._remember_geometry(picker, "export_library", 380, 420)
+        picker.minsize(320, 300)
         picker.wait_visibility()
         picker.grab_set()
 
@@ -848,19 +849,7 @@ class DialogsMixin:
         ctk.CTkLabel(picker, text="Select libraries to export:",
                      font=("Segoe UI", 12)).pack(padx=10, pady=(10, 5))
 
-        check_frame = ctk.CTkScrollableFrame(picker, height=180)
-        check_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        bind_wheel_scroll(check_frame)
-
         check_vars = []
-        for lib in libs:
-            var = tk.BooleanVar(value=True)
-            check_vars.append((lib, var))
-            ctk.CTkCheckBox(check_frame, text=lib.name, variable=var,
-                            font=("Segoe UI", 11)).pack(anchor="w", pady=2)
-
-        btn_frame = ctk.CTkFrame(picker, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=10, pady=(0, 5))
 
         def select_all():
             for _, var in check_vars:
@@ -869,11 +858,6 @@ class DialogsMixin:
         def select_none():
             for _, var in check_vars:
                 var.set(False)
-
-        ctk.CTkButton(btn_frame, text="All", width=60,
-                      command=select_all).pack(side="left", padx=5)
-        ctk.CTkButton(btn_frame, text="None", width=60,
-                      command=select_none).pack(side="left", padx=5)
 
         def on_export():
             selected = [lib for lib, var in check_vars if var.get()]
@@ -885,8 +869,29 @@ class DialogsMixin:
             picker.destroy()
             self._export_libraries(selected)
 
-        ctk.CTkButton(picker, text="Export", width=100,
-                      command=on_export).pack(pady=(0, 10))
+        # Packed before the list, from the bottom up. Packed after it,
+        # the buttons were last in line for a fixed-height window and
+        # pack took the shortfall out of the Export button, which came
+        # out visibly flattened. Claiming their height first leaves the
+        # scrollable list to absorb whatever is left, at any size.
+        btn_frame = ctk.CTkFrame(picker, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", padx=10, pady=(5, 10))
+        ctk.CTkButton(btn_frame, text="All", width=60,
+                      command=select_all).pack(side="left")
+        ctk.CTkButton(btn_frame, text="None", width=60,
+                      command=select_none).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Export", width=100,
+                      command=on_export).pack(side="right")
+
+        check_frame = ctk.CTkScrollableFrame(picker)
+        check_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        bind_wheel_scroll(check_frame)
+
+        for lib in libs:
+            var = tk.BooleanVar(value=True)
+            check_vars.append((lib, var))
+            ctk.CTkCheckBox(check_frame, text=lib.name, variable=var,
+                            font=("Segoe UI", 11)).pack(anchor="w", pady=2)
 
     def _export_libraries(self, libraries):
         """Export one or more libraries to JSON files in a chosen directory."""

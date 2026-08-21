@@ -1845,7 +1845,6 @@ class BuilderTabMixin:
                         selectmode="extended")
         for n in names:
             lb.insert("end", n)
-        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
         def on_delete():
             sel = lb.curselection()
@@ -1879,8 +1878,12 @@ class BuilderTabMixin:
 
         picker.protocol("WM_DELETE_WINDOW", on_close)
         ctk = self.ctk
+        # Button first, list second: see _export_library for why packing
+        # a fixed-height control last leaves it to absorb the shortfall.
         ctk.CTkButton(picker, text="Delete", command=on_delete,
-                      fg_color="#c0392b", hover_color="#e74c3c").pack(pady=5)
+                      fg_color="#c0392b", hover_color="#e74c3c").pack(
+            side="bottom", pady=5)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
     def _load_profile(self):
         """Always show a profile picker dialog, then load the selected profile."""
@@ -1912,7 +1915,6 @@ class BuilderTabMixin:
                        selectbackground="#1f6aa5", font=("Segoe UI", 11))
         for n in names:
             lb.insert("end", n)
-        lb.pack(fill="both", expand=True, padx=10, pady=10)
 
         def on_select():
             sel = lb.curselection()
@@ -1929,7 +1931,11 @@ class BuilderTabMixin:
 
         picker.protocol("WM_DELETE_WINDOW", on_close)
         ctk = self.ctk
-        ctk.CTkButton(picker, text="Load", command=on_select).pack(pady=5)
+        # Button first, list second: see _export_library for why packing
+        # a fixed-height control last leaves it to absorb the shortfall.
+        ctk.CTkButton(picker, text="Load", command=on_select).pack(
+            side="bottom", pady=5)
+        lb.pack(fill="both", expand=True, padx=10, pady=10)
         lb.bind("<Double-1>", lambda e: on_select())
 
     def _apply_profile(self, name):

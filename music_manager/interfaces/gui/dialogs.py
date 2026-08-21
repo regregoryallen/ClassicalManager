@@ -739,9 +739,13 @@ class DialogsMixin:
         )
         from music_manager.core.selection import resolve_selections
 
-        profiles = list(PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__"))))
+        from music_manager.core.selection import visible_profile_filter
+
+        profiles = sorted(
+            PlaylistProfile.select().where(
+                (PlaylistProfile.library == self.active_library)
+                & visible_profile_filter()),
+            key=lambda p: p.name.lower())
 
         if not profiles:
             messagebox.showinfo("No Profiles",

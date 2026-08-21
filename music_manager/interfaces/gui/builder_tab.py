@@ -1825,23 +1825,13 @@ class BuilderTabMixin:
         self._profile_picker_open = True
 
         from music_manager.core.database import PlaylistProfile
+        from music_manager.core.selection import visible_profile_names
 
-        profiles = list(PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__"))))
-        if not profiles:
+        names = visible_profile_names(self.active_library)
+        if not names:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
-
-        # Deduplicate names (keep latest)
-        seen = set()
-        names = []
-        for p in reversed(profiles):
-            if p.name not in seen:
-                seen.add(p.name)
-                names.append(p.name)
-        names.reverse()
 
         picker = tk.Toplevel(self.root)
         picker.title("Delete Profile")
@@ -1903,23 +1893,13 @@ class BuilderTabMixin:
             return
         self._profile_picker_open = True
 
-        from music_manager.core.database import PlaylistProfile
-        profiles = list(PlaylistProfile.select().where(
-            (PlaylistProfile.library == self.active_library) &
-            (~PlaylistProfile.name.startswith("__"))))
-        if not profiles:
+        from music_manager.core.selection import visible_profile_names
+
+        names = visible_profile_names(self.active_library)
+        if not names:
             self._profile_picker_open = False
             messagebox.showinfo("No Profiles", "No saved profiles found.")
             return
-
-        # Deduplicate names (keep latest)
-        seen = set()
-        names = []
-        for p in reversed(profiles):
-            if p.name not in seen:
-                seen.add(p.name)
-                names.append(p.name)
-        names.reverse()
 
         picker = tk.Toplevel(self.root)
         picker.title("Select Profile")

@@ -82,6 +82,23 @@ def visible_profile_filter():
     return ~PlaylistProfile.name.startswith("__")
 
 
+def visible_profile_names(library):
+    """Distinct visible profile names for *library*, sorted A-Z.
+
+    Duplicate names can exist — saving over a profile writes a new row —
+    so the list is deduplicated before sorting. Case-insensitive, to
+    match the Show dropdown, and because a picker that sorts 'Sunday'
+    after 'evening' looks broken rather than principled.
+    """
+    from music_manager.core.database import PlaylistProfile
+    names = {
+        p.name for p in
+        PlaylistProfile.select(PlaylistProfile.name).where(
+            (PlaylistProfile.library == library) & visible_profile_filter())
+    }
+    return sorted(names, key=str.lower)
+
+
 def create_import_profile(library, relative_paths, when=None):
     """Create a profile holding the tracks an import just added (v3.3).
 

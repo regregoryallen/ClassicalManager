@@ -55,6 +55,8 @@ def serialize_engine_result(result: EngineResult, output_path: Path | None = Non
         "length_value": result.length_value,
         "seed": result.seed,
         "track_count": result.track_count,
+        "integrity_added_tracks": result.integrity_added_tracks,
+        "integrity_added_works": result.integrity_added_works,
         "total_duration_ms": result.total_duration_ms,
         "total_duration_display": _format_duration(result.total_duration_ms),
         "tracks": [_track_to_dict(rt) for rt in result.playlist],

@@ -19,6 +19,11 @@ from music_manager.core.database import (
 
 logger = logging.getLogger(__name__)
 
+# Marks a track admitted by work-integrity expansion rather than by a rule.
+# The work id is appended. Written by _apply_work_integrity, read back by
+# _count_integrity_additions and by anything reporting on a finished run.
+INTEGRITY_ADMISSION_PREFIX = "work_integrity:enforce:work:"
+
 # ---------------------------------------------------------------------------
 # Form detection for separation constraints
 # ---------------------------------------------------------------------------
@@ -112,6 +117,44 @@ class EngineResult:
     seed: int | None
     total_duration_ms: int = 0
     track_count: int = 0
+    # Tracks in `playlist` that no rule selected — they are there only
+    # because work_integrity='enforce' pulled in the rest of their work.
+    # Counted after the stop conditions, so this describes what actually
+    # got exported rather than what the expansion produced.
+    integrity_added_tracks: int = 0
+    integrity_added_works: int = 0
+
+
+def _count_integrity_additions(playlist: list[ResolvedTrack]) -> tuple[int, int]:
+    """Count tracks (and the works they belong to) added by work integrity.
+
+    Reads the admission marker rather than re-deriving the expansion, so
+    the answer is about the tracks that survived the stop conditions.
+    """
+    work_ids = set()
+    tracks = 0
+    for rt in playlist:
+        if rt.admitted_by.startswith(INTEGRITY_ADMISSION_PREFIX):
+            tracks += 1
+            work_ids.add(rt.admitted_by[len(INTEGRITY_ADMISSION_PREFIX):])
+    return tracks, len(work_ids)
+
+
+def integrity_note(result: "EngineResult") -> str:
+    """One sentence on what work integrity added, or '' when it added nothing.
+
+    Exported playlists can be longer than the rules imply, and until now
+    the only way to find out was to count the file. Callers append this
+    to their completion message; an empty string means there is nothing
+    to say, which is also the case for 'respect_selection' profiles.
+    """
+    tracks, works = result.integrity_added_tracks, result.integrity_added_works
+    if not tracks:
+        return ""
+    return (f"{tracks} track{'s' if tracks != 1 else ''} in "
+            f"{works} work{'s' if works != 1 else ''} "
+            f"{'were' if tracks != 1 else 'was'} added to keep works whole "
+            f"(work integrity: enforce).")
 
 
 def generate_playlist(profile: PlaylistProfile) -> EngineResult:
@@ -175,6 +218,7 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
         rt.order_key = i + 1
 
     total_ms = sum(rt.duration_ms for rt in final)
+    added_tracks, added_works = _count_integrity_additions(final)
 
     return EngineResult(
         playlist=final,
@@ -186,6 +230,8 @@ def generate_playlist(profile: PlaylistProfile) -> EngineResult:
         seed=profile.seed,
         total_duration_ms=total_ms,
         track_count=len(final),
+        integrity_added_tracks=added_tracks,
+        integrity_added_works=added_works,
     )
 
 
@@ -359,7 +405,7 @@ def _apply_work_integrity(profile: PlaylistProfile, selection) -> None:
                 and t.relative_path not in selection.excluded_track_paths):
             selection.track_ids.add(t.id)
             selection.admission_map[t.id] = \
-                f"work_integrity:enforce:work:{t.work_id}"
+                f"{INTEGRITY_ADMISSION_PREFIX}{t.work_id}"
 
 
 # ---------------------------------------------------------------------------

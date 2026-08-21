@@ -25,6 +25,17 @@ from music_manager.interfaces.gui.common import (
 logger = logging.getLogger(__name__)
 
 
+def _integrity_suffix(result):
+    """The work-integrity note as a message tail, blank when there is none.
+
+    Kept next to the callers rather than in the engine so the blank
+    line before it belongs to the dialog that shows it.
+    """
+    from music_manager.core.engine import integrity_note
+    note = integrity_note(result)
+    return f"\n\n{note}" if note else ""
+
+
 class _SelectionView:
     """Dict views over the selection list, kept current across a batch.
 
@@ -1419,6 +1430,11 @@ class BuilderTabMixin:
         status_text = (f"{result.track_count} tracks, "
                        f"{total_s // 3600}h {(total_s % 3600) // 60}m "
                        f"{total_s % 60}s total")
+        # Better noticed here than after the export has been written.
+        from music_manager.core.engine import integrity_note
+        note = integrity_note(result)
+        if note:
+            status_text += f"  —  {note}"
 
         bot = tk.Frame(popup, bg="#2b2b2b")
         bot.pack(side="bottom", fill="x", padx=10, pady=5)
@@ -1563,7 +1579,10 @@ class BuilderTabMixin:
 
             serializer = M3USerializer()
             serializer.serialize(result.playlist, m3u_config)
-            messagebox.showinfo("Export", f"Wrote {result.track_count} tracks to:\n{path}")
+            messagebox.showinfo(
+                "Export",
+                f"Wrote {result.track_count} tracks to:\n{path}"
+                + _integrity_suffix(result))
         except Exception as exc:
             messagebox.showerror("Export Error", str(exc))
         finally:
@@ -1597,7 +1616,10 @@ class BuilderTabMixin:
 
             result = generate_playlist(profile)
             serialize_engine_result(result, output_path=Path(path))
-            messagebox.showinfo("Export", f"Wrote {result.track_count} tracks to:\n{path}")
+            messagebox.showinfo(
+                "Export",
+                f"Wrote {result.track_count} tracks to:\n{path}"
+                + _integrity_suffix(result))
         except Exception as exc:
             messagebox.showerror("Export Error", str(exc))
         finally:
@@ -1631,8 +1653,11 @@ class BuilderTabMixin:
                 serializer = PlexSerializer()
                 serializer.serialize(result.playlist, plex_config)
                 display_name = plex_config["playlist_name"]
-                messagebox.showinfo("Plex", f"Pushed '{display_name}' to Plex "
-                                   f"({result.track_count} tracks)")
+                messagebox.showinfo(
+                    "Plex",
+                    f"Pushed '{display_name}' to Plex "
+                    f"({result.track_count} tracks)"
+                    + _integrity_suffix(result))
             except (PlexConnectionError, PlexPushError) as exc:
                 messagebox.showerror("Plex Error", str(exc))
             except Exception as exc:

@@ -373,8 +373,12 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None,
         raise typer.Exit(1)
 
     if not quiet:
+        from music_manager.core.engine import integrity_note
         typer.echo(f"Generated: {result.track_count} tracks, "
                    f"{result.total_duration_ms // 1000}s total", err=True)
+        note = integrity_note(result)
+        if note:
+            typer.echo(note, err=True)
 
 
 @app.command("generate-all")

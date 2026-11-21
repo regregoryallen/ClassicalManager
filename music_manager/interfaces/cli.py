@@ -337,8 +337,14 @@ def generate(
 
 
 def _output_result(prof, result, *, format="m3u", output=None, target=None,
-                   quiet=False):
-    """Output a generated playlist to the specified format/target."""
+                   quiet=False, raise_on_error=True):
+    """Output a generated playlist to the specified format/target.
+
+    raise_on_error=False lets a caller (generate-all) catch the original
+    PlexConnectionError/PlexPushError itself instead of the typer.Exit(1)
+    this raises by default, so it can decide per-profile whether to
+    continue to the next profile or abort.
+    """
     # Quoted "~/..." reaches us unexpanded (cron and the webhook both quote),
     # so expand here rather than creating a literal '~' directory.
     if output:
@@ -358,11 +364,15 @@ def _output_result(prof, result, *, format="m3u", output=None, target=None,
             if not quiet:
                 typer.echo(f"Pushed playlist '{prof.name}' to Plex")
         except PlexConnectionError as exc:
-            typer.echo(f"Plex connection error: {exc}", err=True)
-            raise typer.Exit(1)
+            if raise_on_error:
+                typer.echo(f"Plex connection error: {exc}", err=True)
+                raise typer.Exit(1)
+            raise
         except PlexPushError as exc:
-            typer.echo(f"Plex push error: {exc}", err=True)
-            raise typer.Exit(1)
+            if raise_on_error:
+                typer.echo(f"Plex push error: {exc}", err=True)
+                raise typer.Exit(1)
+            raise
     elif format == "json":
         from music_manager.core.serializers.json_dump import serialize_engine_result
         json_out = serialize_engine_result(
@@ -414,6 +424,8 @@ def generate_all(
     from music_manager.core.engine import generate_playlist
     from music_manager.core.paths import (find_filename_collisions,
                                           safe_profile_filename)
+    from music_manager.core.serializers.plex import (PlexConnectionError,
+                                                      PlexPushError)
 
     lib = _get_library(library)
     profiles = list(PlaylistProfile.select().where(
@@ -435,19 +447,56 @@ def generate_all(
         typer.echo(f"Generating {len(profiles)} profiles from '{lib.name}'...")
     out_path = Path(output_dir).expanduser()
 
-    for prof in profiles:
+    failures = []   # (profile_name, error_message) for profiles attempted and failed
+    skipped = []    # profile names never attempted because of an abort
+
+    for idx, prof in enumerate(profiles):
         if not quiet:
             typer.echo(f"\n--- {prof.name} ---")
-        result = generate_playlist(prof)
-        if target:
-            _output_result(prof, result, target=target, quiet=quiet)
-        else:
-            ext = ".json" if format == "json" else ".m3u"
-            output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
-            _output_result(prof, result, format=format, output=output, quiet=quiet)
+        try:
+            result = generate_playlist(prof)
+            if target:
+                _output_result(prof, result, target=target, quiet=quiet,
+                               raise_on_error=False)
+            else:
+                ext = ".json" if format == "json" else ".m3u"
+                output = str(out_path / f"{safe_profile_filename(prof.name)}{ext}")
+                _output_result(prof, result, format=format, output=output,
+                               quiet=quiet, raise_on_error=False)
+        except PlexConnectionError as exc:
+            # Systemic, not specific to this playlist — every remaining
+            # profile would fail identically, so stop instead of grinding
+            # through the rest for no reason.
+            failures.append((prof.name, f"Plex connection error: {exc}"))
+            skipped = [p.name for p in profiles[idx + 1:]]
+            typer.echo(
+                f"Plex unreachable ({exc}); aborting — "
+                f"{len(skipped)} remaining profile(s) not attempted.",
+                err=True)
+            break
+        except PlexPushError as exc:
+            failures.append((prof.name, f"Plex push error: {exc}"))
+            typer.echo(f"'{prof.name}' failed, continuing: {exc}", err=True)
+            continue
+        except Exception as exc:
+            failures.append((prof.name, str(exc)))
+            typer.echo(f"'{prof.name}' failed, continuing: {exc}", err=True)
+            continue
 
+    succeeded = len(profiles) - len(failures) - len(skipped)
     if not quiet:
-        typer.echo(f"\nDone: {len(profiles)} profiles generated.")
+        typer.echo(f"\nDone: {succeeded}/{len(profiles)} profiles succeeded.")
+
+    if failures or skipped:
+        typer.echo(
+            f"\n{len(failures)}/{len(profiles)} profile(s) failed:", err=True)
+        for name, msg in failures:
+            typer.echo(f"  - {name}: {msg}", err=True)
+        if skipped:
+            typer.echo(
+                f"  - {len(skipped)} profile(s) skipped (never attempted): "
+                f"{', '.join(skipped)}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
